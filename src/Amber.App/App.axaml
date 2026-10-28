@@ -1,0 +1,92 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Amber.App.App"
+             RequestedThemeVariant="Default">
+  <Application.Styles>
+    <FluentTheme />
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="{DynamicResource CardBackground}" />
+      <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="Padding" Value="18" />
+      <Setter Property="Margin" Value="0,0,0,14" />
+    </Style>
+    <Style Selector="TextBlock.h1">
+      <Setter Property="FontSize" Value="22" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Margin" Value="0,0,0,14" />
+    </Style>
+    <Style Selector="TextBlock.h2">
+      <Setter Property="FontSize" Value="15" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Margin" Value="0,0,0,10" />
+    </Style>
+    <Style Selector="TextBlock.hint">
+      <Setter Property="Opacity" Value="0.65" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="Button.amber">
+      <Setter Property="Background" Value="{DynamicResource AmberAccent}" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.amber:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AmberAccentHover}" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.amber:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AmberAccentPressed}" />
+    </Style>
+    <Style Selector="Button.amber:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AmberAccentDisabled}" />
+      <Setter Property="Foreground" Value="#FFFFFFAA" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource NavSelected}" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource NavHover}" />
+    </Style>
+    <Style Selector="ProgressBar">
+      <Setter Property="Foreground" Value="{DynamicResource AmberAccent}" />
+    </Style>
+    <Style Selector="CheckBox:checked /template/ Border#NormalRectangle">
+      <Setter Property="Background" Value="{DynamicResource AmberAccent}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AmberAccent}" />
+    </Style>
+  </Application.Styles>
+  <Application.Resources>
+    <ResourceDictionary>
+      <!-- Fluent 主题的强调色全部换成琥珀色（滑块、复选框、选中项等） -->
+      <Color x:Key="SystemAccentColor">#D98A1E</Color>
+      <Color x:Key="SystemAccentColorLight1">#E79A2E</Color>
+      <Color x:Key="SystemAccentColorLight2">#F0AE4E</Color>
+      <Color x:Key="SystemAccentColorLight3">#F6C67C</Color>
+      <Color x:Key="SystemAccentColorDark1">#B97314</Color>
+      <Color x:Key="SystemAccentColorDark2">#985E10</Color>
+      <Color x:Key="SystemAccentColorDark3">#77490C</Color>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="CardBackground" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="PageBackground" Color="#F4F1EC" />
+          <SolidColorBrush x:Key="SidebarBackground" Color="#2B2622" />
+          <SolidColorBrush x:Key="AmberAccent" Color="#D98A1E" />
+          <SolidColorBrush x:Key="AmberAccentHover" Color="#E79A2E" />
+          <SolidColorBrush x:Key="AmberAccentPressed" Color="#B97314" />
+          <SolidColorBrush x:Key="AmberAccentDisabled" Color="#80D98A1E" />
+          <SolidColorBrush x:Key="NavSelected" Color="#3A322B" />
+          <SolidColorBrush x:Key="NavHover" Color="#332D27" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="CardBackground" Color="#2A2724" />
+          <SolidColorBrush x:Key="PageBackground" Color="#1C1A18" />
+          <SolidColorBrush x:Key="SidebarBackground" Color="#141210" />
+          <SolidColorBrush x:Key="AmberAccent" Color="#E89B32" />
+          <SolidColorBrush x:Key="AmberAccentHover" Color="#F2AC4A" />
+          <SolidColorBrush x:Key="AmberAccentPressed" Color="#C27F22" />
+          <SolidColorBrush x:Key="AmberAccentDisabled" Color="#60E89B32" />
+          <SolidColorBrush x:Key="NavSelected" Color="#2E2924" />
+          <SolidColorBrush x:Key="NavHover" Color="#24201C" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>

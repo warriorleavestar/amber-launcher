@@ -135,6 +135,9 @@ public sealed class GameLauncher(GameDirectory dir)
             UseShellExecute = false,
             RedirectStandardOutput = onOutput is not null,
             RedirectStandardError = onOutput is not null,
+            // 启动参数里已让 Java 以 UTF-8 输出，这里必须按 UTF-8 读，否则中文会乱码。
+            StandardOutputEncoding = onOutput is not null ? System.Text.Encoding.UTF8 : null,
+            StandardErrorEncoding = onOutput is not null ? System.Text.Encoding.UTF8 : null,
             CreateNoWindow = true,
         };
         foreach (var arg in BuildArguments(options)) psi.ArgumentList.Add(arg);

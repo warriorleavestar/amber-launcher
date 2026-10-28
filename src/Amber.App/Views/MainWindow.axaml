@@ -1,0 +1,214 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Amber.App.ViewModels"
+        x:Class="Amber.App.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Amber 启动器"
+        Width="1000" Height="640" MinWidth="820" MinHeight="520"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource PageBackground}">
+
+  <Window.DataTemplates>
+    <!-- 启动页 -->
+    <DataTemplate DataType="vm:HomeViewModel">
+      <Grid RowDefinitions="Auto,*,Auto">
+        <TextBlock Classes="h1" Text="启动游戏" />
+        <StackPanel Grid.Row="1" Spacing="0">
+          <Border Classes="card">
+            <Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto,Auto" >
+              <TextBlock Text="游戏版本" VerticalAlignment="Center" />
+              <ComboBox Grid.Column="1" ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}"
+                        HorizontalAlignment="Stretch" PlaceholderText="未安装任何版本" />
+
+              <TextBlock Grid.Row="1" Text="玩家名" VerticalAlignment="Center" Margin="0,12,0,0" />
+              <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding PlayerName}" Margin="0,12,0,0" MaxLength="16"
+                       PlaceholderText="离线模式玩家名（3-16 位字母数字下划线）" />
+
+              <TextBlock Grid.Row="2" Text="最大内存" VerticalAlignment="Center" Margin="0,12,0,0" />
+              <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="*,90" Margin="0,12,0,0">
+                <Slider Minimum="1024" Maximum="{Binding TotalMemoryMb}" Value="{Binding MaxMemoryMb}"
+                        TickFrequency="512" IsSnapToTickEnabled="True" />
+                <TextBlock Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right"
+                           Text="{Binding MaxMemoryMb, StringFormat='{}{0} MB'}" />
+              </Grid>
+            </Grid>
+          </Border>
+          <Border Classes="card">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="h2" Text="账号" Margin="0" />
+              <TextBlock Classes="hint" Text="当前为离线账号。微软正版登录将在后续版本加入（需要你自己的 Azure 应用 ID）。" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+        <Border Grid.Row="2" Classes="card" Margin="0">
+          <Grid ColumnDefinitions="*,Auto,Auto">
+            <StackPanel VerticalAlignment="Center" Spacing="6">
+              <TextBlock Text="{Binding Status}" TextTrimming="CharacterEllipsis" />
+              <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
+            </StackPanel>
+            <Button Grid.Column="1" Content="取消" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}"
+                    Margin="12,0,0,0" Padding="18,10" />
+            <Button Grid.Column="2" Classes="amber" Content="启动游戏" Command="{Binding LaunchCommand}"
+                    Margin="12,0,0,0" Padding="36,12" FontSize="16" FontWeight="SemiBold" />
+          </Grid>
+        </Border>
+      </Grid>
+    </DataTemplate>
+
+    <!-- 下载页 -->
+    <DataTemplate DataType="vm:DownloadViewModel">
+      <Grid RowDefinitions="Auto,Auto,*,Auto">
+        <TextBlock Classes="h1" Text="下载游戏" />
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,10">
+          <ComboBox ItemsSource="{Binding Filters}" SelectedItem="{Binding Filter}" MinWidth="110" />
+          <TextBox Grid.Column="1" Text="{Binding Search}" PlaceholderText="搜索版本号，例如 1.20" Margin="10,0" />
+          <Button Grid.Column="2" Content="刷新" Command="{Binding RefreshCommand}" />
+        </Grid>
+        <Border Grid.Row="2" Classes="card" Padding="6">
+          <ListBox ItemsSource="{Binding Items}" Background="Transparent">
+            <ListBox.Styles>
+              <Style Selector="ListBoxItem"><Setter Property="Padding" Value="8,4" /></Style>
+            </ListBox.Styles>
+            <ListBox.ItemTemplate>
+              <DataTemplate DataType="vm:RemoteVersionItem">
+                <Grid ColumnDefinitions="*,110,110,Auto" Margin="6,0">
+                  <TextBlock Text="{Binding Id}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Text="{Binding TypeText}" Classes="hint" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="2" Text="{Binding Date}" Classes="hint" VerticalAlignment="Center" />
+                  <Panel Grid.Column="3" Width="96">
+                    <TextBlock Text="已安装" IsVisible="{Binding Installed}" VerticalAlignment="Center"
+                               HorizontalAlignment="Center" Foreground="{DynamicResource AmberAccent}" />
+                    <Button Content="安装" IsVisible="{Binding !Installed}" HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Center"
+                            Command="{Binding $parent[ListBox].((vm:DownloadViewModel)DataContext).InstallCommand}"
+                            CommandParameter="{Binding}" />
+                  </Panel>
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Border>
+        <Border Grid.Row="3" Classes="card" Margin="0">
+          <StackPanel Spacing="6">
+            <TextBlock Text="{Binding Status}" TextTrimming="CharacterEllipsis" />
+            <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
+          </StackPanel>
+        </Border>
+      </Grid>
+    </DataTemplate>
+
+    <!-- 设置页 -->
+    <DataTemplate DataType="vm:SettingsViewModel">
+      <ScrollViewer>
+        <StackPanel>
+          <TextBlock Classes="h1" Text="设置" />
+          <Border Classes="card">
+            <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto">
+              <TextBlock Text="游戏目录" VerticalAlignment="Center" />
+              <TextBox Grid.Column="1" Text="{Binding GameDirectory}" />
+              <Button Grid.Column="2" Content="浏览…" Margin="8,0,0,0" Click="BrowseGameDir_Click" />
+
+              <TextBlock Grid.Row="1" Text="下载源" VerticalAlignment="Center" Margin="0,12,0,0" />
+              <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding SourceOptions}" SelectedIndex="{Binding SourceIndex}"
+                        HorizontalAlignment="Stretch" Margin="0,12,0,0" />
+
+              <TextBlock Grid.Row="2" Text="版本隔离" VerticalAlignment="Center" Margin="0,12,0,0" />
+              <CheckBox Grid.Row="2" Grid.Column="1" IsChecked="{Binding IsolateVersions}" Margin="0,12,0,0"
+                        Content="每个版本使用独立的存档、模组和配置文件夹" />
+            </Grid>
+          </Border>
+          <Border Classes="card">
+            <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto">
+              <TextBlock Text="Java" VerticalAlignment="Center" />
+              <ComboBox Grid.Column="1" ItemsSource="{Binding JavaOptions}" SelectedItem="{Binding SelectedJava}"
+                        HorizontalAlignment="Stretch">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate DataType="vm:JavaOption">
+                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <Button Grid.Column="2" Content="重新扫描" Margin="8,0,0,0" Command="{Binding RefreshJavaCommand}" />
+
+              <TextBlock Grid.Row="1" Text="窗口大小" VerticalAlignment="Center" Margin="0,12,0,0" />
+              <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
+                <TextBox Text="{Binding WindowWidth}" Width="90" PlaceholderText="宽" />
+                <TextBlock Text="×" VerticalAlignment="Center" />
+                <TextBox Text="{Binding WindowHeight}" Width="90" PlaceholderText="高" />
+                <TextBlock Classes="hint" Text="留空则使用游戏默认" VerticalAlignment="Center" />
+              </StackPanel>
+            </Grid>
+          </Border>
+          <Border Classes="card">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="h2" Text="隐私" Margin="0" />
+              <TextBlock Classes="hint" Text="Amber 没有遥测、没有云控、没有强制更新，不生成设备识别码。只会访问你选择的下载源（Mojang 官方或 BMCLAPI）。" />
+              <TextBlock Classes="hint" Text="{Binding SettingsPath, StringFormat='设置文件：{0}'}" />
+            </StackPanel>
+          </Border>
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <Button Classes="amber" Content="保存设置" Command="{Binding SaveCommand}" Padding="28,10" />
+            <TextBlock Text="{Binding Status}" VerticalAlignment="Center" />
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
+    </DataTemplate>
+
+    <!-- 日志页 -->
+    <DataTemplate DataType="vm:LogViewModel">
+      <Grid RowDefinitions="Auto,Auto,*">
+        <TextBlock Classes="h1" Text="游戏日志" />
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12" Margin="0,0,0,10">
+          <CheckBox Content="只看警告和错误" IsChecked="{Binding OnlyProblems}" />
+          <Button Content="复制全部" Command="{Binding CopyCommand}" />
+        </StackPanel>
+        <Border Grid.Row="2" Classes="card" Padding="8" Margin="0">
+          <ListBox ItemsSource="{Binding Lines}" Background="Transparent" FontFamily="Cascadia Mono,Consolas,Microsoft YaHei UI" FontSize="12">
+            <ListBox.ItemTemplate>
+              <DataTemplate DataType="vm:LogEntry">
+                <Grid ColumnDefinitions="70,64,*">
+                  <TextBlock Text="{Binding Time}" Classes="hint" />
+                  <TextBlock Grid.Column="1" Text="{Binding Level}" Classes="hint" />
+                  <SelectableTextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Border>
+      </Grid>
+    </DataTemplate>
+  </Window.DataTemplates>
+
+  <Grid ColumnDefinitions="200,*">
+    <!-- 侧边栏 -->
+    <Border Background="{DynamicResource SidebarBackground}">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Margin="22,26,22,22" Spacing="2">
+          <TextBlock Text="Amber" FontSize="26" FontWeight="Bold" Foreground="{DynamicResource AmberAccent}" />
+          <TextBlock Text="Minecraft 启动器" FontSize="12" Foreground="#B0A89E" />
+        </StackPanel>
+        <TextBlock DockPanel.Dock="Bottom" Text="v0.1 · 无云控 · 无遥测" FontSize="11" Foreground="#80786E" Margin="22,0,0,18" />
+        <ListBox Classes="nav" ItemsSource="{Binding Pages}" SelectedItem="{Binding CurrentPage}" Background="Transparent" Margin="10,0">
+          <ListBox.Styles>
+            <Style Selector="ListBoxItem">
+              <Setter Property="CornerRadius" Value="8" />
+              <Setter Property="Margin" Value="0,2" />
+              <Setter Property="Padding" Value="14,10" />
+            </Style>
+          </ListBox.Styles>
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="vm:PageViewModel">
+              <StackPanel Orientation="Horizontal" Spacing="12">
+                <TextBlock Text="{Binding Icon}" Width="18" Foreground="{DynamicResource AmberAccent}" />
+                <TextBlock Text="{Binding Title}" Foreground="#EDE6DC" FontSize="14" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </Border>
+
+    <!-- 内容区 -->
+    <ContentControl Grid.Column="1" Content="{Binding CurrentPage}" Margin="28,22,28,22" />
+  </Grid>
+</Window>

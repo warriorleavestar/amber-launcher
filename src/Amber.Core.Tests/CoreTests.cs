@@ -1,6 +1,7 @@
 using Amber.Core.Auth;
 using Amber.Core.Game;
 using Amber.Core.Java;
+using Amber.Core.Launch;
 using Amber.Core.Net;
 
 namespace Amber.Core.Tests;
@@ -85,5 +86,19 @@ public class CoreTests
             Directory.CreateDirectory(dir.VersionDir(id));
             File.WriteAllText(dir.VersionJsonPath(id), json);
         }
+    }
+
+    [Fact]
+    public void LogParser_ReadsLog4jXmlAndPlainLines()
+    {
+        var p = new GameLogParser();
+        Assert.Null(p.Feed("""<log4j:Event logger="x" timestamp="1793171003328" level="WARN" thread="Render thread">"""));
+        var line = p.Feed("  <log4j:Message><![CDATA[Setting user: 玩家]]></log4j:Message>");
+        Assert.NotNull(line);
+        Assert.Equal(GameLogLevel.Warn, line.Level);
+        Assert.Equal("Render thread", line.Thread);
+        Assert.Equal("Setting user: 玩家", line.Message);
+        Assert.Null(p.Feed("</log4j:Event>"));
+        Assert.Equal(GameLogLevel.Error, p.Feed("java.lang.IllegalStateException: boom")!.Level);
     }
 }
