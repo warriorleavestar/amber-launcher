@@ -260,19 +260,21 @@ public sealed class Downloader
         if (item.Size is { } knownSize && resumeFrom > knownSize) resumeFrom = 0;
         if (resumeFrom > 0 && item.Size == resumeFrom) return 0;
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        // 从 0 开始也带 Range，这样能从响应判断服务器支不支持分块。
-        request.Headers.Range = new RangeHeaderValue(resumeFrom, null);
+        // 已知的小文件不用探测分块，普通请求最省事。其余的带 Range，从响应判断服务器支不支持。
+        var useRange = resumeFrom > 0 || item.Size is null || item.Size >= ChunkThreshold;
         using var headerTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         headerTimeout.CancelAfter(StallTimeout);
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headerTimeout.Token);
+        var response = await SendGetAsync(url, useRange ? resumeFrom : null, headerTimeout.Token);
 
-        if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
+        // 有的 CDN 收到 Range 直接报错（forgecdn 返回 404），不能因此判定文件不存在，去掉 Range 再试一次。
+        if (useRange && !response.IsSuccessStatusCode)
         {
-            // 本地进度比服务器文件还长，只能重来。
+            response.Dispose();
+            resumeFrom = 0;
             TryDelete(temp);
-            throw new IOException("断点无效，重新下载");
+            response = await SendGetAsync(url, null, headerTimeout.Token);
         }
+        using var _ = response;
         response.EnsureSuccessStatusCode();
 
         var partial = response.StatusCode == HttpStatusCode.PartialContent;
@@ -296,6 +298,13 @@ public sealed class Downloader
         return written;
     }
 
+    private async Task<HttpResponseMessage> SendGetAsync(string url, long? rangeFrom, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        if (rangeFrom is { } from) request.Headers.Range = new RangeHeaderValue(from, null);
+        return await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+
     private async Task<long> FetchChunkedAsync(string url, string temp, string statePath, ChunkState state, Action<long> onBytes, CancellationToken ct)
     {
         using var handle = File.OpenHandle(temp, FileMode.Open, FileAccess.Write, FileShare.None, FileOptions.Asynchronous);
@@ -314,7 +323,6 @@ public sealed class Downloader
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                     timeout.CancelAfter(StallTimeout);
                     using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-                    response.EnsureSuccessStatusCode();
                     if (response.StatusCode != HttpStatusCode.PartialContent) throw new RangeNotSupportedException();
 
                     await using var input = await response.Content.ReadAsStreamAsync(token);

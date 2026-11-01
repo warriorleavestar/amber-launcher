@@ -21,6 +21,9 @@ internal sealed class TestServer : IDisposable
     public HashSet<string> Fail500 { get; } = [];
     public HashSet<string> Hang { get; } = [];
 
+    /// <summary>像 forgecdn 一样：带 Range 就回 404。</summary>
+    public HashSet<string> RejectRange { get; } = [];
+
     /// <summary>这个文件第一次请求只发一半就断开。</summary>
     public HashSet<string> DropOnce { get; } = [];
 
@@ -67,6 +70,12 @@ internal sealed class TestServer : IDisposable
                 return;
             }
             if (!_files.TryGetValue(path, out var data))
+            {
+                c.Response.StatusCode = 404;
+                c.Response.Close();
+                return;
+            }
+            if (RejectRange.Contains(path) && c.Request.Headers["Range"] is not null)
             {
                 c.Response.StatusCode = 404;
                 c.Response.Close();
@@ -177,6 +186,37 @@ public class DownloaderTests : IDisposable
         var url = _server.Add("big.bin", data);
         await Make().DownloadOneAsync(new DownloadItem(url, Local("big.bin"), Sha1(data)));
         Assert.True(File.ReadAllBytes(Local("big.bin")).SequenceEqual(data));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ServerThatRejectsRange_FallsBackToPlainGet(bool sizeKnown)
+    {
+        var data = RandomBytes(3 * 1024 * 1024);
+        var url = _server.Add("cdn.bin", data);
+        _server.RejectRange.Add("cdn.bin");
+        await Make().DownloadOneAsync(new DownloadItem(url, Local("cdn.bin"), Sha1(data), sizeKnown ? data.Length : null));
+        Assert.True(File.ReadAllBytes(Local("cdn.bin")).SequenceEqual(data));
+    }
+
+    [Fact]
+    public async Task StaleProgress_OnServerThatRejectsRange_RestartsCleanly()
+    {
+        var data = RandomBytes(100_000);
+        var url = _server.Add("cdn2.bin", data);
+        _server.RejectRange.Add("cdn2.bin");
+        File.WriteAllBytes(Local("cdn2.bin.part"), data[..50_000]);
+        await Make().DownloadOneAsync(new DownloadItem(url, Local("cdn2.bin"), Sha1(data), data.Length));
+        Assert.True(File.ReadAllBytes(Local("cdn2.bin")).SequenceEqual(data));
+    }
+
+    [Fact]
+    public async Task SmallKnownFile_DoesNotUseRange()
+    {
+        var data = RandomBytes(10_000);
+        await Make().DownloadOneAsync(new DownloadItem(_server.Add("t.bin", data), Local("t.bin"), Sha1(data), data.Length));
+        Assert.Equal(0, _server.RangeRequests);
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Amber.Core.Game;
 using Amber.Core.Install;
+using Amber.Core.Launch;
 using Amber.Core.Net;
 
 namespace Amber.Core.Content;
@@ -246,7 +247,7 @@ public sealed class ModpackService(LoaderContext ctx, ModrinthProvider modrinth,
     public static List<string> ExportCandidates(string workDir)
     {
         if (!Directory.Exists(workDir)) return [];
-        string[] skip = ["logs", "crash-reports", "natives", "saves", "screenshots", "versions", ".fabric", ".mixin.out", "downloads", ".cache", "debug", "$"];
+        string[] skip = ["logs", "crash-reports", "natives", "saves", "screenshots", "versions", ".fabric", ".mixin.out", "downloads", ".cache", "debug", "backups", "local", InstanceSettings.FileName];
         var result = new List<string>();
         foreach (var path in Directory.EnumerateFileSystemEntries(workDir))
         {
