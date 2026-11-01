@@ -34,6 +34,13 @@ public partial class MainWindow : Window
                 bitmap.Render(this);
                 bitmap.Save(Path.Combine(dir, $"{i + 1}-{vm.Pages[i].Title}.png"));
             });
+            // AMBER_SNAPSHOT_DEMO=1：页面带演示流程的，走一遍真实操作后再截一张。
+            if (Environment.GetEnvironmentVariable("AMBER_SNAPSHOT_DEMO") == "1" && vm.Pages[i] is ISnapshotDemo demo)
+            {
+                await demo.RunSnapshotDemoAsync();
+                await Task.Delay(500);
+                await Dispatcher.UIThread.InvokeAsync(() => Save(Path.Combine(dir, $"{i + 1}-{vm.Pages[i].Title}-演示.png")));
+            }
         }
         // AMBER_SNAPSHOT_LAUNCH=秒数：再用启动页真实启动一次游戏，等待后截日志页并结束游戏。
         if (int.TryParse(Environment.GetEnvironmentVariable("AMBER_SNAPSHOT_LAUNCH"), out var seconds) && vm.Pages[0] is HomeViewModel home)

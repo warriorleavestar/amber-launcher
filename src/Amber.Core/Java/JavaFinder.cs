@@ -59,6 +59,13 @@ public static partial class JavaFinder
                ?? list.Where(j => j.MajorVersion > requiredMajor).MinBy(j => j.MajorVersion);
     }
 
+    /// <summary>只要主版本完全一致的 64 位 Java（32 位系统除外）。</summary>
+    public static JavaInstall? PickExact(IEnumerable<JavaInstall> installs, int major)
+    {
+        var list = installs.Where(j => j.MajorVersion == major).ToList();
+        return list.FirstOrDefault(j => j.Is64Bit || !Environment.Is64BitOperatingSystem) ?? list.FirstOrDefault();
+    }
+
     private static IEnumerable<string> CandidateParents(string? gameRoot)
     {
         if (OperatingSystem.IsWindows())

@@ -4,7 +4,6 @@ using Amber.App.Services;
 using Amber.Core.Auth;
 using Amber.Core.Game;
 using Amber.Core.Install;
-using Amber.Core.Java;
 using Amber.Core.Launch;
 using Avalonia.Input.Platform;
 using Avalonia.Threading;
@@ -17,6 +16,12 @@ public abstract class PageViewModel : ObservableObject
 {
     public abstract string Title { get; }
     public abstract string Icon { get; }
+}
+
+/// <summary>开发用：截图模式下让页面走一遍真实流程。</summary>
+public interface ISnapshotDemo
+{
+    Task RunSnapshotDemoAsync();
 }
 
 public sealed partial class MainViewModel : ObservableObject
@@ -127,13 +132,11 @@ public sealed partial class HomeViewModel : PageViewModel
             }), _cts.Token);
 
             var version = _service.Directory.ResolveVersion(id);
-            var required = version.JavaVersion?.MajorVersion ?? 8;
             var javaPath = settings.JavaPath;
             if (string.IsNullOrEmpty(javaPath) || !File.Exists(javaPath))
             {
-                var java = JavaFinder.Pick(await _service.GetJavaAsync(), required)
-                           ?? throw new InvalidOperationException($"没有找到 Java {required} 或更高版本，请先安装 Java {required}");
-                javaPath = java.JavaPath;
+                _service.Java.Status = new Progress<string>(text => Status = text);
+                javaPath = await _service.Java.ForVersionAsync(version, _cts.Token);
             }
 
             var options = new LaunchOptions
@@ -186,126 +189,6 @@ public sealed partial class HomeViewModel : PageViewModel
     {
         _cts?.Cancel();
         if (_game is { HasExited: false } game) game.Kill(true);
-    }
-}
-
-/// <summary>下载页的一行。</summary>
-public sealed partial class RemoteVersionItem(ManifestEntry entry, bool installed) : ObservableObject
-{
-    public ManifestEntry Entry { get; } = entry;
-    public string Id => Entry.Id;
-    public string TypeText => Entry.Type switch
-    {
-        "release" => "正式版",
-        "snapshot" => "快照",
-        "old_beta" => "远古 Beta",
-        "old_alpha" => "远古 Alpha",
-        var t => t,
-    };
-    public string Date => Entry.ReleaseTime.LocalDateTime.ToString("yyyy-MM-dd");
-
-    [ObservableProperty]
-    public partial bool Installed { get; set; } = installed;
-}
-
-public sealed partial class DownloadViewModel : PageViewModel
-{
-    private readonly LauncherService _service;
-    private List<ManifestEntry> _all = [];
-
-    public override string Title => "下载";
-    public override string Icon => "⬇";
-
-    public string[] Filters { get; } = ["正式版", "快照", "全部"];
-    public ObservableCollection<RemoteVersionItem> Items { get; } = [];
-
-    [ObservableProperty]
-    public partial string Filter { get; set; } = "正式版";
-
-    [ObservableProperty]
-    public partial string Search { get; set; } = "";
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(InstallCommand))]
-    public partial bool IsBusy { get; set; }
-
-    [ObservableProperty]
-    public partial double Progress { get; set; }
-
-    [ObservableProperty]
-    public partial string Status { get; set; } = "";
-
-    public DownloadViewModel(LauncherService service)
-    {
-        _service = service;
-        _ = RefreshAsync();
-    }
-
-    partial void OnFilterChanged(string value) => ApplyFilter();
-    partial void OnSearchChanged(string value) => ApplyFilter();
-
-    [RelayCommand]
-    private async Task RefreshAsync()
-    {
-        Status = "正在获取版本列表……";
-        try
-        {
-            var manifest = await _service.Installer.GetManifestAsync();
-            _all = manifest.Versions;
-            ApplyFilter();
-            Status = $"最新正式版 {manifest.Latest.GetValueOrDefault("release")}，最新快照 {manifest.Latest.GetValueOrDefault("snapshot")}";
-        }
-        catch (Exception e)
-        {
-            Status = "获取版本列表失败：" + e.Message;
-        }
-    }
-
-    private void ApplyFilter()
-    {
-        var installed = _service.InstalledVersions().ToHashSet();
-        IEnumerable<ManifestEntry> list = Filter switch
-        {
-            "正式版" => _all.Where(v => v.Type == "release"),
-            "快照" => _all.Where(v => v.Type == "snapshot"),
-            _ => _all,
-        };
-        if (!string.IsNullOrWhiteSpace(Search)) list = list.Where(v => v.Id.Contains(Search.Trim(), StringComparison.OrdinalIgnoreCase));
-        Items.Clear();
-        foreach (var v in list) Items.Add(new RemoteVersionItem(v, installed.Contains(v.Id)));
-    }
-
-    private bool CanInstall(RemoteVersionItem? item) => !IsBusy && item is not null;
-
-    [RelayCommand(CanExecute = nameof(CanInstall))]
-    private async Task InstallAsync(RemoteVersionItem? item)
-    {
-        if (item is null) return;
-        IsBusy = true;
-        var watch = Stopwatch.StartNew();
-        try
-        {
-            Status = $"正在安装 {item.Id}……";
-            await _service.Installer.InstallAsync(item.Id, new Progress<InstallProgress>(p =>
-            {
-                if (p.Stage != InstallStage.Files || p.Files.TotalFiles == 0) return;
-                Progress = 100.0 * p.Files.CompletedFiles / p.Files.TotalFiles;
-                var mb = p.Files.BytesDownloaded / 1024.0 / 1024;
-                Status = $"安装 {item.Id}：{p.Files.CompletedFiles}/{p.Files.TotalFiles} 个文件，{mb:F1} MB，{mb / Math.Max(watch.Elapsed.TotalSeconds, 0.1):F1} MB/s";
-            }));
-            item.Installed = true;
-            Status = $"{item.Id} 安装完成，用时 {watch.Elapsed.TotalSeconds:F0} 秒";
-            _service.NotifyInstalledChanged();
-        }
-        catch (Exception e)
-        {
-            Status = $"安装 {item.Id} 失败：{e.Message}";
-        }
-        finally
-        {
-            IsBusy = false;
-            Progress = 0;
-        }
     }
 }
 
@@ -364,7 +247,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     private async Task LoadJavaAsync(bool refresh)
     {
         var current = _service.Settings.JavaPath;
-        var found = await _service.GetJavaAsync(refresh);
+        var found = await _service.Java.ScanAsync(refresh);
         JavaOptions.Clear();
         JavaOptions.Add(new JavaOption("自动选择（按游戏版本要求）", null));
         foreach (var j in found) JavaOptions.Add(new JavaOption(j.ToString(), j.JavaPath));

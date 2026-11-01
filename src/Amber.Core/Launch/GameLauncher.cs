@@ -96,7 +96,10 @@ public sealed class GameLauncher(GameDirectory dir)
 
         if (version.Arguments?.Jvm is { Count: > 0 } jvm)
         {
-            args.AddRange(Expand(jvm, rules).Select(a => Substitute(a, vars)));
+            // Forge 的 ignoreList 里写的是 ${version_name}.jar，意思是“客户端 jar”；
+            // 这里的 classpath 直接用原版 jar，所以在 JVM 参数里 version_name 要指向它。
+            var jvmVars = new Dictionary<string, string>(vars) { ["version_name"] = jarId, ["primary_jar_name"] = jarId + ".jar" };
+            args.AddRange(Expand(jvm, rules).Select(a => Substitute(a, jvmVars)));
         }
         else
         {

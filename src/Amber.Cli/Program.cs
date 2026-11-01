@@ -1,4 +1,4 @@
-﻿using Amber.Core.Auth;
+using Amber.Core.Auth;
 using Amber.Core.Game;
 using Amber.Core.Install;
 using Amber.Core.Java;
@@ -13,6 +13,9 @@ Console.OutputEncoding = System.Text.Encoding.UTF8;
 //   list                                  列出已安装版本
 //   install <版本>                        安装 / 补全版本
 //   java                                  列出本机 Java
+//   loaders <fabric|quilt|forge|neoforge|optifine> <游戏版本>   列出加载器版本
+//   install-loader <加载器> <游戏版本> [加载器版本] [--id 名字]    安装加载器（默认装最新稳定版）
+//   java-install <主版本>                 下载 Mojang Java 运行时
 //   launch <版本> <玩家名> [--mem 4096] [--isolate] [--dry-run]
 var argList = args.ToList();
 var root = TakeOption(argList, "--dir") ?? GameDirectory.DefaultRoot();
@@ -33,6 +36,8 @@ var dir = new GameDirectory(root);
 using var http = Downloader.CreateHttpClient();
 var downloader = new Downloader(http, sources);
 var installer = new VanillaInstaller(downloader, dir);
+var javaManager = new JavaManager(downloader, dir) { Status = new SyncProgress<string>(Console.WriteLine) };
+var loaderContext = new LoaderContext(downloader, dir, installer, javaManager.ForMajorAsync);
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
@@ -70,25 +75,52 @@ try
         case "java":
             foreach (var j in JavaFinder.FindAll(dir.Root)) Console.WriteLine(j);
             break;
+        case "loaders":
+        {
+            var loader = LoaderInstallers.Create(Enum.Parse<LoaderKind>(argList[1], true), loaderContext);
+            foreach (var v in (await loader.ListAsync(argList[2], cts.Token)).Take(30))
+                Console.WriteLine($"{v.Version,-40}{(v.Stable ? "" : "测试版")} {v.Note}");
+            break;
+        }
+        case "install-loader":
+        {
+            var customId = TakeOption(argList, "--id");
+            var loader = LoaderInstallers.Create(Enum.Parse<LoaderKind>(argList[1], true), loaderContext);
+            var versions = await loader.ListAsync(argList[2], cts.Token);
+            var wanted = argList.ElementAtOrDefault(3);
+            var chosen = (wanted is not null ? versions.FirstOrDefault(v => v.Version == wanted) : versions.FirstOrDefault(v => v.Stable) ?? versions.FirstOrDefault())
+                         ?? throw new ArgumentException($"{argList[2]} 没有可用的 {argList[1]} {wanted}");
+            var lastStage = "";
+            var installed = await loader.InstallAsync(chosen, customId, new SyncProgress<LoaderProgress>(p =>
+            {
+                var head = p.Stage.Split(' ')[0];
+                if (head != lastStage) Console.WriteLine(p.Stage);
+                lastStage = head;
+            }), cts.Token);
+            Console.WriteLine($"已安装 {installed}");
+            break;
+        }
+        case "java-install":
+            Console.WriteLine(await javaManager.ForMajorAsync(int.Parse(argList[1]), cts.Token));
+            break;
         case "launch":
         {
+            var mem = int.Parse(TakeOption(argList, "--mem") ?? "4096");
             var id = argList.ElementAtOrDefault(1) ?? throw new ArgumentException("缺少版本号");
             var player = argList.ElementAtOrDefault(2) ?? "Player";
-            var mem = int.Parse(TakeOption(argList, "--mem") ?? "4096");
             var isolate = argList.Remove("--isolate");
             var dryRun = argList.Remove("--dry-run");
+            var smoke = TakeOption(argList, "--smoke") is { } smokeText ? int.Parse(smokeText) : (int?)null;
 
             await installer.CompleteAsync(id, null, cts.Token);
             var version = dir.ResolveVersion(id);
-            var required = version.JavaVersion?.MajorVersion ?? 8;
-            var java = JavaFinder.Pick(JavaFinder.FindAll(dir.Root), required)
-                       ?? throw new InvalidOperationException($"没有找到 Java {required} 或更高版本");
-            Console.WriteLine($"使用 {java}");
+            var javaPath = await javaManager.ForVersionAsync(version, cts.Token);
+            Console.WriteLine($"使用 {javaPath}");
 
             var options = new LaunchOptions
             {
                 VersionId = id,
-                JavaPath = java.JavaPath,
+                JavaPath = javaPath,
                 Session = OfflineAccount.Create(player),
                 MaxMemoryMb = mem,
                 WorkingDirectory = isolate ? dir.VersionDir(id) : null,
@@ -98,6 +130,35 @@ try
             {
                 Console.WriteLine(string.Join('\n', launcher.BuildArguments(options)));
                 break;
+            }
+            if (smoke is not null)
+            {
+                // 冒烟测试：等到游戏进入主界面（声音引擎启动）或超时，然后关掉游戏。
+                var reached = new TaskCompletionSource<string>();
+                var tail = new Queue<string>();
+                var smokeParser = new GameLogParser();
+                var game = launcher.Launch(options, line =>
+                {
+                    lock (tail)
+                    {
+                        var parsed = smokeParser.Feed(line);
+                        if (parsed is null) return;
+                        tail.Enqueue(parsed.Message);
+                        if (tail.Count > 25) tail.Dequeue();
+                        if (parsed.Message.Contains("Sound engine started") || parsed.Message.Contains("OpenAL initialized") || parsed.Message.Contains("SoundSystem Author"))
+                            reached.TrySetResult(parsed.Message);
+                    }
+                });
+                var finished = await Task.WhenAny(reached.Task, game.WaitForExitAsync(cts.Token), Task.Delay(TimeSpan.FromSeconds(smoke.Value), cts.Token));
+                var ok = finished == reached.Task;
+                // 再留几秒，确认不是一进主界面就崩。
+                if (ok) await Task.WhenAny(game.WaitForExitAsync(cts.Token), Task.Delay(4000, cts.Token));
+                ok = ok && !game.HasExited;
+                var exitedByItself = game.HasExited;
+                if (!game.HasExited) game.Kill(true);
+                Console.WriteLine(ok ? $"SMOKE PASS {id}" : $"SMOKE FAIL {id}（{(game.HasExited ? "退出代码 " + game.ExitCode : "超时")}）");
+                if (!ok) lock (tail) foreach (var l in tail) Console.WriteLine("  " + l);
+                return ok ? 0 : 2;
             }
             var process = launcher.Launch(options, Console.WriteLine);
             await process.WaitForExitAsync(cts.Token);
@@ -128,4 +189,9 @@ static string? TakeOption(List<string> list, string name)
     var value = list[i + 1];
     list.RemoveRange(i, 2);
     return value;
+}
+
+sealed class SyncProgress<T>(Action<T> action) : IProgress<T>
+{
+    public void Report(T value) => action(value);
 }

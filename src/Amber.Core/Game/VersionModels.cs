@@ -24,7 +24,7 @@ public sealed class VersionJson
     [JsonPropertyName("downloads")] public Dictionary<string, DownloadInfo>? Downloads { get; set; }
     [JsonPropertyName("javaVersion")] public JavaVersionRequirement? JavaVersion { get; set; }
     [JsonPropertyName("logging")] public Dictionary<string, LoggingInfo>? Logging { get; set; }
-    [JsonPropertyName("releaseTime")] public DateTimeOffset? ReleaseTime { get; set; }
+    [JsonPropertyName("releaseTime")] public string? ReleaseTime { get; set; }
 }
 
 public sealed class VersionArguments
@@ -141,7 +141,7 @@ public sealed class ManifestEntry
     [JsonPropertyName("releaseTime")] public DateTimeOffset ReleaseTime { get; set; }
 }
 
-internal static class Json
+public static class Json
 {
     public static readonly JsonSerializerOptions Options = new()
     {
