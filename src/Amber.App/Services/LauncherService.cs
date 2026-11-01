@@ -1,3 +1,4 @@
+using Amber.Core.Auth;
 using Amber.Core.Game;
 using Amber.Core.Install;
 using Amber.Core.Java;
@@ -11,6 +12,7 @@ public sealed class LauncherService : IDisposable
     private readonly HttpClient _http = Downloader.CreateHttpClient();
 
     public AppSettings Settings { get; }
+    public AccountService Accounts { get; }
     public GameDirectory Directory { get; private set; } = null!;
     public Downloader Downloader { get; private set; } = null!;
     public VanillaInstaller Installer { get; private set; } = null!;
@@ -20,9 +22,18 @@ public sealed class LauncherService : IDisposable
     /// <summary>已安装版本列表变化（安装完成、切换目录）时触发。</summary>
     public event Action? InstalledVersionsChanged;
 
+    /// <summary>账号增删或切换时触发。</summary>
+    public event Action? AccountsChanged;
+
     public LauncherService(AppSettings settings)
     {
         Settings = settings;
+        var store = new AccountStore(Path.Combine(AppSettings.DataDir, "accounts.json"));
+        store.Load();
+        Accounts = new AccountService(_http, store, AppSettings.DataDir, () => Settings.MicrosoftClientId);
+        // 老版本只存了玩家名，第一次运行时转成离线账号。
+        if (store.Accounts.Count == 0 && !string.IsNullOrWhiteSpace(settings.PlayerName))
+            Accounts.AddOffline(settings.PlayerName);
         Reload();
     }
 
@@ -41,6 +52,8 @@ public sealed class LauncherService : IDisposable
         Loaders = new LoaderContext(Downloader, Directory, Installer, Java.ForMajorAsync);
         NotifyInstalledChanged();
     }
+
+    public void NotifyAccountsChanged() => AccountsChanged?.Invoke();
 
     public void NotifyInstalledChanged() => InstalledVersionsChanged?.Invoke();
 

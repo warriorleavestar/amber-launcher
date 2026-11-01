@@ -37,6 +37,7 @@ public sealed partial class MainViewModel : ObservableObject
         Pages =
         [
             new HomeViewModel(service, log),
+            new AccountsViewModel(service),
             new DownloadViewModel(service),
             new SettingsViewModel(service),
             log,
@@ -57,6 +58,7 @@ public sealed partial class HomeViewModel : PageViewModel
     public override string Icon => "▶";
 
     public ObservableCollection<string> Versions { get; } = [];
+    public ObservableCollection<Account> Accounts { get; } = [];
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(LaunchCommand))]
@@ -64,7 +66,7 @@ public sealed partial class HomeViewModel : PageViewModel
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(LaunchCommand))]
-    public partial string PlayerName { get; set; }
+    public partial Account? SelectedAccount { get; set; }
 
     [ObservableProperty]
     public partial int MaxMemoryMb { get; set; }
@@ -85,10 +87,29 @@ public sealed partial class HomeViewModel : PageViewModel
     {
         _service = service;
         _log = log;
-        PlayerName = service.Settings.PlayerName;
         MaxMemoryMb = service.Settings.MaxMemoryMb;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshVersions);
+        service.AccountsChanged += RefreshAccounts;
         RefreshVersions();
+        RefreshAccounts();
+    }
+
+    private bool _refreshingAccounts;
+
+    private void RefreshAccounts()
+    {
+        _refreshingAccounts = true;
+        Accounts.Clear();
+        foreach (var a in _service.Accounts.Store.Accounts) Accounts.Add(a);
+        SelectedAccount = _service.Accounts.Store.Selected;
+        _refreshingAccounts = false;
+    }
+
+    partial void OnSelectedAccountChanged(Account? value)
+    {
+        if (_refreshingAccounts || value is null || value.Id == _service.Accounts.Store.SelectedId) return;
+        _service.Accounts.Store.SelectedId = value.Id;
+        _service.Accounts.Store.Save();
     }
 
     private void RefreshVersions()
@@ -106,14 +127,13 @@ public sealed partial class HomeViewModel : PageViewModel
         _service.Settings.Save();
     }
 
-    private bool CanLaunch() => !IsBusy && SelectedVersion is not null && !string.IsNullOrWhiteSpace(PlayerName);
+    private bool CanLaunch() => !IsBusy && SelectedVersion is not null && SelectedAccount is not null;
 
     [RelayCommand(CanExecute = nameof(CanLaunch))]
     private async Task LaunchAsync()
     {
         var id = SelectedVersion!;
         var settings = _service.Settings;
-        settings.PlayerName = PlayerName.Trim();
         settings.LastVersion = id;
         settings.Save();
 
@@ -139,11 +159,15 @@ public sealed partial class HomeViewModel : PageViewModel
                 javaPath = await _service.Java.ForVersionAsync(version, _cts.Token);
             }
 
+            Status = "正在验证账号……";
+            var session = await _service.Accounts.ResolveAsync(SelectedAccount!, _cts.Token);
+
             var options = new LaunchOptions
             {
                 VersionId = id,
                 JavaPath = javaPath,
-                Session = OfflineAccount.Create(settings.PlayerName),
+                Session = session.Session,
+                ExtraJvmArgs = session.ExtraJvmArgs,
                 MaxMemoryMb = MaxMemoryMb,
                 WorkingDirectory = settings.IsolateVersions ? _service.Directory.VersionDir(id) : null,
                 WindowWidth = settings.WindowWidth,

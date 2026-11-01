@@ -1,0 +1,103 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Amber.App.ViewModels"
+             xmlns:auth="using:Amber.Core.Auth"
+             x:Class="Amber.App.Views.AccountsPage"
+             x:DataType="vm:AccountsViewModel">
+  <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,330">
+    <TextBlock Classes="h1" Text="账号" Grid.ColumnSpan="2" />
+
+    <Border Grid.Row="1" Classes="card" Padding="8">
+      <Grid RowDefinitions="*,Auto">
+        <ListBox ItemsSource="{Binding Accounts}" Background="Transparent">
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="vm:AccountItem">
+              <Grid ColumnDefinitions="Auto,*,Auto" Margin="4">
+                <Border Width="40" Height="40" CornerRadius="6" Background="{DynamicResource AmberAccent}" ClipToBounds="True">
+                  <Panel>
+                    <TextBlock Text="{Binding Initial}" IsVisible="{Binding HasNoAvatar}" Foreground="White" FontWeight="Bold" FontSize="18"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <Image Source="{Binding Head}" RenderOptions.BitmapInterpolationMode="None" />
+                  </Panel>
+                </Border>
+                <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                    <TextBlock Text="当前" IsVisible="{Binding IsCurrent}" Foreground="{DynamicResource AmberAccent}" />
+                  </StackPanel>
+                  <TextBlock Text="{Binding KindText}" Classes="hint" FontSize="12" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                  <Button Content="使用" Command="{Binding $parent[ListBox].((vm:AccountsViewModel)DataContext).UseCommand}" CommandParameter="{Binding}" />
+                  <Button Content="移除" Command="{Binding $parent[ListBox].((vm:AccountsViewModel)DataContext).RemoveCommand}" CommandParameter="{Binding}" />
+                </StackPanel>
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+        <Image Grid.Row="1" Source="{Binding Current.Body}" Height="160" Margin="0,8" HorizontalAlignment="Center"
+               RenderOptions.BitmapInterpolationMode="None" />
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="1" Grid.Column="1" Classes="card" Margin="14,0,0,14">
+      <ScrollViewer>
+        <StackPanel Spacing="10">
+          <TextBlock Classes="h2" Text="添加账号" Margin="0" />
+          <ComboBox ItemsSource="{Binding LoginKinds}" SelectedIndex="{Binding LoginTab}" HorizontalAlignment="Stretch" />
+
+          <StackPanel Spacing="10" IsVisible="{Binding IsOfflineTab}">
+            <TextBox Text="{Binding OfflineName}" PlaceholderText="玩家名（3-16 位字母数字下划线）" MaxLength="16" />
+            <Button Classes="amber" Content="添加离线账号" Command="{Binding AddOfflineCommand}" />
+            <TextBlock Classes="hint" Text="离线账号只能进单人和离线模式服务器。" />
+          </StackPanel>
+
+          <StackPanel Spacing="10" IsVisible="{Binding IsMicrosoftTab}">
+            <TextBlock Text="Azure 应用 Client ID" />
+            <TextBox Text="{Binding ClientIdInput}" PlaceholderText="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+            <TextBlock Classes="hint" IsVisible="{Binding MicrosoftMissingClientId}"
+                       Text="微软登录需要你自己的 Client ID：在 Azure 门户注册一个公共客户端应用，允许个人账号并开启设备码流程，再向 Mojang 申请 Minecraft API 权限。也可以用环境变量 AMBER_MS_CLIENT_ID。" />
+            <Button Classes="amber" Content="用微软账号登录" Command="{Binding LoginMicrosoftCommand}" />
+            <Border IsVisible="{Binding HasDeviceCode}" Background="{DynamicResource PageBackground}" CornerRadius="8" Padding="12">
+              <StackPanel Spacing="8">
+                <TextBlock Text="在浏览器里输入这个代码：" />
+                <SelectableTextBlock Text="{Binding DeviceCode}" FontSize="26" FontWeight="Bold" Foreground="{DynamicResource AmberAccent}" />
+                <SelectableTextBlock Text="{Binding DeviceUri}" Classes="hint" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button Content="打开浏览器" Command="{Binding OpenDeviceUriCommand}" />
+                  <Button Content="取消" Command="{Binding CancelLoginCommand}" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+
+          <StackPanel Spacing="10" IsVisible="{Binding IsExternalTab}">
+            <TextBox Text="{Binding ServerUrl}" PlaceholderText="皮肤站地址，例如 littleskin.cn" />
+            <TextBox Text="{Binding ExternalUser}" PlaceholderText="账号或邮箱" />
+            <TextBox Text="{Binding ExternalPassword}" PasswordChar="●" PlaceholderText="密码（只用于这次登录，不保存）" />
+            <Button Classes="amber" Content="登录" Command="{Binding LoginExternalCommand}" />
+            <StackPanel Spacing="8" IsVisible="{Binding NeedsProfileChoice}">
+              <TextBlock Text="选择角色" />
+              <ComboBox ItemsSource="{Binding ExternalProfiles}" SelectedItem="{Binding SelectedProfile}" HorizontalAlignment="Stretch">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate DataType="auth:ExternalProfile">
+                    <TextBlock Text="{Binding Name}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <Button Content="确定" Command="{Binding ConfirmProfileCommand}" />
+            </StackPanel>
+            <TextBlock Classes="hint" Text="支持 authlib-injector 协议的皮肤站（LittleSkin、Blessing Skin 等）。" />
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+
+    <Border Grid.Row="2" Grid.ColumnSpan="2" Classes="card" Margin="0">
+      <StackPanel Spacing="6">
+        <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
+        <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsBusy}" />
+      </StackPanel>
+    </Border>
+  </Grid>
+</UserControl>

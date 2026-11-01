@@ -21,14 +21,17 @@ public sealed class AppSettings
     public int? WindowWidth { get; set; }
     public int? WindowHeight { get; set; }
 
+    /// <summary>用户自己申请的微软应用 ID，留空时读环境变量 AMBER_MS_CLIENT_ID。</summary>
+    public string? MicrosoftClientId { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    public static string FilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Amber", "settings.json");
+    public static string DataDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Amber");
+    public static string FilePath => Path.Combine(DataDir, "settings.json");
 
     public static AppSettings Load()
     {

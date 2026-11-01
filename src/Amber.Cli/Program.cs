@@ -111,6 +111,7 @@ try
             var isolate = argList.Remove("--isolate");
             var dryRun = argList.Remove("--dry-run");
             var smoke = TakeOption(argList, "--smoke") is { } smokeText ? int.Parse(smokeText) : (int?)null;
+            var authlib = TakeOption(argList, "--authlib");
 
             await installer.CompleteAsync(id, null, cts.Token);
             var version = dir.ResolveVersion(id);
@@ -125,6 +126,15 @@ try
                 MaxMemoryMb = mem,
                 WorkingDirectory = isolate ? dir.VersionDir(id) : null,
             };
+            if (authlib is not null)
+            {
+                // 检查外置登录用：账号仍是离线的，只验证 authlib-injector 能否随游戏加载。
+                var external = new ExternalAuth(http);
+                var api = await external.ResolveApiRootAsync(authlib, cts.Token);
+                var jar = await new AuthlibInjector(http, Path.Combine(dir.Root, "authlib-injector")).EnsureJarAsync(cts.Token);
+                options = options with { ExtraJvmArgs = AuthlibInjector.JvmArgs(jar, api, await external.GetMetadataAsync(api, cts.Token)) };
+                Console.WriteLine($"authlib-injector：{jar} → {api}");
+            }
             var launcher = new GameLauncher(dir);
             if (dryRun)
             {

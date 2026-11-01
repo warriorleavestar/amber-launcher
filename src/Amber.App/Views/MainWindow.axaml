@@ -21,9 +21,9 @@
               <ComboBox Grid.Column="1" ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}"
                         HorizontalAlignment="Stretch" PlaceholderText="未安装任何版本" />
 
-              <TextBlock Grid.Row="1" Text="玩家名" VerticalAlignment="Center" Margin="0,12,0,0" />
-              <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding PlayerName}" Margin="0,12,0,0" MaxLength="16"
-                       PlaceholderText="离线模式玩家名（3-16 位字母数字下划线）" />
+              <TextBlock Grid.Row="1" Text="账号" VerticalAlignment="Center" Margin="0,12,0,0" />
+              <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Accounts}" SelectedItem="{Binding SelectedAccount}"
+                        HorizontalAlignment="Stretch" Margin="0,12,0,0" PlaceholderText="还没有账号，去「账号」页添加" />
 
               <TextBlock Grid.Row="2" Text="最大内存" VerticalAlignment="Center" Margin="0,12,0,0" />
               <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="*,90" Margin="0,12,0,0">
@@ -33,12 +33,6 @@
                            Text="{Binding MaxMemoryMb, StringFormat='{}{0} MB'}" />
               </Grid>
             </Grid>
-          </Border>
-          <Border Classes="card">
-            <StackPanel Spacing="6">
-              <TextBlock Classes="h2" Text="账号" Margin="0" />
-              <TextBlock Classes="hint" Text="当前为离线账号。微软正版登录将在后续版本加入（需要你自己的 Azure 应用 ID）。" />
-            </StackPanel>
           </Border>
         </StackPanel>
         <Border Grid.Row="2" Classes="card" Margin="0">
@@ -56,6 +50,9 @@
       </Grid>
     </DataTemplate>
 
+    <DataTemplate DataType="vm:AccountsViewModel">
+      <views:AccountsPage />
+    </DataTemplate>
     <DataTemplate DataType="vm:DownloadViewModel">
       <views:DownloadPage />
     </DataTemplate>
