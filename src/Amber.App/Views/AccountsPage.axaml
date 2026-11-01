@@ -93,7 +93,7 @@
       </ScrollViewer>
     </Border>
 
-    <Border Grid.Row="2" Grid.ColumnSpan="2" Classes="card" Margin="0">
+    <Border Grid.Row="2" Grid.ColumnSpan="2" Classes="card" Margin="0" IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
       <StackPanel Spacing="6">
         <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
         <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsBusy}" />

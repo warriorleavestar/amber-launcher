@@ -1,10 +1,7 @@
 using System.Collections.ObjectModel;
-using System.Diagnostics;
 using Amber.App.Services;
-using Amber.Core.Auth;
-using Amber.Core.Game;
-using Amber.Core.Install;
 using Amber.Core.Launch;
+using Avalonia.Data.Converters;
 using Avalonia.Input.Platform;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -16,12 +13,36 @@ public abstract class PageViewModel : ObservableObject
 {
     public abstract string Title { get; }
     public abstract string Icon { get; }
+
+    private bool _activated;
+
+    /// <summary>页面第一次显示时调用一次。启动时不联网、不扫描，都放在这里。</summary>
+    public void Activate()
+    {
+        if (_activated) return;
+        _activated = true;
+        OnFirstActivated();
+    }
+
+    protected virtual void OnFirstActivated() { }
 }
 
 /// <summary>开发用：截图模式下让页面走一遍真实流程。</summary>
 public interface ISnapshotDemo
 {
     Task RunSnapshotDemoAsync();
+}
+
+public static class Ui
+{
+    /// <summary>等已排队的进度回调跑完，这样最后写的状态文字不会被迟到的进度盖掉。</summary>
+    public static async Task FlushAsync() => await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+}
+
+public static class Converters
+{
+    public static readonly IValueConverter DeleteLabel =
+        new FuncValueConverter<bool, string>(armed => armed ? "确认删除" : "删除版本");
 }
 
 public sealed partial class MainViewModel : ObservableObject
@@ -31,188 +52,29 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial PageViewModel CurrentPage { get; set; }
 
+    public string VersionText { get; } = $"v{UpdateChecker.CurrentVersion} · 无云控 · 无遥测";
+
+    partial void OnCurrentPageChanged(PageViewModel value) => value.Activate();
+
     public MainViewModel(LauncherService service)
     {
         var log = new LogViewModel();
+        var home = new HomeViewModel(service, log);
+        var instance = new InstanceViewModel(service) { NavigateHome = null };
         Pages =
         [
-            new HomeViewModel(service, log),
+            home,
             new AccountsViewModel(service),
+            instance,
             new DownloadViewModel(service),
+            new ContentViewModel(service),
+            new ToolsViewModel(service),
             new SettingsViewModel(service),
             log,
         ];
+        instance.NavigateHome = () => CurrentPage = home;
         CurrentPage = Pages[0];
-    }
-}
-
-/// <summary>启动页：选版本、填玩家名、启动。</summary>
-public sealed partial class HomeViewModel : PageViewModel
-{
-    private readonly LauncherService _service;
-    private readonly LogViewModel _log;
-    private CancellationTokenSource? _cts;
-    private Process? _game;
-
-    public override string Title => "启动";
-    public override string Icon => "▶";
-
-    public ObservableCollection<string> Versions { get; } = [];
-    public ObservableCollection<Account> Accounts { get; } = [];
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LaunchCommand))]
-    public partial string? SelectedVersion { get; set; }
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LaunchCommand))]
-    public partial Account? SelectedAccount { get; set; }
-
-    [ObservableProperty]
-    public partial int MaxMemoryMb { get; set; }
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LaunchCommand))]
-    public partial bool IsBusy { get; set; }
-
-    [ObservableProperty]
-    public partial double Progress { get; set; }
-
-    [ObservableProperty]
-    public partial string Status { get; set; } = "准备就绪";
-
-    public int TotalMemoryMb { get; } = (int)(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1024 / 1024);
-
-    public HomeViewModel(LauncherService service, LogViewModel log)
-    {
-        _service = service;
-        _log = log;
-        MaxMemoryMb = service.Settings.MaxMemoryMb;
-        service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshVersions);
-        service.AccountsChanged += RefreshAccounts;
-        RefreshVersions();
-        RefreshAccounts();
-    }
-
-    private bool _refreshingAccounts;
-
-    private void RefreshAccounts()
-    {
-        _refreshingAccounts = true;
-        Accounts.Clear();
-        foreach (var a in _service.Accounts.Store.Accounts) Accounts.Add(a);
-        SelectedAccount = _service.Accounts.Store.Selected;
-        _refreshingAccounts = false;
-    }
-
-    partial void OnSelectedAccountChanged(Account? value)
-    {
-        if (_refreshingAccounts || value is null || value.Id == _service.Accounts.Store.SelectedId) return;
-        _service.Accounts.Store.SelectedId = value.Id;
-        _service.Accounts.Store.Save();
-    }
-
-    private void RefreshVersions()
-    {
-        var keep = SelectedVersion ?? _service.Settings.LastVersion;
-        Versions.Clear();
-        foreach (var v in _service.InstalledVersions()) Versions.Add(v);
-        SelectedVersion = keep is not null && Versions.Contains(keep) ? keep : Versions.FirstOrDefault();
-        if (Versions.Count == 0) Status = "还没有安装任何版本，去「下载」页装一个吧";
-    }
-
-    partial void OnMaxMemoryMbChanged(int value)
-    {
-        _service.Settings.MaxMemoryMb = value;
-        _service.Settings.Save();
-    }
-
-    private bool CanLaunch() => !IsBusy && SelectedVersion is not null && SelectedAccount is not null;
-
-    [RelayCommand(CanExecute = nameof(CanLaunch))]
-    private async Task LaunchAsync()
-    {
-        var id = SelectedVersion!;
-        var settings = _service.Settings;
-        settings.LastVersion = id;
-        settings.Save();
-
-        IsBusy = true;
-        _cts = new CancellationTokenSource();
-        try
-        {
-            Status = "正在检查游戏文件……";
-            await _service.Installer.CompleteAsync(id, new Progress<InstallProgress>(p =>
-            {
-                if (p.Stage == InstallStage.Files && p.Files.TotalFiles > 0)
-                {
-                    Progress = 100.0 * p.Files.CompletedFiles / p.Files.TotalFiles;
-                    Status = $"补全文件 {p.Files.CompletedFiles}/{p.Files.TotalFiles}";
-                }
-            }), _cts.Token);
-
-            var version = _service.Directory.ResolveVersion(id);
-            var javaPath = settings.JavaPath;
-            if (string.IsNullOrEmpty(javaPath) || !File.Exists(javaPath))
-            {
-                _service.Java.Status = new Progress<string>(text => Status = text);
-                javaPath = await _service.Java.ForVersionAsync(version, _cts.Token);
-            }
-
-            Status = "正在验证账号……";
-            var session = await _service.Accounts.ResolveAsync(SelectedAccount!, _cts.Token);
-
-            var options = new LaunchOptions
-            {
-                VersionId = id,
-                JavaPath = javaPath,
-                Session = session.Session,
-                ExtraJvmArgs = session.ExtraJvmArgs,
-                MaxMemoryMb = MaxMemoryMb,
-                WorkingDirectory = settings.IsolateVersions ? _service.Directory.VersionDir(id) : null,
-                WindowWidth = settings.WindowWidth,
-                WindowHeight = settings.WindowHeight,
-            };
-
-            Status = "正在启动……";
-            Progress = 100;
-            _log.Clear();
-            _log.AddRaw($"[Amber] 启动 {id}，Java：{javaPath}");
-            var parser = new GameLogParser();
-            var launcher = new GameLauncher(_service.Directory);
-            _game = launcher.Launch(options, line =>
-            {
-                lock (parser)
-                {
-                    if (parser.Feed(line) is { } entry) _log.Add(entry);
-                }
-            });
-            Status = $"{id} 运行中";
-            await _game.WaitForExitAsync();
-            Status = _game.ExitCode == 0 ? "游戏已正常退出" : $"游戏异常退出（代码 {_game.ExitCode}），详情见「日志」页";
-        }
-        catch (OperationCanceledException)
-        {
-            Status = "已取消";
-        }
-        catch (Exception e)
-        {
-            Status = "启动失败：" + e.Message;
-            _log.AddRaw("[Amber] " + e);
-        }
-        finally
-        {
-            IsBusy = false;
-            Progress = 0;
-            _game = null;
-        }
-    }
-
-    [RelayCommand]
-    private void Cancel()
-    {
-        _cts?.Cancel();
-        if (_game is { HasExited: false } game) game.Kill(true);
+        CurrentPage.Activate();
     }
 }
 
@@ -230,26 +92,23 @@ public sealed partial class SettingsViewModel : PageViewModel
 
     public ObservableCollection<JavaOption> JavaOptions { get; } = [];
 
-    [ObservableProperty]
-    public partial string GameDirectory { get; set; }
-
-    [ObservableProperty]
-    public partial int SourceIndex { get; set; }
-
-    [ObservableProperty]
-    public partial JavaOption? SelectedJava { get; set; }
-
-    [ObservableProperty]
-    public partial bool IsolateVersions { get; set; }
-
-    [ObservableProperty]
-    public partial string WindowWidth { get; set; }
-
-    [ObservableProperty]
-    public partial string WindowHeight { get; set; }
-
-    [ObservableProperty]
-    public partial string Status { get; set; } = "";
+    [ObservableProperty] public partial string GameDirectory { get; set; }
+    [ObservableProperty] public partial int SourceIndex { get; set; }
+    [ObservableProperty] public partial string Concurrency { get; set; }
+    [ObservableProperty] public partial JavaOption? SelectedJava { get; set; }
+    [ObservableProperty] public partial bool AutoJavaDownload { get; set; }
+    [ObservableProperty] public partial bool IsolateVersions { get; set; }
+    [ObservableProperty] public partial string WindowWidth { get; set; }
+    [ObservableProperty] public partial string WindowHeight { get; set; }
+    [ObservableProperty] public partial bool Fullscreen { get; set; }
+    [ObservableProperty] public partial string JvmArgs { get; set; }
+    [ObservableProperty] public partial string GameArgs { get; set; }
+    [ObservableProperty] public partial string PreLaunch { get; set; }
+    [ObservableProperty] public partial string PostExit { get; set; }
+    [ObservableProperty] public partial string CurseForgeKey { get; set; }
+    [ObservableProperty] public partial string CurseForgeRoot { get; set; }
+    [ObservableProperty] public partial string UpdateFeed { get; set; }
+    [ObservableProperty] public partial string Status { get; set; } = "";
 
     public string SettingsPath => AppSettings.FilePath;
 
@@ -259,11 +118,28 @@ public sealed partial class SettingsViewModel : PageViewModel
         var s = service.Settings;
         GameDirectory = s.GameDirectory;
         SourceIndex = Math.Max(0, Array.IndexOf(SourceKeys, s.DownloadSource));
+        Concurrency = s.DownloadConcurrency.ToString();
+        AutoJavaDownload = s.AutoJavaDownload;
         IsolateVersions = s.IsolateVersions;
         WindowWidth = s.WindowWidth?.ToString() ?? "";
         WindowHeight = s.WindowHeight?.ToString() ?? "";
-        _ = LoadJavaAsync(false);
+        Fullscreen = s.Fullscreen;
+        JvmArgs = s.JvmArgs ?? "";
+        GameArgs = s.GameArgs ?? "";
+        PreLaunch = s.PreLaunchCommand ?? "";
+        PostExit = s.PostExitCommand ?? "";
+        CurseForgeKey = s.CurseForgeApiKey ?? "";
+        CurseForgeRoot = s.CurseForgeApiRoot ?? "";
+        UpdateFeed = s.UpdateFeedUrl ?? "";
+        SelectedThemeIndex = Math.Max(0, Array.IndexOf(ThemeKeys, s.Theme));
     }
+
+    protected override void OnFirstActivated() => _ = LoadJavaAsync(false);
+
+    public string[] ThemeOptions { get; } = ["跟随系统", "浅色", "深色"];
+    private static readonly string[] ThemeKeys = ["system", "light", "dark"];
+
+    [ObservableProperty] public partial int SelectedThemeIndex { get; set; }
 
     [RelayCommand]
     private Task RefreshJavaAsync() => LoadJavaAsync(true);
@@ -278,6 +154,8 @@ public sealed partial class SettingsViewModel : PageViewModel
         SelectedJava = JavaOptions.FirstOrDefault(o => o.Path == current) ?? JavaOptions[0];
     }
 
+    private static string? Blank(string text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+
     [RelayCommand]
     private void Save()
     {
@@ -285,10 +163,23 @@ public sealed partial class SettingsViewModel : PageViewModel
         var dirChanged = !string.Equals(s.GameDirectory, GameDirectory.Trim(), StringComparison.OrdinalIgnoreCase);
         s.GameDirectory = GameDirectory.Trim();
         s.DownloadSource = SourceKeys[Math.Clamp(SourceIndex, 0, SourceKeys.Length - 1)];
+        s.DownloadConcurrency = int.TryParse(Concurrency, out var c) ? Math.Clamp(c, 1, 128) : 32;
+        Concurrency = s.DownloadConcurrency.ToString();
         s.JavaPath = SelectedJava?.Path;
+        s.AutoJavaDownload = AutoJavaDownload;
         s.IsolateVersions = IsolateVersions;
         s.WindowWidth = int.TryParse(WindowWidth, out var w) && w > 0 ? w : null;
         s.WindowHeight = int.TryParse(WindowHeight, out var h) && h > 0 ? h : null;
+        s.Fullscreen = Fullscreen;
+        s.JvmArgs = Blank(JvmArgs);
+        s.GameArgs = Blank(GameArgs);
+        s.PreLaunchCommand = Blank(PreLaunch);
+        s.PostExitCommand = Blank(PostExit);
+        s.CurseForgeApiKey = Blank(CurseForgeKey);
+        s.CurseForgeApiRoot = Blank(CurseForgeRoot);
+        s.UpdateFeedUrl = Blank(UpdateFeed);
+        s.Theme = ThemeKeys[Math.Clamp(SelectedThemeIndex, 0, ThemeKeys.Length - 1)];
+        App.ApplyTheme(s.Theme);
         s.Save();
         _service.Reload();
         Status = dirChanged ? "已保存，已切换到新的游戏目录" : "已保存";
@@ -310,7 +201,12 @@ public sealed partial class LogViewModel : PageViewModel
     [ObservableProperty]
     public partial bool OnlyProblems { get; set; }
 
+    [ObservableProperty]
+    public partial bool FollowLatest { get; set; } = true;
+
     private readonly List<LogEntry> _all = [];
+    private readonly List<LogEntry> _pending = [];
+    private bool _flushQueued;
 
     partial void OnOnlyProblemsChanged(bool value) => Rebuild();
 
@@ -318,18 +214,39 @@ public sealed partial class LogViewModel : PageViewModel
 
     public void AddRaw(string message) => Post(new LogEntry(DateTime.Now.ToString("HH:mm:ss"), "AMBER", message, GameLogLevel.Info));
 
-    public void Clear() => Dispatcher.UIThread.Post(() => { _all.Clear(); Lines.Clear(); });
-
-    private void Post(LogEntry entry) => Dispatcher.UIThread.Post(() =>
+    public void Clear()
     {
-        _all.Add(entry);
-        if (_all.Count > MaxLines) _all.RemoveRange(0, _all.Count - MaxLines);
-        if (Visible(entry))
+        lock (_pending) _pending.Clear();
+        Dispatcher.UIThread.Post(() => { _all.Clear(); Lines.Clear(); });
+    }
+
+    /// <summary>模组加载时日志一秒上千行，攒成一批再进界面，不然界面会卡。</summary>
+    private void Post(LogEntry entry)
+    {
+        lock (_pending)
         {
-            Lines.Add(entry);
-            if (Lines.Count > MaxLines) Lines.RemoveAt(0);
+            _pending.Add(entry);
+            if (_flushQueued) return;
+            _flushQueued = true;
         }
-    });
+        // 游戏输出来自后台线程，这里不能用 DispatcherTimer（它绑定当前线程的调度器）。
+        _ = Task.Delay(100).ContinueWith(_ => Dispatcher.UIThread.Post(Flush), TaskScheduler.Default);
+    }
+
+    private void Flush()
+    {
+        List<LogEntry> batch;
+        lock (_pending)
+        {
+            batch = [.. _pending];
+            _pending.Clear();
+            _flushQueued = false;
+        }
+        _all.AddRange(batch);
+        if (_all.Count > MaxLines) _all.RemoveRange(0, _all.Count - MaxLines);
+        foreach (var entry in batch.Where(Visible)) Lines.Add(entry);
+        while (Lines.Count > MaxLines) Lines.RemoveAt(0);
+    }
 
     private bool Visible(LogEntry e) => !OnlyProblems || e.Severity >= GameLogLevel.Warn;
 

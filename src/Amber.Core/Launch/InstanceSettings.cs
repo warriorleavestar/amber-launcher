@@ -1,0 +1,158 @@
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Amber.Core.Game;
+
+namespace Amber.Core.Launch;
+
+/// <summary>全局和单个版本共用的启动设置。版本设置里为 null 的项沿用全局值。</summary>
+public sealed class InstanceSettings
+{
+    public bool? Isolate { get; set; }
+    public string? JavaPath { get; set; }
+    public bool? AutoMemory { get; set; }
+    public int? MaxMemoryMb { get; set; }
+    public string? JvmArgs { get; set; }
+    public string? GameArgs { get; set; }
+    public int? WindowWidth { get; set; }
+    public int? WindowHeight { get; set; }
+    public bool? Fullscreen { get; set; }
+    public string? PreLaunchCommand { get; set; }
+    public string? PostExitCommand { get; set; }
+    public string? JoinServer { get; set; }
+
+    private static readonly JsonSerializerOptions Options = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    public const string FileName = "amber-instance.json";
+
+    public static InstanceSettings Load(GameDirectory dir, string id)
+    {
+        var path = Path.Combine(dir.VersionDir(id), FileName);
+        if (!File.Exists(path)) return new InstanceSettings();
+        try
+        {
+            return JsonSerializer.Deserialize<InstanceSettings>(File.ReadAllText(path), Options) ?? new InstanceSettings();
+        }
+        catch (JsonException)
+        {
+            return new InstanceSettings();
+        }
+    }
+
+    public void Save(GameDirectory dir, string id)
+    {
+        Directory.CreateDirectory(dir.VersionDir(id));
+        File.WriteAllText(Path.Combine(dir.VersionDir(id), FileName), JsonSerializer.Serialize(this, Options));
+    }
+
+    /// <summary>this 是版本设置，fallback 是全局设置。</summary>
+    public InstanceSettings Over(InstanceSettings fallback) => new()
+    {
+        Isolate = Isolate ?? fallback.Isolate,
+        JavaPath = Empty(JavaPath) ?? fallback.JavaPath,
+        AutoMemory = AutoMemory ?? fallback.AutoMemory,
+        MaxMemoryMb = MaxMemoryMb ?? fallback.MaxMemoryMb,
+        JvmArgs = Empty(JvmArgs) ?? fallback.JvmArgs,
+        GameArgs = Empty(GameArgs) ?? fallback.GameArgs,
+        WindowWidth = WindowWidth ?? fallback.WindowWidth,
+        WindowHeight = WindowHeight ?? fallback.WindowHeight,
+        Fullscreen = Fullscreen ?? fallback.Fullscreen,
+        PreLaunchCommand = Empty(PreLaunchCommand) ?? fallback.PreLaunchCommand,
+        PostExitCommand = Empty(PostExitCommand) ?? fallback.PostExitCommand,
+        JoinServer = Empty(JoinServer) ?? fallback.JoinServer,
+    };
+
+    private static string? Empty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
+}
+
+public static class MemoryPlanner
+{
+    public static long FreePhysicalMb()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var status = new MemoryStatusEx { Length = (uint)Marshal.SizeOf<MemoryStatusEx>() };
+            if (GlobalMemoryStatusEx(ref status)) return (long)(status.AvailPhys / 1024 / 1024);
+        }
+        var info = GC.GetGCMemoryInfo();
+        return (info.TotalAvailableMemoryBytes - info.MemoryLoadBytes) / 1024 / 1024;
+    }
+
+    public static long TotalPhysicalMb() => GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1024 / 1024;
+
+    /// <summary>
+    /// 自动内存：原版 2.5 GB、加模组后按数量加。留出系统余量，不超过可用内存。
+    /// 算出来小于 1 GB 时仍给 1 GB，游戏再少跑不起来。
+    /// </summary>
+    public static int AutoMemoryMb(int modCount, long freeMb)
+    {
+        var wanted = modCount switch
+        {
+            0 => 2560,
+            < 30 => 3072,
+            < 100 => 4096,
+            < 200 => 6144,
+            _ => 8192,
+        };
+        var usable = freeMb - 512;
+        return (int)Math.Max(1024, Math.Min(wanted, usable));
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MemoryStatusEx
+    {
+        public uint Length;
+        public uint MemoryLoad;
+        public ulong TotalPhys;
+        public ulong AvailPhys;
+        public ulong TotalPageFile;
+        public ulong AvailPageFile;
+        public ulong TotalVirtual;
+        public ulong AvailVirtual;
+        public ulong AvailExtendedVirtual;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GlobalMemoryStatusEx(ref MemoryStatusEx buffer);
+}
+
+public static class ArgumentSplitter
+{
+    /// <summary>按空格拆参数，双引号里的空格保留（JVM 参数输入框用）。</summary>
+    public static List<string> Split(string? text)
+    {
+        var result = new List<string>();
+        if (string.IsNullOrWhiteSpace(text)) return result;
+        var current = new StringBuilder();
+        var quoted = false;
+        var has = false;
+        foreach (var c in text)
+        {
+            if (c == '"')
+            {
+                quoted = !quoted;
+                has = true;
+            }
+            else if (char.IsWhiteSpace(c) && !quoted)
+            {
+                if (has) result.Add(current.ToString());
+                current.Clear();
+                has = false;
+            }
+            else
+            {
+                current.Append(c);
+                has = true;
+            }
+        }
+        if (has) result.Add(current.ToString());
+        return result;
+    }
+}

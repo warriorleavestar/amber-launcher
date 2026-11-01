@@ -8,6 +8,10 @@
     <AssemblyName>Amber</AssemblyName>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <TieredPGO>false</TieredPGO>
+    <TieredCompilationQuickJitForLoops>true</TieredCompilationQuickJitForLoops>
+    <AutoreleasePoolSupport>false</AutoreleasePoolSupport>
+    <UseSystemResourceKeys>false</UseSystemResourceKeys>
   </PropertyGroup>
 
   <ItemGroup>

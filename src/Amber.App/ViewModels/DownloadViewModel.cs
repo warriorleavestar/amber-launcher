@@ -99,8 +99,9 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     {
         _service = service;
         SelectedLoader = LoaderChoices[0];
-        _ = RefreshAsync();
     }
+
+    protected override void OnFirstActivated() => _ = RefreshAsync();
 
     partial void OnFilterChanged(string value) => ApplyFilter();
     partial void OnSearchChanged(string value) => ApplyFilter();
@@ -232,6 +233,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
                 }), ct);
                 item.Installed = true;
             }
+            await Ui.FlushAsync();
             Status = $"{id} 安装完成，用时 {watch.Elapsed.TotalSeconds:F0} 秒";
             Target = null;
             _service.NotifyInstalledChanged();
@@ -256,6 +258,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
 
     public async Task RunSnapshotDemoAsync()
     {
+        for (var i = 0; i < 100 && Items.Count == 0; i++) await Task.Delay(100);
         Configure(Items.FirstOrDefault(i => i.Id == "1.21.1") ?? Items.FirstOrDefault());
         SelectedLoader = LoaderChoices[1];
         for (var i = 0; i < 100 && LoaderVersions.Count == 0; i++) await Task.Delay(100);

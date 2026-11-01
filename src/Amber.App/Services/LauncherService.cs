@@ -1,7 +1,9 @@
 using Amber.Core.Auth;
+using Amber.Core.Content;
 using Amber.Core.Game;
 using Amber.Core.Install;
 using Amber.Core.Java;
+using Amber.Core.Launch;
 using Amber.Core.Net;
 
 namespace Amber.App.Services;
@@ -11,6 +13,7 @@ public sealed class LauncherService : IDisposable
 {
     private readonly HttpClient _http = Downloader.CreateHttpClient();
 
+    public HttpClient Http => _http;
     public AppSettings Settings { get; }
     public AccountService Accounts { get; }
     public GameDirectory Directory { get; private set; } = null!;
@@ -18,12 +21,22 @@ public sealed class LauncherService : IDisposable
     public VanillaInstaller Installer { get; private set; } = null!;
     public JavaManager Java { get; private set; } = null!;
     public LoaderContext Loaders { get; private set; } = null!;
+    public ModrinthProvider Modrinth { get; private set; } = null!;
+    public CurseForgeProvider CurseForge { get; private set; } = null!;
+    public ContentInstaller ContentInstaller { get; private set; } = null!;
+    public ModpackService Modpacks { get; private set; } = null!;
 
     /// <summary>已安装版本列表变化（安装完成、切换目录）时触发。</summary>
     public event Action? InstalledVersionsChanged;
 
     /// <summary>账号增删或切换时触发。</summary>
     public event Action? AccountsChanged;
+
+    /// <summary>资源页往实例里装了东西时触发。</summary>
+    public event Action? ContentChanged;
+
+    /// <summary>别的页面请求用某种方式启动（进服务器、进存档）。</summary>
+    public event Action<LaunchRequest>? LaunchRequested;
 
     public LauncherService(AppSettings settings)
     {
@@ -46,18 +59,57 @@ public sealed class LauncherService : IDisposable
             "mirror" => SourceChain.MirrorFirst,
             _ => SourceChain.Default(),
         };
-        Downloader = new Downloader(_http, sources);
+        Downloader = new Downloader(_http, sources)
+        {
+            MaxConcurrency = Math.Clamp(Settings.DownloadConcurrency, 1, 128),
+            Hashes = new HashCache(Path.Combine(Settings.GameDirectory, ".amber-hashes")),
+        };
         Installer = new VanillaInstaller(Downloader, Directory);
-        Java = new JavaManager(Downloader, Directory);
+        Java = new JavaManager(Downloader, Directory) { AutoDownload = Settings.AutoJavaDownload };
         Loaders = new LoaderContext(Downloader, Directory, Installer, Java.ForMajorAsync);
+        Modrinth = new ModrinthProvider(_http);
+        CurseForge = new CurseForgeProvider(_http, CurseForgeKey,
+            string.IsNullOrWhiteSpace(Settings.CurseForgeApiRoot) ? CurseForgeProvider.DefaultApiRoot : Settings.CurseForgeApiRoot.Trim().TrimEnd('/'));
+        ContentInstaller = new ContentInstaller(Downloader, new Dictionary<ContentSource, IContentProvider>
+        {
+            [ContentSource.Modrinth] = Modrinth,
+            [ContentSource.CurseForge] = CurseForge,
+        });
+        Modpacks = new ModpackService(Loaders, Modrinth, CurseForge);
         NotifyInstalledChanged();
     }
 
-    public void NotifyAccountsChanged() => AccountsChanged?.Invoke();
+    private string? CurseForgeKey() =>
+        string.IsNullOrWhiteSpace(Settings.CurseForgeApiKey) ? Environment.GetEnvironmentVariable("AMBER_CF_KEY") : Settings.CurseForgeApiKey;
 
+    /// <summary>有 Key 或自定义接口地址时才用 CurseForge 查更新。</summary>
+    public CurseForgeProvider? CurseForgeIfConfigured =>
+        !string.IsNullOrWhiteSpace(CurseForgeKey()) || !string.IsNullOrWhiteSpace(Settings.CurseForgeApiRoot) ? CurseForge : null;
+
+    public void NotifyAccountsChanged() => AccountsChanged?.Invoke();
+    public void NotifyContentChanged() => ContentChanged?.Invoke();
     public void NotifyInstalledChanged() => InstalledVersionsChanged?.Invoke();
+    public void RequestLaunch(LaunchRequest request) => LaunchRequested?.Invoke(request);
 
     public List<string> InstalledVersions() => Directory.ListInstalled().OrderDescending().ToList();
 
+    /// <summary>版本设置叠加全局设置后的结果。</summary>
+    public InstanceSettings EffectiveSettings(string id) =>
+        InstanceSettings.Load(Directory, id).Over(Settings.ToGlobalInstanceSettings());
+
+    public string WorkDirFor(string id) => EffectiveSettings(id).Isolate == true ? Directory.VersionDir(id) : Directory.Root;
+
+    public GameInstance GetInstance(string id) => GameInstance.Detect(Directory, id, WorkDirFor(id));
+
+    /// <summary>整合包的文件都在版本目录里，这个版本必须固定开启隔离。</summary>
+    public void ForceIsolated(string id)
+    {
+        var settings = InstanceSettings.Load(Directory, id);
+        settings.Isolate = true;
+        settings.Save(Directory, id);
+    }
+
     public void Dispose() => _http.Dispose();
 }
+
+public sealed record LaunchRequest(string VersionId, string? JoinServer = null, string? JoinWorld = null);

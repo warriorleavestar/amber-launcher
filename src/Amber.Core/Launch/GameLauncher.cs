@@ -19,6 +19,13 @@ public sealed record LaunchOptions
     public int MinMemoryMb { get; init; } = 256;
     public int? WindowWidth { get; init; }
     public int? WindowHeight { get; init; }
+    public bool Fullscreen { get; init; }
+
+    /// <summary>启动后直接进这个服务器（host 或 host:port）。</summary>
+    public string? JoinServer { get; init; }
+
+    /// <summary>启动后直接进这个存档（saves 下的文件夹名）。只有 1.20 以上支持。</summary>
+    public string? JoinWorld { get; init; }
     public IReadOnlyList<string> ExtraJvmArgs { get; init; } = [];
     public IReadOnlyList<string> ExtraGameArgs { get; init; } = [];
     public string LauncherName { get; init; } = "Amber";
@@ -39,7 +46,7 @@ public sealed class GameLauncher(GameDirectory dir)
             OsName = BaseRules.OsName,
             Arch = BaseRules.Arch,
             OsVersion = BaseRules.OsVersion,
-            Features = options.WindowWidth is not null ? ["has_custom_resolution"] : [],
+            Features = BuildFeatures(options),
         };
 
         var workDir = options.WorkingDirectory ?? dir.Root;
@@ -74,6 +81,8 @@ public sealed class GameLauncher(GameDirectory dir)
             ["launcher_version"] = options.LauncherVersion,
             ["resolution_width"] = options.WindowWidth?.ToString() ?? "854",
             ["resolution_height"] = options.WindowHeight?.ToString() ?? "480",
+            ["quickPlayMultiplayer"] = options.JoinServer ?? "",
+            ["quickPlaySingleplayer"] = options.JoinWorld ?? "",
         };
 
         var args = new List<string>
@@ -119,8 +128,26 @@ public sealed class GameLauncher(GameDirectory dir)
 
         if (options.WindowWidth is not null && version.Arguments is null)
             args.AddRange(["--width", vars["resolution_width"], "--height", vars["resolution_height"]]);
+        if (options.Fullscreen) args.Add("--fullscreen");
+
+        // 1.20 以上的版本 JSON 里有快速进入参数，由上面的 feature 打开；更老的版本用 --server。
+        var hasQuickPlay = version.Arguments?.Game.Any(e => e.ToString().Contains("quickPlayMultiplayer", StringComparison.Ordinal)) == true;
+        if (options.JoinServer is { } server && !hasQuickPlay)
+        {
+            var (host, port) = ServerList.ParseAddress(server);
+            args.AddRange(["--server", host, "--port", port.ToString()]);
+        }
         args.AddRange(options.ExtraGameArgs);
         return args;
+    }
+
+    private static HashSet<string> BuildFeatures(LaunchOptions options)
+    {
+        var features = new HashSet<string>();
+        if (options.WindowWidth is not null) features.Add("has_custom_resolution");
+        if (options.JoinServer is not null) features.Add("is_quick_play_multiplayer");
+        if (options.JoinWorld is not null) features.Add("is_quick_play_singleplayer");
+        return features;
     }
 
     /// <summary>准备 natives 与旧版资源后启动游戏。</summary>

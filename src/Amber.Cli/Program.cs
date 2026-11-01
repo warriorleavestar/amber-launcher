@@ -1,4 +1,6 @@
 using Amber.Core.Auth;
+using Amber.Core.Content;
+using Amber.Core.Diagnostics;
 using Amber.Core.Game;
 using Amber.Core.Install;
 using Amber.Core.Java;
@@ -16,6 +18,14 @@ Console.OutputEncoding = System.Text.Encoding.UTF8;
 //   loaders <fabric|quilt|forge|neoforge|optifine> <游戏版本>   列出加载器版本
 //   install-loader <加载器> <游戏版本> [加载器版本] [--id 名字]    安装加载器（默认装最新稳定版）
 //   java-install <主版本>                 下载 Mojang Java 运行时
+//   search <modrinth|curseforge> <mod|resourcepack|shader|modpack> <关键词> [--mc 版本] [--loader 加载器]
+//   add <来源> <项目 id> <版本名> [--type mod] [--isolate]    连同依赖安装到实例
+//   mods <版本名> [--isolate]             列出实例里的模组
+//   check-updates <版本名> [--isolate]    检查模组更新
+//   update-mods <版本名> [--isolate]      更新所有能更新的模组
+//   import <整合包文件> <新版本名>         导入 mrpack 或 CurseForge 整合包（总是版本隔离）
+//   export <版本名> <输出文件> [--format mrpack|curseforge] [--isolate]
+//   CurseForge：环境变量 AMBER_CF_KEY 提供 Key，AMBER_CF_ROOT 可以换接口地址
 //   launch <版本> <玩家名> [--mem 4096] [--isolate] [--dry-run]
 var argList = args.ToList();
 var root = TakeOption(argList, "--dir") ?? GameDirectory.DefaultRoot();
@@ -34,10 +44,17 @@ if (argList.Count == 0)
 
 var dir = new GameDirectory(root);
 using var http = Downloader.CreateHttpClient();
-var downloader = new Downloader(http, sources);
+var downloader = new Downloader(http, sources) { Hashes = new HashCache(Path.Combine(dir.Root, ".amber-hashes")) };
 var installer = new VanillaInstaller(downloader, dir);
 var javaManager = new JavaManager(downloader, dir) { Status = new SyncProgress<string>(Console.WriteLine) };
 var loaderContext = new LoaderContext(downloader, dir, installer, javaManager.ForMajorAsync);
+var modrinth = new ModrinthProvider(http);
+var curseForge = new CurseForgeProvider(http, () => Environment.GetEnvironmentVariable("AMBER_CF_KEY"),
+    Environment.GetEnvironmentVariable("AMBER_CF_ROOT") ?? CurseForgeProvider.DefaultApiRoot);
+var providers = new Dictionary<ContentSource, IContentProvider> { [ContentSource.Modrinth] = modrinth, [ContentSource.CurseForge] = curseForge };
+var contentInstaller = new ContentInstaller(downloader, providers);
+var modpacks = new ModpackService(loaderContext, modrinth, curseForge);
+GameInstance Instance(string id, bool isolate) => GameInstance.Detect(dir, id, isolate ? dir.VersionDir(id) : dir.Root);
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
@@ -100,6 +117,112 @@ try
             Console.WriteLine($"已安装 {installed}");
             break;
         }
+        case "search":
+        {
+            var mc = TakeOption(argList, "--mc");
+            var loader = TakeOption(argList, "--loader");
+            var provider = providers[Enum.Parse<ContentSource>(argList[1], true)];
+            var result = await provider.SearchAsync(new SearchQuery(Enum.Parse<ContentType>(argList[2], true), argList.ElementAtOrDefault(3) ?? "", mc, loader, 0, 8), cts.Token);
+            Console.WriteLine($"共 {result.Total} 个结果");
+            foreach (var p in result.Items) Console.WriteLine($"{p.Id,-12}{p.Title,-34}{p.Downloads,12}  {p.Author}");
+            if (result.Items.FirstOrDefault() is { } first)
+            {
+                var files = await provider.GetFilesAsync(first.Id, mc, loader, cts.Token);
+                Console.WriteLine($"{first.Title} 有 {files.Count} 个匹配的版本");
+                foreach (var f in files.Take(3)) Console.WriteLine($"  {f.DisplayName} | {f.FileName} | {f.Channel} | sha1 {f.Sha1} | {f.Size} 字节 | 依赖 {f.Dependencies.Count} | {f.Url}");
+            }
+            break;
+        }
+        case "add":
+        {
+            var type = Enum.Parse<ContentType>(TakeOption(argList, "--type") ?? "mod", true);
+            var isolate = argList.Remove("--isolate");
+            var provider = providers[Enum.Parse<ContentSource>(argList[1], true)];
+            var instance = Instance(argList[3], isolate);
+            var loaderFilter = type == ContentType.Mod ? instance.Loader : null;
+            var files = await provider.GetFilesAsync(argList[2], instance.McVersion, loaderFilter, cts.Token);
+            var file = files.FirstOrDefault(f => f.IsRelease) ?? files.FirstOrDefault()
+                       ?? throw new InvalidOperationException($"没有适用于 {instance.McVersion} / {instance.Loader} 的版本");
+            var plan = await contentInstaller.ResolveAsync(file, instance, null, cts.Token);
+            foreach (var p in plan.Problems) Console.WriteLine("问题：" + p);
+            foreach (var f in plan.Files) Console.WriteLine("安装 " + f.FileName);
+            await contentInstaller.InstallAsync(plan, instance.DirectoryFor(type), null, cts.Token);
+            Console.WriteLine($"已安装到 {instance.DirectoryFor(type)}");
+            break;
+        }
+        case "mods":
+        {
+            var isolate = argList.Remove("--isolate");
+            var instance = Instance(argList[1], isolate);
+            Console.WriteLine($"{instance.Id}：游戏 {instance.McVersion}，加载器 {instance.Loader} {instance.LoaderVersion}");
+            foreach (var m in new ModManager(instance.ModsDir).List())
+                Console.WriteLine($"{(m.Enabled ? "  " : "× ")}{m.Name} | {m.Version} | {m.ModId} | {m.Authors} | {(m.Icon is null ? "无图标" : "有图标")}");
+            break;
+        }
+        case "check-updates" or "update-mods":
+        {
+            var isolate = argList.Remove("--isolate");
+            var instance = Instance(argList[1], isolate);
+            var hasCf = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AMBER_CF_KEY")) || Environment.GetEnvironmentVariable("AMBER_CF_ROOT") is not null;
+            var updates = await ModManager.CheckUpdatesAsync(new ModManager(instance.ModsDir).List(), modrinth, hasCf ? curseForge : null, instance.McVersion, instance.Loader, cts.Token);
+            Console.WriteLine($"{updates.Count} 个可更新");
+            foreach (var u in updates) Console.WriteLine($"  {Path.GetFileName(u.LocalPath)} → {u.Latest.FileName}");
+            if (argList[0] == "update-mods")
+            {
+                foreach (var u in updates) await ModManager.ApplyUpdateAsync(u, downloader, cts.Token);
+                Console.WriteLine("已更新");
+            }
+            break;
+        }
+        case "import":
+        {
+            Console.WriteLine(ModpackService.Inspect(argList[1]));
+            var lastStage = "";
+            var installed = await modpacks.ImportAsync(argList[1], argList[2], dir.VersionDir, new SyncProgress<LoaderProgress>(p =>
+            {
+                var head = p.Stage.Split(' ')[0];
+                if (head != lastStage) Console.WriteLine(p.Stage);
+                lastStage = head;
+            }), cts.Token);
+            Console.WriteLine($"已导入 {installed}");
+            break;
+        }
+        case "export":
+        {
+            var format = TakeOption(argList, "--format") ?? "mrpack";
+            var isolate = argList.Remove("--isolate");
+            var instance = Instance(argList[1], isolate);
+            var include = ModpackService.ExportCandidates(instance.WorkDir);
+            Console.WriteLine("包含：" + string.Join(", ", include));
+            if (format == "curseforge") await modpacks.ExportCurseForgeAsync(instance, argList[2], instance.Id, "1.0.0", Environment.UserName, include, cts.Token);
+            else await modpacks.ExportMrpackAsync(instance, argList[2], instance.Id, "1.0.0", include, cts.Token);
+            Console.WriteLine($"已导出 {argList[2]}（{new FileInfo(argList[2]).Length / 1024} KB）");
+            break;
+        }
+        case "worlds":
+        {
+            foreach (var w in WorldManager.List(Path.Combine(argList[1], "saves")))
+                Console.WriteLine($"{w.Name} | {w.FolderName} | {w.GameMode} | {w.Version} | {w.LastPlayed}");
+            break;
+        }
+        case "ping":
+        {
+            var status = await ServerList.PingAsync(argList[1], null, cts.Token);
+            Console.WriteLine(status);
+            break;
+        }
+        case "junk":
+        {
+            foreach (var g in Toolbox.ScanJunk(dir)) Console.WriteLine($"{g.Name}: {g.Paths.Count} 项，{g.Bytes / 1024} KB");
+            break;
+        }
+        case "analyze":
+        {
+            var analysis = CrashAnalyzer.Analyze(File.ReadAllText(argList[1]));
+            Console.WriteLine(analysis.Summary);
+            foreach (var m in analysis.SuspectMods) Console.WriteLine("疑似模组：" + m);
+            break;
+        }
         case "java-install":
             Console.WriteLine(await javaManager.ForMajorAsync(int.Parse(argList[1]), cts.Token));
             break;
@@ -112,6 +235,8 @@ try
             var dryRun = argList.Remove("--dry-run");
             var smoke = TakeOption(argList, "--smoke") is { } smokeText ? int.Parse(smokeText) : (int?)null;
             var authlib = TakeOption(argList, "--authlib");
+            var joinServer = TakeOption(argList, "--server");
+            var joinWorld = TakeOption(argList, "--world");
 
             await installer.CompleteAsync(id, null, cts.Token);
             var version = dir.ResolveVersion(id);
@@ -125,6 +250,8 @@ try
                 Session = OfflineAccount.Create(player),
                 MaxMemoryMb = mem,
                 WorkingDirectory = isolate ? dir.VersionDir(id) : null,
+                JoinServer = joinServer,
+                JoinWorld = joinWorld,
             };
             if (authlib is not null)
             {

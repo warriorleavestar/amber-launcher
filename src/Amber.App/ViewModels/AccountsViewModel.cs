@@ -98,11 +98,19 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     {
         _service = service;
         ClientIdInput = service.Settings.MicrosoftClientId ?? "";
+    }
+
+    protected override void OnFirstActivated()
+    {
+        _active = true;
         Rebuild();
     }
 
+    private bool _active;
+
     private void Rebuild()
     {
+        if (!_active) return;
         var selected = _service.Accounts.Store.Selected;
         Accounts.Clear();
         foreach (var account in _service.Accounts.Store.Accounts)

@@ -1,0 +1,75 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Amber.App.ViewModels"
+             xmlns:diag="using:Amber.Core.Diagnostics"
+             x:Class="Amber.App.Views.HomePage"
+             x:DataType="vm:HomeViewModel">
+  <Grid RowDefinitions="Auto,*,Auto">
+    <TextBlock Classes="h1" Text="启动游戏" />
+    <ScrollViewer Grid.Row="1">
+      <StackPanel>
+        <Border Classes="card">
+          <Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto,Auto,Auto">
+            <TextBlock Text="游戏版本" VerticalAlignment="Center" />
+            <ComboBox Grid.Column="1" ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}"
+                      HorizontalAlignment="Stretch" PlaceholderText="未安装任何版本" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Classes="hint" FontSize="12" Text="{Binding VersionInfo}" Margin="2,4,0,0" />
+
+            <TextBlock Grid.Row="2" Text="账号" VerticalAlignment="Center" Margin="0,12,0,0" />
+            <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding Accounts}" SelectedItem="{Binding SelectedAccount}"
+                      HorizontalAlignment="Stretch" Margin="0,12,0,0" PlaceholderText="还没有账号，去「账号」页添加" />
+
+            <TextBlock Grid.Row="3" Text="最大内存" VerticalAlignment="Center" Margin="0,12,0,0" />
+            <Grid Grid.Row="3" Grid.Column="1" ColumnDefinitions="Auto,*,90" Margin="0,12,0,0">
+              <CheckBox Content="自动" IsChecked="{Binding AutoMemory}" Margin="0,0,12,0" />
+              <Slider Grid.Column="1" Minimum="1024" Maximum="{Binding TotalMemoryMb}" Value="{Binding MaxMemoryMb}"
+                      TickFrequency="512" IsSnapToTickEnabled="True" IsEnabled="{Binding !AutoMemory}" />
+              <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" IsVisible="{Binding !AutoMemory}"
+                         Text="{Binding MaxMemoryMb, StringFormat='{}{0} MB'}" />
+              <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" IsVisible="{Binding AutoMemory}"
+                         Classes="hint" Text="按模组数量" />
+            </Grid>
+          </Grid>
+        </Border>
+
+        <Border Classes="card" IsVisible="{Binding HasCrash}" BorderBrush="{DynamicResource AmberAccent}" BorderThickness="1">
+          <StackPanel Spacing="10">
+            <TextBlock Classes="h2" Text="这次崩溃可能的原因" Margin="0" />
+            <ItemsControl ItemsSource="{Binding Crash.Findings}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="diag:CrashFinding">
+                  <StackPanel Margin="0,0,0,8">
+                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding Advice}" Classes="hint" TextWrapping="Wrap" />
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Classes="hint" Text="{Binding Crash.Summary}" IsVisible="{Binding !Crash.Findings.Count}" TextWrapping="Wrap" />
+            <StackPanel IsVisible="{Binding !!Crash.SuspectMods.Count}" Spacing="4">
+              <TextBlock Text="疑似相关的模组" FontWeight="SemiBold" />
+              <ItemsControl ItemsSource="{Binding Crash.SuspectMods}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="打开崩溃报告" Command="{Binding OpenLatestCrashFileCommand}" />
+              <Button Content="导出错误报告…" Click="ExportCrash_Click" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <Border Grid.Row="2" Classes="card" Margin="0">
+      <Grid ColumnDefinitions="*,Auto,Auto">
+        <StackPanel VerticalAlignment="Center" Spacing="6">
+          <TextBlock Text="{Binding Status}" TextTrimming="CharacterEllipsis" />
+          <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
+        </StackPanel>
+        <Button Grid.Column="1" Content="结束" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}"
+                Margin="12,0,0,0" Padding="18,10" />
+        <Button Grid.Column="2" Classes="amber" Content="启动游戏" Command="{Binding LaunchCommand}"
+                Margin="12,0,0,0" Padding="36,12" FontSize="16" FontWeight="SemiBold" />
+      </Grid>
+    </Border>
+  </Grid>
+</UserControl>

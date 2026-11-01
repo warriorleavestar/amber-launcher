@@ -16,6 +16,18 @@ public partial class MainWindow : Window
         // 开发用：设置 AMBER_SNAPSHOT_DIR 后，依次把每个页面渲染成 PNG 然后退出。
         if (Environment.GetEnvironmentVariable("AMBER_SNAPSHOT_DIR") is { Length: > 0 } dir)
             Opened += async (_, _) => await SnapshotPagesAsync(dir);
+        // 开发用：AMBER_SELFTEST=报告目录，走一遍端到端自检。
+        if (Environment.GetEnvironmentVariable("AMBER_SELFTEST") is { Length: > 0 } report)
+            Opened += async (_, _) => await new SelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
+        // 开发用：AMBER_STARTUP_LOG=文件，记录从进程启动到窗口打开用了多久。
+        if (Environment.GetEnvironmentVariable("AMBER_STARTUP_LOG") is { Length: > 0 } startupLog)
+        {
+            Opened += (_, _) => Dispatcher.UIThread.Post(() =>
+            {
+                File.AppendAllText(startupLog, $"{(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds:F0}\n");
+                Close();
+            }, DispatcherPriority.Background);
+        }
     }
 
     private async Task SnapshotPagesAsync(string dir)

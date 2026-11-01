@@ -1,0 +1,90 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Amber.App.ViewModels"
+             x:Class="Amber.App.Views.ContentPage"
+             x:DataType="vm:ContentViewModel">
+  <Grid RowDefinitions="Auto,Auto,*,Auto">
+    <Grid ColumnDefinitions="*,Auto">
+      <TextBlock Classes="h1" Text="资源" />
+      <Button Grid.Column="1" Content="导入整合包文件…" Click="ImportPack_Click" VerticalAlignment="Top" />
+    </Grid>
+
+    <StackPanel Grid.Row="1" Spacing="8" Margin="0,0,0,10">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+        <ComboBox ItemsSource="{Binding TypeNames}" SelectedIndex="{Binding TypeIndex}" MinWidth="96" />
+        <ComboBox Grid.Column="1" ItemsSource="{Binding SourceNames}" SelectedIndex="{Binding SourceIndex}" MinWidth="120" Margin="8,0,0,0" />
+        <TextBox Grid.Column="2" Text="{Binding Query}" PlaceholderText="搜索…" Margin="8,0" KeyDown="Query_KeyDown" />
+        <Button Grid.Column="3" Classes="amber" Content="搜索" Command="{Binding SearchCommand}" Padding="20,6" />
+      </Grid>
+      <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding !IsModpack}">
+        <TextBlock Text="安装到" VerticalAlignment="Center" />
+        <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding TargetInstance}" MinWidth="260" />
+        <CheckBox Content="只看适用于这个版本的内容" IsChecked="{Binding FilterByInstance}" />
+      </StackPanel>
+    </StackPanel>
+
+    <Grid Grid.Row="2" ColumnDefinitions="*,320">
+      <Border Classes="card" Padding="6">
+        <Grid RowDefinitions="*,Auto">
+          <ListBox ItemsSource="{Binding Results}" SelectedItem="{Binding Selected}" Background="Transparent">
+            <ListBox.ItemTemplate>
+              <DataTemplate DataType="vm:ProjectItem">
+                <Grid ColumnDefinitions="48,*" Margin="2">
+                  <Border Width="48" Height="48" CornerRadius="6" Background="{DynamicResource PageBackground}" ClipToBounds="True" VerticalAlignment="Top">
+                    <Image Source="{Binding Icon}" />
+                  </Border>
+                  <StackPanel Grid.Column="1" Margin="10,0,0,0">
+                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding Summary}" Classes="hint" MaxLines="2" FontSize="12" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding Meta}" Classes="hint" FontSize="11" />
+                  </StackPanel>
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8" Margin="0,6,0,2">
+            <Button Content="上一页" Command="{Binding PreviousPageCommand}" />
+            <Button Content="下一页" Command="{Binding NextPageCommand}" />
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <Border Grid.Column="1" Classes="card" Margin="14,0,0,14" IsVisible="{Binding HasSelection}">
+        <Grid RowDefinitions="Auto,Auto,*,Auto">
+          <StackPanel Spacing="4">
+            <TextBlock Classes="h2" Text="{Binding Selected.Title}" Margin="0" TextWrapping="Wrap" />
+            <Button Content="打开项目主页" Command="{Binding OpenPageCommand}" Padding="8,3" FontSize="12" />
+          </StackPanel>
+          <CheckBox Grid.Row="1" Content="显示测试版" IsChecked="{Binding ShowUnstable}" Margin="0,6" />
+          <ListBox Grid.Row="2" ItemsSource="{Binding Files}" SelectedItem="{Binding SelectedFile}" Background="Transparent">
+            <ListBox.ItemTemplate>
+              <DataTemplate DataType="vm:FileItem">
+                <StackPanel>
+                  <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" FontSize="13" />
+                  <TextBlock Text="{Binding Meta}" Classes="hint" FontSize="11" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <StackPanel Grid.Row="3" Spacing="8" Margin="0,8,0,0">
+            <StackPanel Spacing="4" IsVisible="{Binding IsModpack}">
+              <TextBlock Text="新版本的名字" />
+              <TextBox Text="{Binding NewInstanceName}" />
+            </StackPanel>
+            <Button Classes="amber" Content="安装这个版本" Command="{Binding InstallCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+          </StackPanel>
+        </Grid>
+      </Border>
+    </Grid>
+
+    <Border Grid.Row="3" Classes="card" Margin="0">
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel Spacing="6" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Status}" TextTrimming="CharacterEllipsis" />
+          <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
+        </StackPanel>
+        <Button Grid.Column="1" Content="取消" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />
+      </Grid>
+    </Border>
+  </Grid>
+</UserControl>
