@@ -1,54 +1,135 @@
+<div align="center">
+
 # Amber
 
-Amber 是一个原创代码的 Minecraft Java 版启动器，使用 C# / .NET 10 和 Avalonia 编写，目前只测试过 Windows。
+**干净、轻快的 Minecraft Java 版启动器**
+
+没有遥测，没有远程开关，下载一个文件就能用。
+
+[![最新版本](https://img.shields.io/github/v/release/warriorleavestar/amber-launcher?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=d98a1f)](https://github.com/warriorleavestar/amber-launcher/releases/latest)
+[![许可证](https://img.shields.io/github/license/warriorleavestar/amber-launcher?label=%E8%AE%B8%E5%8F%AF%E8%AF%81)](LICENSE)
+![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20x64-blue)
+
+简体中文 | [English](README.en.md)
+
+![Amber 启动页](docs/images/home.png)
+
+</div>
+
+## 下载安装
+
+1. 到 [Releases](https://github.com/warriorleavestar/amber-launcher/releases/latest) 下载 `Amber.exe`。
+2. 双击运行，不用安装，也不用另外装 .NET。
+
+需要 64 位 Windows 10 或更新的系统。Java 不用提前准备：Amber 会按游戏版本自动选择本机的 Java，没有合适的就下载一个。
 
 ## 功能
 
-- **游戏版本和加载器**：原版、Fabric、Quilt、Forge、NeoForge、OptiFine（Forge 1.5.2 及更早版本除外）
-- **账号**：微软设备码登录、authlib-injector 外置登录、离线账号，支持多账号和皮肤预览；令牌用 DPAPI 加密，不保存密码
-- **内容下载**：从 Modrinth 和 CurseForge 搜索、下载模组、资源包、光影和整合包，自动带上必需依赖
-- **整合包**：导入和导出 mrpack、CurseForge 格式
-- **实例管理**：每个版本独立设置，管理模组、世界、截图和服务器列表
-- **崩溃分析**：分析崩溃原因、列出疑似模组、导出错误报告
-- **Java**：扫描本机 Java，缺合适版本时自动从 Mojang 下载运行时
-- **下载器**：分块并发、断点续传、SHA1 校验，官方源和 BMCLAPI 自动回退
+### 版本与加载器
 
-还没做：联机、数据包下载、MultiMC 等其他格式整合包导入。
+- 安装正式版和快照版
+- 一键安装 Fabric、Quilt、Forge（1.6 及以上）、NeoForge、OptiFine
+- 每个版本可以有独立的存档、模组和配置文件夹
 
-尚未实测：真实微软账号和皮肤站账号登录（目前只用模拟响应测试）、CurseForge 官方接口。
+### 账号
 
-## 原则
+- 微软账号（设备码登录）、authlib-injector 外置登录、离线账号
+- 支持多账号切换和皮肤预览
+- 不保存密码，登录令牌用 Windows DPAPI 加密
 
-- 全部是原创代码
-- 没有遥测，不生成设备识别码
-- 没有远程开关，地区只用来选默认下载源
-- 没有强制更新
+### 模组与整合包
 
-## 构建
+- 在 Modrinth 和 CurseForge 上搜索、安装模组、资源包、光影和整合包，自动带上必需的依赖
+- 导入和导出 mrpack、CurseForge 格式的整合包
+- 管理实例里的模组
 
-需要 [.NET 10 SDK](https://dotnet.microsoft.com/download)。
+### 游戏管理与崩溃分析
 
-```
-cd src
-dotnet build
-dotnet test
-dotnet publish Amber.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishReadyToRun=true -p:DebugType=none -o ..\发布
-```
+- 每个版本可以单独设置 Java、内存、JVM 参数、窗口大小，以及启动前后要运行的命令
+- 管理世界、截图、资源包、光影和服务器列表
+- 游戏崩溃时分析原因、列出疑似模组、导出错误报告
+- 工具箱：清理游戏垃圾、下载文件、提前下载 Java
 
-命令行版本：`dotnet run --project Amber.Cli -- list-remote`。
+### 下载
+
+- 分块并发、断点续传、SHA1 校验
+- 官方源和 BMCLAPI 镜像可以手动选择，也可以按时区自动选择，失败时自动换源
+
+## 截图
+
+| 下载游戏 | 实例设置 |
+|---|---|
+| ![下载游戏](docs/images/download.png) | ![实例设置](docs/images/instance.png) |
+
+![启动器设置](docs/images/settings.png)
+
+## 隐私
+
+- **没有遥测**：不收集使用数据，不生成设备识别码。
+- **没有远程控制**：功能不受任何远程开关或云端配置影响。时区只用来选默认下载源。
+- **更新由你决定**：默认不检查更新；在设置里填了更新地址才会检查，而且只提示，不会自动下载或替换。
+- **联网只为了完成你要做的事**：登录、获取版本列表、下载和搜索。会用到的服务有微软和 Xbox 登录、你添加的皮肤站、Mojang 游戏文件服务器、你选择的下载源、各加载器的下载地址（OptiFine 通过 BMCLAPI，authlib-injector 通过其官方地址或 BMCLAPI），以及 Modrinth 和 CurseForge。
+
+代码完全开源，欢迎自行查看。
 
 ## 配置
 
+大部分功能不用任何配置。下面两项是可选的：
+
 | 项目 | 在哪里设置 | 环境变量 | 说明 |
 |---|---|---|---|
-| 微软 Client ID | 「账号」页 | `AMBER_MS_CLIENT_ID` | 可选，留空使用内置的默认值。优先级：界面填写 > 环境变量 > 默认值 |
-| CurseForge API Key | 「设置」页 | `AMBER_CF_KEY` | 到 [console.curseforge.com](https://console.curseforge.com) 申请。没有 Key 时 CurseForge 不可用，其他功能不受影响 |
+| 微软 Client ID | 「账号」页 | `AMBER_MS_CLIENT_ID` | 留空使用内置的默认值。优先级：界面填写 > 环境变量 > 默认值 |
+| CurseForge API Key | 「设置」页 | `AMBER_CF_KEY` | 到 [console.curseforge.com](https://console.curseforge.com) 免费申请。没有 Key 时不能使用 CurseForge，其他功能不受影响 |
 
 设置保存在 `%APPDATA%\Amber\settings.json`。
 
-## 声明
+## 从源码构建
 
-Amber 是非官方项目，与 Mojang、Microsoft 没有任何关联，也未获得其认可。Minecraft 是 Mojang Synergies AB 的商标。
+需要 [.NET 10 SDK](https://dotnet.microsoft.com/download)。
+
+```powershell
+git clone https://github.com/warriorleavestar/amber-launcher.git
+cd amber-launcher\src
+dotnet build
+dotnet test
+dotnet run --project Amber.App
+```
+
+打包成单个 exe：
+
+```powershell
+dotnet publish Amber.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishReadyToRun=true -p:DebugType=none -o ..\publish
+```
+
+还有一个命令行版本，例如 `dotnet run --project Amber.Cli -- list-remote`。
+
+项目使用 C#、.NET 10 和 [Avalonia](https://avaloniaui.net/)。
+
+## 常见问题
+
+**Windows 提示“已保护你的电脑”怎么办？**
+Amber 的程序没有代码签名，所以 SmartScreen 可能会拦截。确认文件是从本项目的 Releases 下载的，点“更多信息”→“仍要运行”即可。
+
+**exe 为什么这么大？**
+.NET 运行时和界面库都打包在里面，所以不用另外安装任何东西。
+
+**可以用我现有的 `.minecraft` 文件夹吗？**
+可以，在「设置」页把游戏目录指向它。
+
+**微软账号登录失败怎么办？**
+先看提示里的错误信息，并确认这个账号已经拥有 Minecraft。也可以换成你自己的 Azure 应用：注册一个允许个人账号、开启设备码流程、并且有 Minecraft API 访问权限的公共客户端应用，再把 Client ID 填到「账号」页。
+
+**为什么搜不到 CurseForge 的内容？**
+CurseForge 的接口需要 API Key，见上面的[配置](#配置)。Modrinth 不需要。
+
+**下载很慢怎么办？**
+在「设置」页切换下载源，试试官方源或 BMCLAPI 镜像。
+
+**支持 macOS 和 Linux 吗？**
+目前只提供 Windows 版本。
+
+**有哪些暂不支持的功能？**
+联机、数据包下载、Forge 1.5.2 及更早的版本，以及 mrpack、CurseForge 以外格式的整合包导入。
 
 ## 许可证
 
@@ -56,18 +137,4 @@ Amber 是非官方项目，与 Mojang、Microsoft 没有任何关联，也未获
 
 ---
 
-## English
-
-Amber is an original Minecraft: Java Edition launcher written in C# / .NET 10 with Avalonia. It has only been tested on Windows so far.
-
-**Features:** Fabric, Quilt, Forge, NeoForge and OptiFine; Microsoft, authlib-injector and offline accounts; Modrinth and CurseForge content; modpack import and export; crash analysis; automatic Java download.
-
-**Principles:** original code, no telemetry, no remote switches, no forced updates.
-
-**Build:** install the .NET 10 SDK, then run `dotnet build`, `dotnet test` and `dotnet publish` in `src/`.
-
-**Configuration:** the Microsoft Client ID is optional (Accounts page or `AMBER_MS_CLIENT_ID`; a built-in default is used otherwise). A CurseForge API key is set on the Settings page or with `AMBER_CF_KEY`.
-
-**Not live-tested yet:** real Microsoft and skin-site logins, and the official CurseForge API.
-
-Amber is an unofficial project and is not affiliated with or endorsed by Mojang or Microsoft. Licensed under [MIT](LICENSE).
+Amber 不是 Minecraft 官方产品，与 Mojang 和 Microsoft 没有关联。
