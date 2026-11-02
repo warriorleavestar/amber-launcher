@@ -5,6 +5,7 @@
         x:Class="Amber.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
         Title="Amber 启动器"
+        Icon="/Assets/amber.ico"
         Width="1080" Height="700" MinWidth="900" MinHeight="560"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource PageBackground}">
@@ -129,8 +130,8 @@
           <ListBox.ItemTemplate>
             <DataTemplate DataType="vm:PageViewModel">
               <StackPanel Orientation="Horizontal" Spacing="12">
-                <TextBlock Text="{Binding Icon}" Width="18" Foreground="{DynamicResource AmberAccent}" />
-                <TextBlock Text="{Binding Title}" Foreground="#EDE6DC" FontSize="14" />
+                <PathIcon Data="{Binding IconGeometry}" Width="16" Height="16" Foreground="{DynamicResource AmberAccent}" />
+                <TextBlock Text="{Binding Title}" Foreground="#EDE6DC" FontSize="14" VerticalAlignment="Center" />
               </StackPanel>
             </DataTemplate>
           </ListBox.ItemTemplate>

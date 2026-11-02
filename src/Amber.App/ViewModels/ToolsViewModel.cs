@@ -26,7 +26,7 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
     private CancellationTokenSource? _cts;
 
     public override string Title => "工具箱";
-    public override string Icon => "✦";
+    public override string Icon => "M21.500 7a5.500 5.500 0 0 1-7.600 5.100L7.200 18.800a2 2 0 0 1-2.800-2.800l6.700-6.700A5.500 5.500 0 0 1 17 2.500l-3.300 3.300 1 3.500 3.500 1 3.300-3.300c.3.600.5 1.300.5 2z";
 
     public ObservableCollection<JunkItem> Junk { get; } = [];
     public int[] JavaMajors { get; } = [8, 17, 21, 25];

@@ -19,12 +19,13 @@ public partial class MainWindow : Window
         // 开发用：AMBER_SELFTEST=报告目录，走一遍端到端自检。
         if (Environment.GetEnvironmentVariable("AMBER_SELFTEST") is { Length: > 0 } report)
             Opened += async (_, _) => await new SelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
-        // 开发用：AMBER_STARTUP_LOG=文件，记录从进程启动到窗口打开用了多久。
-        if (Environment.GetEnvironmentVariable("AMBER_STARTUP_LOG") is { Length: > 0 } startupLog)
+        // 开发用：记录启动各阶段耗时，窗口打开后退出。
+        if (StartupTrace.Enabled)
         {
             Opened += (_, _) => Dispatcher.UIThread.Post(() =>
             {
-                File.AppendAllText(startupLog, $"{(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds:F0}\n");
+                StartupTrace.Mark("opened");
+                StartupTrace.Flush();
                 Close();
             }, DispatcherPriority.Background);
         }

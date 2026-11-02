@@ -5,6 +5,9 @@ public interface IDownloadSource
 {
     string Name { get; }
     string? Rewrite(string officialUrl);
+
+    /// <summary>这个源对某主机的连接数上限；null 表示不限制。</summary>
+    int? HostLimit(string host) => null;
 }
 
 /// <summary>官方源：原样返回。</summary>
@@ -15,9 +18,17 @@ public sealed class OfficialSource : IDownloadSource
 }
 
 /// <summary>按主机名前缀替换的镜像，BMCLAPI 及其兼容镜像都属于这一类。</summary>
-public sealed class PrefixMirrorSource(string name, IReadOnlyDictionary<string, string> prefixMap) : IDownloadSource
+public sealed class PrefixMirrorSource(string name, IReadOnlyDictionary<string, string> prefixMap, int? maxConnections = null) : IDownloadSource
 {
     public string Name { get; } = name;
+
+    public int? HostLimit(string host) =>
+        maxConnections is not null && prefixMap.Values.Any(to => Uri.TryCreate(to, UriKind.Absolute, out var uri) && uri.Authority.Equals(host, StringComparison.OrdinalIgnoreCase))
+            ? maxConnections
+            : null;
+
+    /// <summary>防止并发设置和分块把连接数放大。没查到公布的上限，取实测够快的值（装 26.3：32 连接 121 秒，16 连接 391 秒），真被限流时靠 429 处理。</summary>
+    public const int BmclapiMaxConnections = 32;
 
     public string? Rewrite(string officialUrl)
     {
@@ -44,13 +55,15 @@ public sealed class PrefixMirrorSource(string name, IReadOnlyDictionary<string, 
         ["https://maven.quiltmc.org/repository/release/"] = root + "/maven/",
         ["https://maven.fabricmc.net/"] = root + "/maven/",
         ["https://meta.fabricmc.net/"] = root + "/fabric-meta/",
-    });
+    }, BmclapiMaxConnections);
 }
 
 /// <summary>按优先级排列的一组下载源，为每个官方地址给出候选地址列表。</summary>
 public sealed class SourceChain(IReadOnlyList<IDownloadSource> sources)
 {
     public IReadOnlyList<IDownloadSource> Sources { get; } = sources;
+
+    public int? HostLimit(string host) => Sources.Select(s => s.HostLimit(host)).Min();
 
     public IReadOnlyList<string> Candidates(string officialUrl)
     {

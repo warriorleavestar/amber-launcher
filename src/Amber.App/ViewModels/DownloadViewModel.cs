@@ -37,7 +37,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     private CancellationTokenSource? _installCts;
 
     public override string Title => "下载";
-    public override string Icon => "⬇";
+    public override string Icon => "M11 3h2v9.2l3.6-3.6L18 10l-6 6-6-6 1.400-1.400 3.600 3.600zM5 18h14v2H5z";
 
     public string[] Filters { get; } = ["正式版", "快照", "远古", "全部"];
     public ObservableCollection<RemoteVersionItem> Items { get; } = [];

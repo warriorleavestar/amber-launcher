@@ -108,7 +108,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private CancellationTokenSource? _workCts;
 
     public override string Title => "实例";
-    public override string Icon => "▤";
+    public override string Icon => "M4 4h16v5H4zM4 11h16v4H4zM4 17h16v3H4z";
 
     public ObservableCollection<string> Instances { get; } = [];
 
@@ -369,6 +369,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     private async Task LoadJavaChoicesAsync(string? current)
     {
+        // 扫描要一会儿，这期间下拉框不留空。
+        if (JavaChoices.Count == 0)
+        {
+            JavaChoices.Add(new JavaChoice("沿用全局设置", null));
+            SelectedJava = JavaChoices[0];
+        }
         var found = await _service.Java.ScanAsync();
         JavaChoices.Clear();
         JavaChoices.Add(new JavaChoice("沿用全局设置", null));

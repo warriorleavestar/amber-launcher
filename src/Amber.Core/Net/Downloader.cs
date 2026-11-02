@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
@@ -23,14 +25,20 @@ public sealed class DownloadException(string message, IReadOnlyList<(DownloadIte
 /// - 已存在且校验过的文件直接跳过（见 <see cref="HashCache"/>）。
 /// - 大文件按范围分块并发；中断后保留进度，下次接着下。
 /// - 按候选源依次尝试；SHA1 不符、卡住不动都算失败并换源；连续失败的源本次会话排到后面。
+/// - 遵守镜像的连接数上限；被限流（429 或带 Retry-After 的 503）时先换源，只剩这一个源就等它恢复。
 /// </summary>
 public sealed class Downloader
 {
+    // 缓冲区从池里取：几千个小文件每个都新建 128 KB 的数组会落到大对象堆，频繁触发完整 GC。
     private const int CopyBufferSize = 128 * 1024;
+    private static readonly TimeSpan DefaultThrottleWait = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MaxThrottleWait = TimeSpan.FromSeconds(30);
 
     private readonly HttpClient _http;
     private readonly SourceChain _sources;
     private readonly Dictionary<string, int> _hostFailures = [];
+    private readonly Dictionary<string, DateTime> _hostCooldowns = [];
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _hostGates = new();
 
     public int MaxConcurrency { get; init; } = 32;
     public int RetriesPerSource { get; init; } = 2;
@@ -77,13 +85,71 @@ public sealed class Downloader
         var list = _sources.Candidates(officialUrl);
         lock (_hostFailures)
         {
-            if (_hostFailures.Count == 0) return list;
-            // 稳定排序：失败过多的主机整体挪到后面，其余保持优先级。
-            return list.OrderBy(u => _hostFailures.GetValueOrDefault(HostOf(u)) >= HostFailureLimit ? 1 : 0).ToList();
+            if (_hostFailures.Count == 0 && _hostCooldowns.Count == 0) return list;
+            // 稳定排序：失败过多或正在限流的主机整体挪到后面，其余保持优先级。
+            var now = DateTime.UtcNow;
+            return list.OrderBy(u =>
+            {
+                var host = HostOf(u);
+                var cooling = _hostCooldowns.TryGetValue(host, out var until) && until > now;
+                return cooling || _hostFailures.GetValueOrDefault(host) >= HostFailureLimit ? 1 : 0;
+            }).ToList();
         }
     }
 
-    private static string HostOf(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host : url;
+    /// <summary>占用一个到该主机的连接名额，主机限流中就先等它恢复。</summary>
+    private async Task<HostSlot> EnterHostAsync(string url, CancellationToken ct)
+    {
+        var host = HostOf(url);
+        while (true)
+        {
+            TimeSpan wait;
+            lock (_hostFailures)
+            {
+                if (!_hostCooldowns.TryGetValue(host, out var until)) break;
+                wait = until - DateTime.UtcNow;
+                if (wait <= TimeSpan.Zero)
+                {
+                    _hostCooldowns.Remove(host);
+                    break;
+                }
+            }
+            await Task.Delay(wait, ct);
+        }
+        var gate = _hostGates.GetOrAdd(host, h => new SemaphoreSlim(_sources.HostLimit(h) ?? int.MaxValue));
+        await gate.WaitAsync(ct);
+        return new HostSlot(gate);
+    }
+
+    private sealed class HostSlot(SemaphoreSlim gate) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0) gate.Release();
+        }
+    }
+
+    /// <summary>响应表示被限流时记下恢复时间并抛出；其他响应不处理。</summary>
+    private void ThrowIfThrottled(string url, HttpResponseMessage response)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+        if (response.StatusCode != HttpStatusCode.TooManyRequests && !(response.StatusCode == HttpStatusCode.ServiceUnavailable && retryAfter is not null)) return;
+
+        var wait = retryAfter?.Delta ?? (retryAfter?.Date is { } date ? date - DateTimeOffset.UtcNow : DefaultThrottleWait);
+        if (wait < TimeSpan.Zero) wait = TimeSpan.Zero;
+        if (wait > MaxThrottleWait) wait = MaxThrottleWait;
+        lock (_hostFailures)
+        {
+            var until = DateTime.UtcNow + wait;
+            var host = HostOf(url);
+            if (!_hostCooldowns.TryGetValue(host, out var current) || current < until) _hostCooldowns[host] = until;
+        }
+        throw new HostThrottledException($"{HostOf(url)} 限流了（HTTP {(int)response.StatusCode}）");
+    }
+
+    private static string HostOf(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Authority : url;
 
     private void NoteFailure(string url)
     {
@@ -101,13 +167,21 @@ public sealed class Downloader
         Exception? last = null;
         foreach (var url in OrderedCandidates(officialUrl))
         {
+            using var slot = await EnterHostAsync(url, ct);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(MetadataTimeout);
             try
             {
-                var text = await _http.GetStringAsync(url, timeout.Token);
+                using var response = await _http.GetAsync(url, timeout.Token);
+                ThrowIfThrottled(url, response);
+                response.EnsureSuccessStatusCode();
+                var text = await response.Content.ReadAsStringAsync(timeout.Token);
                 NoteSuccess(url);
                 return text;
+            }
+            catch (HostThrottledException e)
+            {
+                last = e;
             }
             catch (Exception e) when (e is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
             {
@@ -137,40 +211,47 @@ public sealed class Downloader
             progress.Report(new DownloadProgress(Volatile.Read(ref completed), total, Interlocked.Read(ref bytes), file));
         }
 
-        // 先校验，再下载：校验只吃 CPU 和磁盘，不该占网络并发名额。
-        var pending = new List<DownloadItem>();
-        await Parallel.ForEachAsync(items, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(2, Environment.ProcessorCount), CancellationToken = ct }, async (item, token) =>
+        try
         {
-            if (await IsValidAsync(item, token))
+            // 先校验，再下载：校验只吃 CPU 和磁盘，不该占网络并发名额。
+            var pending = new List<DownloadItem>();
+            await Parallel.ForEachAsync(items, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(2, Environment.ProcessorCount), CancellationToken = ct }, async (item, token) =>
             {
-                Interlocked.Increment(ref completed);
-                Report(null, false);
-            }
-            else
-            {
-                lock (pending) pending.Add(item);
-            }
-        });
-        Hashes?.Save();
-
-        await Parallel.ForEachAsync(pending, new ParallelOptions { MaxDegreeOfParallelism = MaxConcurrency, CancellationToken = ct }, async (item, token) =>
-        {
-            try
-            {
-                await DownloadCoreAsync(item, delta =>
+                if (await IsValidAsync(item, token))
                 {
-                    Interlocked.Add(ref bytes, delta);
+                    Interlocked.Increment(ref completed);
                     Report(null, false);
-                }, token);
-            }
-            catch (Exception e) when (!token.IsCancellationRequested)
+                }
+                else
+                {
+                    lock (pending) pending.Add(item);
+                }
+            });
+            Hashes?.Save();
+
+            await Parallel.ForEachAsync(pending, new ParallelOptions { MaxDegreeOfParallelism = MaxConcurrency, CancellationToken = ct }, async (item, token) =>
             {
-                lock (failures) failures.Add((item, e));
-            }
-            Interlocked.Increment(ref completed);
-            Report(Path.GetFileName(item.LocalPath), false);
-        });
-        Hashes?.Save();
+                try
+                {
+                    await DownloadCoreAsync(item, delta =>
+                    {
+                        Interlocked.Add(ref bytes, delta);
+                        Report(null, false);
+                    }, token);
+                }
+                catch (Exception e) when (!token.IsCancellationRequested)
+                {
+                    lock (failures) failures.Add((item, e));
+                }
+                Interlocked.Increment(ref completed);
+                Report(Path.GetFileName(item.LocalPath), false);
+            });
+        }
+        finally
+        {
+            // 中途取消也要保存，不然已经校验过的文件下次要重新算哈希。
+            Hashes?.Save();
+        }
         Report(null, true);
 
         if (failures.Count > 0)
@@ -201,20 +282,27 @@ public sealed class Downloader
         var state = temp + ".state";
 
         Exception? last = null;
-        foreach (var url in OrderedCandidates(item.Url))
+        var candidates = OrderedCandidates(item.Url);
+        foreach (var url in candidates)
         {
             for (var attempt = 0; attempt < RetriesPerSource; attempt++)
             {
                 if (attempt > 0) await Task.Delay(TimeSpan.FromMilliseconds(300 * attempt + Random.Shared.Next(200)), ct);
                 try
                 {
-                    var written = await FetchAsync(url, item, temp, state, onBytes, ct);
-                    await VerifyAsync(item, temp, ct);
+                    var (written, streamedSha1) = await FetchAsync(url, item, temp, state, onBytes, ct);
+                    await VerifyAsync(item, temp, streamedSha1, ct);
                     File.Move(temp, item.LocalPath, true);
                     TryDelete(state);
                     if (item.Sha1 is not null) Hashes?.Remember(item.LocalPath, item.Sha1);
                     NoteSuccess(url);
                     return written;
+                }
+                catch (HostThrottledException e)
+                {
+                    last = e;
+                    // 还有别的源就不等了；已有进度留着，换源后接着下。
+                    if (url != candidates[^1]) break;
                 }
                 catch (Exception e) when (!ct.IsCancellationRequested)
                 {
@@ -234,7 +322,8 @@ public sealed class Downloader
         throw last ?? new IOException($"下载失败：{item.Url}");
     }
 
-    private static async Task VerifyAsync(DownloadItem item, string temp, CancellationToken ct)
+    /// <summary>streamedSha1 是下载时顺带算好的；有它就不用把刚写完的文件再读一遍。</summary>
+    private static async Task VerifyAsync(DownloadItem item, string temp, string? streamedSha1, CancellationToken ct)
     {
         var info = new FileInfo(temp);
         if (!info.Exists) throw new InvalidDataException("下载结果不存在");
@@ -242,32 +331,45 @@ public sealed class Downloader
             throw new InvalidDataException($"文件大小不对（期望 {size}，实际 {info.Length}）");
         if (item.Sha1 is not null)
         {
-            var actual = await Sha1Async(temp, ct);
+            var actual = streamedSha1 ?? await Sha1Async(temp, ct);
             if (!actual.Equals(item.Sha1, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"SHA1 不匹配（期望 {item.Sha1}，实际 {actual}）");
         }
     }
 
-    /// <summary>把 url 的内容写到 temp。能分块就分块，已有进度就接着下。返回本次写入的字节数。</summary>
-    private async Task<long> FetchAsync(string url, DownloadItem item, string temp, string state, Action<long> onBytes, CancellationToken ct)
+    /// <summary>把 url 的内容写到 temp。能分块就分块，已有进度就接着下。返回本次写入的字节数，整个文件一次下完时还带上它的 SHA1。</summary>
+    private async Task<(long Written, string? Sha1)> FetchAsync(string url, DownloadItem item, string temp, string state, Action<long> onBytes, CancellationToken ct)
     {
         var existingChunks = ChunkState.Load(state);
         if (existingChunks is not null && File.Exists(temp))
-            return await FetchChunkedAsync(url, temp, state, existingChunks, onBytes, ct);
+            return (await FetchChunkedAsync(url, temp, state, existingChunks, onBytes, ct), null);
         TryDelete(state);
 
         var resumeFrom = File.Exists(temp) ? new FileInfo(temp).Length : 0;
         if (item.Size is { } knownSize && resumeFrom > knownSize) resumeFrom = 0;
-        if (resumeFrom > 0 && item.Size == resumeFrom) return 0;
+        if (resumeFrom > 0 && item.Size == resumeFrom) return (0, null);
+
+        // 名额要在开始计时之前拿到，排队不算卡住。
+        using var slot = await EnterHostAsync(url, ct);
 
         // 已知的小文件不用探测分块，普通请求最省事。其余的带 Range，从响应判断服务器支不支持。
         var useRange = resumeFrom > 0 || item.Size is null || item.Size >= ChunkThreshold;
         using var headerTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         headerTimeout.CancelAfter(StallTimeout);
         var response = await SendGetAsync(url, useRange ? resumeFrom : null, headerTimeout.Token);
+        try
+        {
+            ThrowIfThrottled(url, response);
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
 
         // 有的 CDN 收到 Range 直接报错（forgecdn 返回 404），不能因此判定文件不存在，去掉 Range 再试一次。
-        if (useRange && !response.IsSuccessStatusCode)
+        // 只看 4xx：服务器临时出错时已有的进度要留着。
+        if (useRange && IsClientError(response.StatusCode))
         {
             response.Dispose();
             resumeFrom = 0;
@@ -282,21 +384,30 @@ public sealed class Downloader
         if (partial && resumeFrom == 0 && totalSize >= ChunkThreshold && totalSize is { } chunkTotal)
         {
             response.Dispose();
+            slot.Dispose();
             var chunks = ChunkState.Create(chunkTotal, MaxChunksPerFile, MinChunkSize);
             await using (var handle = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
                 handle.SetLength(chunkTotal);
             chunks.Save(state);
-            return await FetchChunkedAsync(url, temp, state, chunks, onBytes, ct);
+            return (await FetchChunkedAsync(url, temp, state, chunks, onBytes, ct), null);
         }
 
         await using var input = await response.Content.ReadAsStreamAsync(ct);
         var append = partial && resumeFrom > 0;
-        await using var output = new FileStream(temp, append ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.None, CopyBufferSize, true);
-        var written = await CopyWithStallCheckAsync(input, (buffer, token) => output.WriteAsync(buffer, token), onBytes, ct);
+        await using var output = new FileStream(temp, append ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.None, 0, true);
+        // 续传时前半段不经过这里，算不出整个文件的哈希，留给校验时读文件。
+        using var hash = item.Sha1 is not null && !append ? IncrementalHash.CreateHash(HashAlgorithmName.SHA1) : null;
+        var written = await CopyWithStallCheckAsync(input, (buffer, token) =>
+        {
+            hash?.AppendData(buffer.Span);
+            return output.WriteAsync(buffer, token);
+        }, onBytes, ct);
         if (response.Content.Headers.ContentLength is { } expected && written != expected)
             throw new IOException($"连接提前结束（收到 {written}，应有 {expected}）");
-        return written;
+        return (written, hash is null ? null : Convert.ToHexStringLower(hash.GetHashAndReset()));
     }
+
+    private static bool IsClientError(HttpStatusCode status) => (int)status is >= 400 and < 500 && status != HttpStatusCode.RequestTimeout;
 
     private async Task<HttpResponseMessage> SendGetAsync(string url, long? rangeFrom, CancellationToken ct)
     {
@@ -318,12 +429,19 @@ public sealed class Downloader
                 long received = 0;
                 try
                 {
+                    using var slot = await EnterHostAsync(url, token);
                     using var request = new HttpRequestMessage(HttpMethod.Get, url);
                     request.Headers.Range = new RangeHeaderValue(chunk.Start, chunk.End);
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                     timeout.CancelAfter(StallTimeout);
                     using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-                    if (response.StatusCode != HttpStatusCode.PartialContent) throw new RangeNotSupportedException();
+                    ThrowIfThrottled(url, response);
+                    if (response.StatusCode != HttpStatusCode.PartialContent)
+                    {
+                        // 200 或 4xx 才说明不支持分块；5xx 只是临时出错，不能扔掉进度。
+                        if (response.IsSuccessStatusCode || IsClientError(response.StatusCode)) throw new RangeNotSupportedException();
+                        response.EnsureSuccessStatusCode();
+                    }
 
                     await using var input = await response.Content.ReadAsStreamAsync(token);
                     var position = chunk.Start;
@@ -356,6 +474,12 @@ public sealed class Downloader
                     onBytes(-received);
                     if (attempt < 2) await Task.Delay(300 * (attempt + 1), token);
                 }
+                catch
+                {
+                    // 被取消的分块没写完，下次要重下，进度里不能算进去。
+                    onBytes(-received);
+                    throw;
+                }
             }
             throw last!;
         });
@@ -366,24 +490,31 @@ public sealed class Downloader
     private async Task<long> CopyWithStallCheckAsync(Stream input, Func<ReadOnlyMemory<byte>, CancellationToken, ValueTask> write, Action<long> onBytes, CancellationToken ct)
     {
         using var stall = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var buffer = new byte[CopyBufferSize];
-        long total = 0;
-        while (true)
+        var buffer = ArrayPool<byte>.Shared.Rent(CopyBufferSize);
+        try
         {
-            stall.CancelAfter(StallTimeout);
-            int read;
-            try
+            long total = 0;
+            while (true)
             {
-                read = await input.ReadAsync(buffer, stall.Token);
+                stall.CancelAfter(StallTimeout);
+                int read;
+                try
+                {
+                    read = await input.ReadAsync(buffer, stall.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    throw new IOException($"下载卡住了：{StallTimeout.TotalSeconds:F0} 秒没有收到数据");
+                }
+                if (read == 0) return total;
+                await write(buffer.AsMemory(0, read), ct);
+                total += read;
+                onBytes(read);
             }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                throw new IOException($"下载卡住了：{StallTimeout.TotalSeconds:F0} 秒没有收到数据");
-            }
-            if (read == 0) return total;
-            await write(buffer.AsMemory(0, read), ct);
-            total += read;
-            onBytes(read);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 
@@ -401,9 +532,19 @@ public sealed class Downloader
 
     public static async Task<string> Sha1Async(string path, CancellationToken ct = default)
     {
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, CopyBufferSize, true);
-        var hash = await SHA1.HashDataAsync(stream, ct);
-        return Convert.ToHexStringLower(hash);
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 0, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+        var buffer = ArrayPool<byte>.Shared.Rent(CopyBufferSize);
+        try
+        {
+            int read;
+            while ((read = await stream.ReadAsync(buffer, ct)) > 0) hash.AppendData(buffer, 0, read);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
 
     private static void TryDelete(string path)
@@ -412,6 +553,8 @@ public sealed class Downloader
     }
 
     private sealed class RangeNotSupportedException() : IOException("这个下载源不支持分块");
+
+    private sealed class HostThrottledException(string message) : IOException(message);
 
     /// <summary>分块进度，存在 .part.state 里，断点续传时读回来。</summary>
     internal sealed class ChunkState

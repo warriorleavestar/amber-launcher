@@ -10,7 +10,12 @@ namespace Amber.App;
 
 public sealed class App : Application
 {
-    public override void Initialize() => AvaloniaXamlLoader.Load(this);
+    public override void Initialize()
+    {
+        StartupTrace.Mark("platform");
+        AvaloniaXamlLoader.Load(this);
+        StartupTrace.Mark("theme");
+    }
 
     public static void ApplyTheme(string theme)
     {
@@ -30,7 +35,10 @@ public sealed class App : Application
             var settings = AppSettings.Load();
             ApplyTheme(settings.Theme);
             var service = new LauncherService(settings);
-            desktop.MainWindow = new MainWindow { DataContext = new MainViewModel(service) };
+            var viewModel = new MainViewModel(service);
+            StartupTrace.Mark("viewmodels");
+            desktop.MainWindow = new MainWindow { DataContext = viewModel };
+            StartupTrace.Mark("window");
             desktop.Exit += (_, _) => service.Dispose();
         }
         base.OnFrameworkInitializationCompleted();

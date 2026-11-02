@@ -27,7 +27,7 @@ public sealed partial class HomeViewModel : PageViewModel
     private bool _refreshingAccounts;
 
     public override string Title => "启动";
-    public override string Icon => "▶";
+    public override string Icon => "M8 5v14l11-7z";
 
     public ObservableCollection<string> Versions { get; } = [];
     public ObservableCollection<Account> Accounts { get; } = [];

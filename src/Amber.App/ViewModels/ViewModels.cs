@@ -3,6 +3,7 @@ using Amber.App.Services;
 using Amber.Core.Launch;
 using Avalonia.Data.Converters;
 using Avalonia.Input.Platform;
+using Avalonia.Media;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -12,7 +13,12 @@ namespace Amber.App.ViewModels;
 public abstract class PageViewModel : ObservableObject
 {
     public abstract string Title { get; }
+
+    /// <summary>导航图标的路径数据（24×24）。</summary>
     public abstract string Icon { get; }
+
+    private Geometry? _iconGeometry;
+    public Geometry IconGeometry => _iconGeometry ??= Geometry.Parse(Icon);
 
     private bool _activated;
 
@@ -85,7 +91,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     private readonly LauncherService _service;
 
     public override string Title => "设置";
-    public override string Icon => "⚙";
+    public override string Icon => "M4 6h8v2H4zM16 6h4v2h-4zM12 4h4v6h-4zM4 16h4v2H4zM12 16h8v2h-8zM8 14h4v6H8z";
 
     public string[] SourceOptions { get; } = ["自动（按时区选择）", "官方优先", "BMCLAPI 镜像优先"];
     private static readonly string[] SourceKeys = ["auto", "official", "mirror"];
@@ -194,7 +200,7 @@ public sealed partial class LogViewModel : PageViewModel
     private const int MaxLines = 5000;
 
     public override string Title => "日志";
-    public override string Icon => "☰";
+    public override string Icon => "M4 5h16v2H4zM4 11h16v2H4zM4 17h11v2H4z";
 
     public ObservableCollection<LogEntry> Lines { get; } = [];
 

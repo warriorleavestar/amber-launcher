@@ -49,7 +49,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     private int _total;
 
     public override string Title => "资源";
-    public override string Icon => "❖";
+    public override string Icon => "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z";
 
     public string[] TypeNames { get; } = ["模组", "资源包", "光影", "整合包"];
     public string[] SourceNames { get; } = ["Modrinth", "CurseForge"];

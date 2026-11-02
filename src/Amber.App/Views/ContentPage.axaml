@@ -23,9 +23,11 @@
       </StackPanel>
     </StackPanel>
 
-    <Grid Grid.Row="2" ColumnDefinitions="*,320">
+    <Grid Grid.Row="2" ColumnDefinitions="*,Auto">
       <Border Classes="card" Padding="6">
         <Grid RowDefinitions="*,Auto">
+          <TextBlock Classes="hint" Text="搜索结果会显示在这里" HorizontalAlignment="Center" VerticalAlignment="Center"
+                     IsVisible="{Binding !Results.Count}" />
           <ListBox ItemsSource="{Binding Results}" SelectedItem="{Binding Selected}" Background="Transparent">
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:ProjectItem">
@@ -42,14 +44,14 @@
               </DataTemplate>
             </ListBox.ItemTemplate>
           </ListBox>
-          <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8" Margin="0,6,0,2">
+          <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8" Margin="0,6,0,2" IsVisible="{Binding !!Results.Count}">
             <Button Content="上一页" Command="{Binding PreviousPageCommand}" />
             <Button Content="下一页" Command="{Binding NextPageCommand}" />
           </StackPanel>
         </Grid>
       </Border>
 
-      <Border Grid.Column="1" Classes="card" Margin="14,0,0,14" IsVisible="{Binding HasSelection}">
+      <Border Grid.Column="1" Classes="card" Width="320" Margin="14,0,0,14" IsVisible="{Binding HasSelection}">
         <Grid RowDefinitions="Auto,Auto,*,Auto">
           <StackPanel Spacing="4">
             <TextBlock Classes="h2" Text="{Binding Selected.Title}" Margin="0" TextWrapping="Wrap" />

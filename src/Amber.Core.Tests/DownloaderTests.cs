@@ -27,6 +27,19 @@ internal sealed class TestServer : IDisposable
     /// <summary>这个文件第一次请求只发一半就断开。</summary>
     public HashSet<string> DropOnce { get; } = [];
 
+    /// <summary>每个请求先等这么久，用来观察同时在处理的请求数。</summary>
+    public int DelayMs { get; set; }
+    public int PeakActive;
+    private int _active;
+
+    /// <summary>接下来这么多个请求回 FailStatus（可带 Retry-After），之后恢复正常。</summary>
+    public int FailNext;
+    public int FailStatus { get; set; } = 429;
+    public string? RetryAfter { get; set; }
+
+    /// <summary>FailNext 只对分块请求（Range 带结束位置）生效，探测请求放行。</summary>
+    public bool FailChunksOnly { get; set; }
+
     public byte[] CorruptFor(string path) => _files[path].Select(b => (byte)(b ^ 0xFF)).ToArray();
 
     public TestServer()
@@ -61,8 +74,20 @@ internal sealed class TestServer : IDisposable
     {
         var path = c.Request.Url!.AbsolutePath.TrimStart('/');
         Interlocked.Increment(ref Requests);
+        var active = Interlocked.Increment(ref _active);
+        int peak;
+        while (active > (peak = Volatile.Read(ref PeakActive))) Interlocked.CompareExchange(ref PeakActive, active, peak);
         try
         {
+            if (DelayMs > 0) await Task.Delay(DelayMs);
+            var isChunk = c.Request.Headers["Range"] is { } r && !r.EndsWith('-');
+            if ((!FailChunksOnly || isChunk) && Volatile.Read(ref FailNext) > 0 && Interlocked.Decrement(ref FailNext) >= 0)
+            {
+                c.Response.StatusCode = FailStatus;
+                if (RetryAfter is not null) c.Response.Headers["Retry-After"] = RetryAfter;
+                c.Response.Close();
+                return;
+            }
             if (Fail500.Contains(path))
             {
                 c.Response.StatusCode = 500;
@@ -121,6 +146,10 @@ internal sealed class TestServer : IDisposable
             _ = partial;
         }
         catch (Exception e) when (e is HttpListenerException or IOException or ObjectDisposedException or OperationCanceledException) { }
+        finally
+        {
+            Interlocked.Decrement(ref _active);
+        }
     }
 
     public void Dispose()
@@ -164,6 +193,148 @@ public class DownloaderTests : IDisposable
     };
 
     private string Local(string name) => Path.Combine(_root, name);
+
+    private SourceChain MirrorOf(TestServer server, int? limit = null) =>
+        new([new PrefixMirrorSource("测试", new Dictionary<string, string> { [_server.Root] = server.Root }, limit)]);
+
+    [Fact]
+    public async Task MirrorConnectionLimit_IsRespected_EvenForChunks()
+    {
+        _server.DelayMs = 30;
+        var big = RandomBytes(4 * 1024 * 1024);
+        var items = new List<DownloadItem> { new(_server.Add("big.bin", big), Local("big.bin"), Sha1(big), big.Length) };
+        for (var i = 0; i < 20; i++)
+        {
+            var data = RandomBytes(1000 + i);
+            items.Add(new(_server.Add($"s{i}", data), Local($"s{i}"), Sha1(data), data.Length));
+        }
+        var downloader = Make(MirrorOf(_server, 3));
+
+        await downloader.DownloadAllAsync(items);
+
+        Assert.InRange(_server.PeakActive, 1, 3);
+        Assert.Equal(big, await File.ReadAllBytesAsync(Local("big.bin")));
+    }
+
+    [Fact]
+    public async Task Bmclapi_DeclaresLimit_OfficialDoesNot()
+    {
+        var chain = SourceChain.OfficialFirst;
+        Assert.Equal(PrefixMirrorSource.BmclapiMaxConnections, chain.HostLimit("bmclapi2.bangbang93.com"));
+        Assert.Null(chain.HostLimit("piston-data.mojang.com"));
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Throttled_SwitchesToNextSource_WithoutWaiting()
+    {
+        using var official = new TestServer();
+        var data = RandomBytes(5000);
+        official.Add("a.bin", data);
+        official.Add("b.bin", data);
+        _server.Add("a.bin", data);
+        _server.Add("b.bin", data);
+        _server.FailNext = 1000;
+        _server.RetryAfter = "60";
+        var chain = new SourceChain([new PrefixMirrorSource("镜像", new Dictionary<string, string> { [official.Root] = _server.Root }), new OfficialSource()]);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        await Make(chain).DownloadAllAsync([
+            new(official.Root + "a.bin", Local("a.bin"), Sha1(data), data.Length),
+        ]);
+        var mirrorHits = _server.Requests;
+        await Make(chain).DownloadOneAsync(new(official.Root + "b.bin", Local("b.bin"), Sha1(data), data.Length));
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"不该等限流结束，实际 {watch.Elapsed}");
+        Assert.Equal(1, mirrorHits);
+        Assert.Equal(data, await File.ReadAllBytesAsync(Local("a.bin")));
+    }
+
+    [Fact]
+    public async Task Throttled_OnlySource_WaitsForRetryAfter()
+    {
+        var data = RandomBytes(5000);
+        var url = _server.Add("a.bin", data);
+        _server.FailNext = 1;
+        _server.RetryAfter = "1";
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        await Make().DownloadOneAsync(new(url, Local("a.bin"), Sha1(data), data.Length));
+
+        Assert.True(watch.Elapsed >= TimeSpan.FromMilliseconds(900), $"应该等 Retry-After，实际 {watch.Elapsed}");
+        Assert.Equal(data, await File.ReadAllBytesAsync(Local("a.bin")));
+    }
+
+    [Fact]
+    public async Task ServerError_DuringResume_KeepsProgress()
+    {
+        var data = RandomBytes(100_000);
+        var url = _server.Add("a.bin", data);
+        var part = Local("a.bin") + ".part";
+        await File.WriteAllBytesAsync(part, data[..60_000]);
+        _server.FailNext = 2;
+        _server.FailStatus = 500;
+        var downloader = new Downloader(_http, new SourceChain([new OfficialSource()])) { RetriesPerSource = 2 };
+
+        await Assert.ThrowsAnyAsync<Exception>(() => downloader.DownloadOneAsync(new(url, Local("a.bin"), Sha1(data), data.Length)));
+        Assert.Equal(60_000, new FileInfo(part).Length);
+
+        var written = await downloader.DownloadOneAsync(new(url, Local("a.bin"), Sha1(data), data.Length));
+
+        Assert.Equal(40_000, written);
+        Assert.Equal(data, await File.ReadAllBytesAsync(Local("a.bin")));
+    }
+
+    [Fact]
+    public async Task ServerError_DuringChunks_KeepsState()
+    {
+        var data = RandomBytes(4 * 1024 * 1024);
+        var url = _server.Add("big.bin", data);
+        var downloader = Make();
+        var item = new DownloadItem(url, Local("big.bin"), Sha1(data), data.Length);
+        _server.FailStatus = 503;
+        _server.FailChunksOnly = true;
+        _server.FailNext = 100000;
+
+        await Assert.ThrowsAnyAsync<Exception>(() => downloader.DownloadOneAsync(item));
+        Assert.True(File.Exists(Local("big.bin") + ".part.state"), "5xx 不该扔掉分块进度");
+
+        _server.FailNext = 0;
+        await downloader.DownloadOneAsync(item);
+        Assert.Equal(data, await File.ReadAllBytesAsync(Local("big.bin")));
+    }
+
+    [Fact]
+    public async Task Cancel_StillSavesHashCache()
+    {
+        var good = RandomBytes(3000);
+        await File.WriteAllBytesAsync(Local("good.bin"), good);
+        var hang = RandomBytes(3001);
+        var hangUrl = _server.Add("hang.bin", hang);
+        _server.Hang.Add("hang.bin");
+        var cachePath = Local("hashes");
+        var downloader = Make(cache: new HashCache(cachePath));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => downloader.DownloadAllAsync([
+            new(_server.Root + "good.bin", Local("good.bin"), Sha1(good), good.Length),
+            new(hangUrl, Local("hang.bin"), Sha1(hang), hang.Length),
+        ], null, cts.Token));
+
+        Assert.Contains("good.bin", await File.ReadAllTextAsync(cachePath));
+    }
+
+    [Fact]
+    public async Task StreamedHash_StillRejectsCorruptData()
+    {
+        var data = RandomBytes(5000);
+        var url = _server.Add("a.bin", data);
+        var wrong = Sha1(RandomBytes(5001));
+
+        await Assert.ThrowsAnyAsync<Exception>(() => Make().DownloadOneAsync(new(url, Local("a.bin"), wrong, data.Length)));
+
+        Assert.False(File.Exists(Local("a.bin")));
+    }
 
     [Fact]
     public async Task LargeFile_IsChunked_AndIntact()

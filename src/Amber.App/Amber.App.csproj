@@ -8,6 +8,7 @@
     <AssemblyName>Amber</AssemblyName>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\amber.ico</ApplicationIcon>
     <TieredPGO>false</TieredPGO>
   </PropertyGroup>
 
@@ -16,6 +17,10 @@
     <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\amber.ico" />
   </ItemGroup>
 
   <ItemGroup>
