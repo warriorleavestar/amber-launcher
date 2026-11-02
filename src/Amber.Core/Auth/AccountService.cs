@@ -10,7 +10,7 @@ public sealed class AccountService(HttpClient http, AccountStore store, string d
 {
     public AccountStore Store { get; } = store;
 
-    /// <summary>用户配置里的 Client ID 优先，其次环境变量。都没有时微软登录不可用。</summary>
+    /// <summary>用户配置里的 Client ID 优先，其次环境变量，都没有时用内置的默认值。</summary>
     public string? MicrosoftClientId
     {
         get
@@ -18,7 +18,7 @@ public sealed class AccountService(HttpClient http, AccountStore store, string d
             var configured = clientIdProvider();
             if (!string.IsNullOrWhiteSpace(configured)) return configured.Trim();
             var env = Environment.GetEnvironmentVariable(MicrosoftAuth.ClientIdEnvironmentVariable);
-            return string.IsNullOrWhiteSpace(env) ? null : env.Trim();
+            return string.IsNullOrWhiteSpace(env) ? MicrosoftAuth.DefaultClientId : env.Trim();
         }
     }
 

@@ -31,7 +31,7 @@ public sealed class AppSettings
     public string? PreLaunchCommand { get; set; }
     public string? PostExitCommand { get; set; }
 
-    /// <summary>用户自己申请的微软应用 ID，留空时读环境变量 AMBER_MS_CLIENT_ID。</summary>
+    /// <summary>可选：覆盖微软应用 ID。留空时读环境变量 AMBER_MS_CLIENT_ID，再没有就用内置默认值。</summary>
     public string? MicrosoftClientId { get; set; }
 
     /// <summary>用户自己申请的 CurseForge API Key，留空时读环境变量 AMBER_CF_KEY。</summary>

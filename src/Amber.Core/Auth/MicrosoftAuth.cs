@@ -17,6 +17,9 @@ public sealed class MicrosoftAuth(HttpClient http, string clientId)
 
     public const string ClientIdEnvironmentVariable = "AMBER_MS_CLIENT_ID";
 
+    /// <summary>Amber 自己的公开 Azure 应用 ID（公共客户端，不是密钥）。</summary>
+    public const string DefaultClientId = "9015e9e2-b197-4e1a-9659-61c96cf38ffa";
+
     public async Task<DeviceCodeInfo> BeginDeviceCodeAsync(CancellationToken ct = default)
     {
         using var response = await http.PostAsync($"{Authority}/devicecode", new FormUrlEncodedContent(new Dictionary<string, string>
