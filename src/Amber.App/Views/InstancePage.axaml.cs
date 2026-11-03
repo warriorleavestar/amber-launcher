@@ -34,6 +34,19 @@ public partial class InstancePage : UserControl
     private async void AddShaderPacks_Click(object? sender, RoutedEventArgs e) =>
         await PickAndAddAsync("选择光影包", ["*.zip"], Vm?.ShaderPacksDir);
 
+    private async void AddDatapacks_Click(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not { } vm || Storage is not { } storage) return;
+        var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "选择数据包",
+            AllowMultiple = true,
+            FileTypeFilter = [new FilePickerFileType("数据包") { Patterns = ["*.zip"] }],
+        });
+        var paths = files.Select(f => f.TryGetLocalPath()).OfType<string>().ToList();
+        if (paths.Count > 0) vm.AddDatapacks(paths);
+    }
+
     private async void ImportWorld_Click(object? sender, RoutedEventArgs e)
     {
         if (Vm is not { } vm || Storage is not { } storage) return;

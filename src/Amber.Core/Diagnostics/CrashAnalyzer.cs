@@ -56,6 +56,9 @@ public static partial class CrashAnalyzer
             new CrashFinding($"{m.Groups[1].Value} 需要 {m.Groups[2].Value}", "安装它要求的依赖。", CrashSeverity.Likely, m.Value)),
         R(@"(Invalid|Failed to apply) mixin|MixinApplyError|InvalidMixinException|Mixin apply for mod (\S+) failed|Mixin transformation of .{1,120} failed", m =>
             new CrashFinding(m.Groups[2].Success ? $"模组 {m.Groups[2].Value} 的 Mixin 注入失败" : "模组的 Mixin 注入失败", "通常是模组版本和游戏版本不匹配，或者两个模组冲突。看疑似模组，先更新或禁用它。", CrashSeverity.Likely, m.Value)),
+        // 崩溃报告的系统信息里同时写着 OptiFine 和 Forge 版本：OptiFine 只适配某几个 Forge 版本，换 Forge 后最常见的就是 NoSuchMethodError。
+        R(@"(NoSuchMethodError|NoSuchFieldError)[\s\S]{0,60000}OptiFine Version: (OptiFine_\S+)[\s\S]{0,20000}Forge: net\.minecraftforge:(\S+)", m =>
+            new CrashFinding($"{m.Groups[2].Value} 和 Forge {m.Groups[3].Value} 不兼容", "OptiFine 只支持特定的 Forge 版本（下载页选 OptiFine 时，版本旁边写着对应的 Forge）。换成那个 Forge 版本，或者去掉 OptiFine。", CrashSeverity.Likely, m.Groups[1].Value)),
         R(@"NoSuchMethodError|NoSuchFieldError", "模组和游戏或其他模组版本不匹配", "更新模组，确认下载的是这个游戏版本和加载器用的文件。", CrashSeverity.Possible),
         R(@"ClassNotFoundException: (\S+)|NoClassDefFoundError: (\S+)", m =>
             new CrashFinding($"找不到类 {(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)}", "可能缺少前置模组，或者文件不完整。", CrashSeverity.Possible, m.Value)),
@@ -181,7 +184,9 @@ public static partial class CrashAnalyzer
     public static void ExportBundle(string outputZip, IEnumerable<string> files, IEnumerable<string> launcherLog)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputZip))!);
-        using var zip = ZipFile.Open(outputZip, ZipArchiveMode.Create);
+        // 保存对话框里确认过覆盖，旧文件直接替换。
+        using var stream = new FileStream(outputZip, FileMode.Create, FileAccess.ReadWrite);
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Create);
         foreach (var file in files.Distinct())
         {
             if (!File.Exists(file)) continue;

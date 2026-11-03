@@ -111,7 +111,7 @@
         </TabItem>
 
         <TabItem Header="世界" FontSize="14">
-          <Grid RowDefinitions="Auto,*">
+          <Grid RowDefinitions="Auto,*,Auto">
             <Button Content="从压缩包导入存档…" Click="ImportWorld_Click" Margin="0,0,0,6" />
             <TextBlock Grid.Row="1" Classes="hint" Text="这个版本还没有存档。" IsVisible="{Binding !Worlds.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
             <ListBox Grid.Row="1" ItemsSource="{Binding Worlds}" Background="Transparent">
@@ -125,6 +125,7 @@
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                       <Button Content="进入" IsVisible="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).SupportsQuickPlay}"
                               Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).JoinWorldCommand}" CommandParameter="{Binding}" />
+                      <Button Content="数据包" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).ShowDatapacksCommand}" CommandParameter="{Binding}" />
                       <Button Content="备份" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).BackupWorldCommand}" CommandParameter="{Binding}" />
                       <Button Content="打开" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).OpenWorldCommand}" CommandParameter="{Binding}" />
                       <Button Content="删除" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteWorldCommand}" CommandParameter="{Binding}" />
@@ -133,6 +134,38 @@
                 </DataTemplate>
               </ListBox.ItemTemplate>
             </ListBox>
+            <Border Grid.Row="2" IsVisible="{Binding HasDatapackWorld}" BorderBrush="{DynamicResource PageBackground}" BorderThickness="0,1,0,0" Padding="0,8,0,0" Margin="0,6,0,0">
+              <Grid RowDefinitions="Auto,Auto,Auto" MaxHeight="260">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{Binding DatapackTitle}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                    <Button Content="下载数据包…" Command="{Binding BrowseDatapacksCommand}" />
+                    <Button Content="添加文件…" Click="AddDatapacks_Click" />
+                    <Button Content="打开文件夹" Command="{Binding OpenDatapacksFolderCommand}" />
+                    <Button Content="收起" Command="{Binding CloseDatapacksCommand}" />
+                  </StackPanel>
+                </Grid>
+                <TextBlock Grid.Row="1" Classes="hint" FontSize="12" Margin="0,4" TextWrapping="Wrap"
+                           Text="勾选框和游戏里的数据包界面是同一个开关，请在游戏关闭时修改。没有数据包时，可以去资源页搜索，或添加 zip 文件。" />
+                <ScrollViewer Grid.Row="2">
+                  <ItemsControl ItemsSource="{Binding Datapacks}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate DataType="vm:DatapackItem">
+                        <Grid ColumnDefinitions="Auto,*,Auto" Margin="2,3">
+                          <CheckBox IsChecked="{Binding Enabled}" MinWidth="0" Margin="0,0,6,0" ToolTip.Tip="启用或禁用" />
+                          <StackPanel Grid.Column="1">
+                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Meta}" Classes="hint" FontSize="11" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                          <Button Grid.Column="2" Content="删除" VerticalAlignment="Center"
+                                  Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).DeleteDatapackCommand}" CommandParameter="{Binding}" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+              </Grid>
+            </Border>
           </Grid>
         </TabItem>
 

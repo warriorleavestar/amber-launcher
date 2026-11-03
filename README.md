@@ -39,9 +39,9 @@
 
 ### 模组与整合包
 
-- 在 Modrinth 和 CurseForge 上搜索、安装模组、资源包、光影和整合包，自动带上必需的依赖
-- 导入和导出 mrpack、CurseForge 格式的整合包
-- 管理实例里的模组
+- 在 Modrinth 和 CurseForge 上搜索、安装模组、资源包、光影、数据包和整合包，自动带上必需的依赖
+- 导入 mrpack、CurseForge、MultiMC / Prism Launcher 实例、HMCL 和 MCBBS 整合包；导出 mrpack 和 CurseForge 格式
+- 管理实例里的模组，以及每个世界的数据包（启用、禁用、删除）
 
 ### 游戏管理与崩溃分析
 
@@ -129,7 +129,7 @@ CurseForge 的接口需要 API Key，见上面的[配置](#配置)。Modrinth �
 目前只提供 Windows 版本。
 
 **有哪些暂不支持的功能？**
-联机、数据包下载、Forge 1.5.2 及更早的版本，以及 mrpack、CurseForge 以外格式的整合包导入。
+联机，以及 Forge 1.5.2 及更早的版本。
 
 ## 许可证
 

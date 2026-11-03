@@ -58,6 +58,30 @@ public sealed record WorldItem(WorldInfo World)
     public string Meta => $"{World.GameMode} · {World.Version ?? "未知版本"} · {World.LastPlayed?.LocalDateTime:yyyy-MM-dd HH:mm} · {World.FolderName}";
 }
 
+public sealed partial class DatapackItem(LocalDatapack pack, string worldPath, Action<string> report) : ObservableObject
+{
+    public LocalDatapack Pack { get; } = pack;
+    public string Name => Pack.FileName;
+    public string Meta => (Pack.IsFolder ? "文件夹" : "压缩包") + (string.IsNullOrWhiteSpace(Pack.Description) ? "" : " · " + Pack.Description.ReplaceLineEndings(" "));
+
+    [ObservableProperty]
+    public partial bool Enabled { get; set; } = pack.Enabled;
+
+    partial void OnEnabledChanged(bool value)
+    {
+        try
+        {
+            DatapackManager.SetEnabled(worldPath, Pack.FileName, value);
+            report($"已{(value ? "启用" : "禁用")} {Pack.FileName}，下次进这个世界时生效");
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            report("修改失败：" + e.Message);
+            Dispatcher.UIThread.Post(() => Enabled = !value);
+        }
+    }
+}
+
 public sealed partial class ScreenshotItem(string path) : ObservableObject
 {
     public string Path { get; } = path;
@@ -313,9 +337,13 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         {
             await work(_workCts.Token);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (_workCts.IsCancellationRequested)
         {
             Status = "已取消";
+        }
+        catch (OperationCanceledException)
+        {
+            Status = "失败：网络请求超时，请稍后重试";
         }
         catch (Exception e)
         {
@@ -554,6 +582,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     private void LoadWorlds()
     {
+        DatapackWorld = null;
         Worlds.Clear();
         foreach (var w in WorldManager.List(Current!.SavesDir)) Worlds.Add(new WorldItem(w));
     }
@@ -591,6 +620,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         try
         {
             Recycle(item.World.Path);
+            if (DatapackWorld == item) DatapackWorld = null;
             Worlds.Remove(item);
             Status = $"已把 {item.Name} 放进回收站";
         }
@@ -614,6 +644,87 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         {
             Status = "导入失败：" + e.Message;
         }
+    }
+
+    // ---- 数据包（属于某个世界）----
+
+    public ObservableCollection<DatapackItem> Datapacks { get; } = [];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasDatapackWorld), nameof(DatapackTitle))]
+    public partial WorldItem? DatapackWorld { get; set; }
+
+    public bool HasDatapackWorld => DatapackWorld is not null;
+    public string DatapackTitle => DatapackWorld is { } w ? $"{w.Name} 的数据包" : "";
+    public string? DatapacksDir => DatapackWorld is { } w ? DatapackManager.DirectoryOf(w.World.Path) : null;
+
+    /// <summary>主窗口设置：去资源页搜索数据包（版本 id，世界文件夹名）。</summary>
+    public Action<string, string>? NavigateToDatapacks { get; set; }
+
+    [RelayCommand]
+    private void ShowDatapacks(WorldItem? item)
+    {
+        DatapackWorld = item;
+        LoadDatapacks();
+    }
+
+    [RelayCommand]
+    private void CloseDatapacks() => DatapackWorld = null;
+
+    private void LoadDatapacks()
+    {
+        Datapacks.Clear();
+        if (DatapackWorld is not { } w) return;
+        foreach (var pack in DatapackManager.List(w.World.Path)) Datapacks.Add(new DatapackItem(pack, w.World.Path, s => Status = s));
+    }
+
+    [RelayCommand]
+    private void DeleteDatapack(DatapackItem? item)
+    {
+        if (item is null) return;
+        try
+        {
+            Recycle(item.Pack.Path);
+            Datapacks.Remove(item);
+            Status = $"已把 {item.Name} 放进回收站";
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
+        {
+            Status = "删除失败：" + e.Message;
+        }
+    }
+
+    [RelayCommand]
+    private void OpenDatapacksFolder()
+    {
+        if (DatapacksDir is { } dir) OpenPath(dir);
+    }
+
+    [RelayCommand]
+    private void BrowseDatapacks()
+    {
+        if (Current is { } c && DatapackWorld is { } w) NavigateToDatapacks?.Invoke(c.Id, w.World.FolderName);
+    }
+
+    public void AddDatapacks(IEnumerable<string> paths)
+    {
+        if (DatapackWorld is not { } w) return;
+        var added = 0;
+        var errors = new List<string>();
+        foreach (var path in paths)
+        {
+            try
+            {
+                DatapackManager.Add(w.World.Path, path);
+                added++;
+            }
+            catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                errors.Add(e.Message);
+            }
+        }
+        Status = $"已添加 {added} 个数据包" + (errors.Count > 0 ? "。" + string.Join("；", errors) : "");
+        LoadDatapacks();
     }
 
     // ---- 截图 ----

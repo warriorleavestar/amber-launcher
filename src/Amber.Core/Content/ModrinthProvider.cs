@@ -143,6 +143,7 @@ public sealed class ModrinthProvider(HttpClient http, string apiRoot = "https://
         ContentType.ResourcePack => "resourcepack",
         ContentType.Shader => "shader",
         ContentType.Modpack => "modpack",
+        ContentType.Datapack => "datapack",
         _ => throw new ArgumentOutOfRangeException(nameof(type)),
     };
 }

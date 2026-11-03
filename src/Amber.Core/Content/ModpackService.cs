@@ -8,10 +8,11 @@ using Amber.Core.Net;
 
 namespace Amber.Core.Content;
 
-public sealed record ModpackInfo(string Format, string Name, string? Version, string McVersion, LoaderKind? Loader, string? LoaderVersion, int FileCount);
+/// <summary>整合包概况。Overrides 是压缩包里要原样复制到游戏目录的那一层（MultiMC / HMCL / MCBBS 用）。</summary>
+public sealed record ModpackInfo(string Format, string Name, string? Version, string McVersion, LoaderKind? Loader, string? LoaderVersion, int FileCount, string? Overrides = null);
 
-/// <summary>导入 mrpack 和 CurseForge 整合包，导出 mrpack 和 CurseForge 整合包。</summary>
-public sealed class ModpackService(LoaderContext ctx, ModrinthProvider modrinth, CurseForgeProvider curseForge)
+/// <summary>导入 mrpack、CurseForge、MultiMC / Prism、HMCL、MCBBS 整合包，导出 mrpack 和 CurseForge 整合包。</summary>
+public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider modrinth, CurseForgeProvider curseForge)
 {
     public static ModpackInfo Inspect(string packPath)
     {
@@ -24,6 +25,8 @@ public sealed class ModpackService(LoaderContext ctx, ModrinthProvider modrinth,
             return new ModpackInfo("Modrinth", index["name"]?.GetValue<string>() ?? "整合包", index["versionId"]?.GetValue<string>(),
                 deps["minecraft"]?.GetValue<string>() ?? throw new InvalidDataException("整合包没有指定游戏版本"), loader, version, (index["files"] as JsonArray)?.Count ?? 0);
         }
+        // MCBBS 整合包常常同时带一份 CurseForge 格式的 manifest.json，以 packmeta 为准。
+        if (zip.GetEntry("mcbbs.packmeta") is not null) return InspectOtherLaunchers(zip)!;
         if (zip.GetEntry("manifest.json") is { } cf)
         {
             var manifest = ReadJson(cf);
@@ -33,7 +36,8 @@ public sealed class ModpackService(LoaderContext ctx, ModrinthProvider modrinth,
             return new ModpackInfo("CurseForge", manifest["name"]?.GetValue<string>() ?? "整合包", manifest["version"]?.GetValue<string>(),
                 mc["version"]!.GetValue<string>(), loader, version, (manifest["files"] as JsonArray)?.Count ?? 0);
         }
-        throw new InvalidDataException("不认识这个整合包：既不是 mrpack，也不是 CurseForge 格式");
+        return InspectOtherLaunchers(zip)
+               ?? throw new InvalidDataException("不认识这个整合包：支持 Modrinth（mrpack）、CurseForge、MultiMC / Prism 实例、HMCL 和 MCBBS 整合包");
     }
 
     /// <summary>安装整合包：先装加载器（版本名字用 name），再下载文件、释放 overrides 到版本隔离目录。</summary>
@@ -48,8 +52,12 @@ public sealed class ModpackService(LoaderContext ctx, ModrinthProvider modrinth,
         Directory.CreateDirectory(workDir);
 
         using var zip = ZipFile.OpenRead(packPath);
-        if (info.Format == "Modrinth") await ImportMrpackFilesAsync(zip, workDir, progress, ct);
-        else await ImportCurseForgeFilesAsync(zip, workDir, progress, ct);
+        switch (info.Format)
+        {
+            case "Modrinth": await ImportMrpackFilesAsync(zip, workDir, progress, ct); break;
+            case "CurseForge": await ImportCurseForgeFilesAsync(zip, workDir, progress, ct); break;
+            default: await ImportOtherLauncherFilesAsync(zip, info, id, workDir, progress, ct); break;
+        }
         return id;
     }
 
@@ -301,12 +309,14 @@ public sealed class ModpackService(LoaderContext ctx, ModrinthProvider modrinth,
         };
     }
 
-    private static void ExtractPrefix(ZipArchive zip, string prefix, string target)
+    private static void ExtractPrefix(ZipArchive zip, string prefix, string target, IReadOnlyCollection<string>? skip = null)
     {
         foreach (var entry in zip.Entries)
         {
             if (!entry.FullName.StartsWith(prefix, StringComparison.Ordinal) || entry.FullName.EndsWith('/')) continue;
-            var path = SafeJoin(target, entry.FullName[prefix.Length..]);
+            var relative = entry.FullName[prefix.Length..];
+            if (skip?.Contains(relative) == true) continue;
+            var path = SafeJoin(target, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             entry.ExtractToFile(path, true);
         }

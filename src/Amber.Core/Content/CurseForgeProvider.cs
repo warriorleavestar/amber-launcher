@@ -194,6 +194,7 @@ public sealed class CurseForgeProvider(HttpClient http, Func<string?> apiKey, st
         ContentType.ResourcePack => 12,
         ContentType.Shader => 6552,
         ContentType.Modpack => 4471,
+        ContentType.Datapack => 6945,
         _ => throw new ArgumentOutOfRangeException(nameof(type)),
     };
 

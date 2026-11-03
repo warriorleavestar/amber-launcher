@@ -67,18 +67,24 @@ public sealed partial class MainViewModel : ObservableObject
         var log = new LogViewModel();
         var home = new HomeViewModel(service, log);
         var instance = new InstanceViewModel(service) { NavigateHome = null };
+        var content = new ContentViewModel(service);
         Pages =
         [
             home,
             new AccountsViewModel(service),
             instance,
             new DownloadViewModel(service),
-            new ContentViewModel(service),
+            content,
             new ToolsViewModel(service),
             new SettingsViewModel(service),
             log,
         ];
         instance.NavigateHome = () => CurrentPage = home;
+        instance.NavigateToDatapacks = (id, world) =>
+        {
+            CurrentPage = content;
+            content.BrowseDatapacksFor(id, world);
+        };
         CurrentPage = Pages[0];
         CurrentPage.Activate();
     }

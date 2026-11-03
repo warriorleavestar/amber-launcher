@@ -41,9 +41,9 @@ Amber needs 64-bit Windows 10 or later. You don't need to set up Java either: Am
 
 ### Mods and modpacks
 
-- Search and install mods, resource packs, shaders and modpacks from Modrinth and CurseForge, with required dependencies
-- Import and export mrpack and CurseForge modpacks
-- Manage the mods in each instance
+- Search and install mods, resource packs, shaders, data packs and modpacks from Modrinth and CurseForge, with required dependencies
+- Import mrpack, CurseForge, MultiMC / Prism Launcher instances, HMCL and MCBBS modpacks; export mrpack and CurseForge
+- Manage the mods in each instance and the data packs in each world (enable, disable, delete)
 
 ### Game management and crash analysis
 
@@ -131,7 +131,7 @@ Switch the download source on the Settings page and try the official source or t
 Only Windows builds are available for now.
 
 **What isn't supported yet?**
-Multiplayer tunnelling, data pack downloads, Forge 1.5.2 and earlier, and importing modpacks in formats other than mrpack and CurseForge.
+Multiplayer tunnelling, and Forge 1.5.2 and earlier.
 
 ## License
 

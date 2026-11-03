@@ -33,18 +33,87 @@ public static class Nbt
         return reader.ReadCompound();
     }
 
-    /// <summary>写未压缩的 NBT（servers.dat 用这种）。</summary>
-    public static void WriteFile(string path, Dictionary<string, object> root)
+    /// <summary>写 NBT。servers.dat 不压缩，level.dat 要 gzip。</summary>
+    public static void WriteFile(string path, Dictionary<string, object> root, bool gzip = false)
     {
         using var memory = new MemoryStream();
         var writer = new Writer(memory);
         writer.U8(Compound);
         writer.Str("");
         writer.WriteCompound(root);
+        var bytes = memory.ToArray();
+        if (gzip)
+        {
+            using var packed = new MemoryStream();
+            using (var gz = new GZipStream(packed, CompressionLevel.Optimal, true)) gz.Write(bytes);
+            bytes = packed.ToArray();
+        }
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         var temp = path + ".tmp";
-        File.WriteAllBytes(temp, memory.ToArray());
+        File.WriteAllBytes(temp, bytes);
         File.Move(temp, path, true);
+    }
+
+    /// <summary>Java 的“改良 UTF-8”：U+0000 写成两字节，增补字符拆成两个代理各写三字节。</summary>
+    internal static byte[] EncodeModifiedUtf8(string s)
+    {
+        var result = new List<byte>(s.Length);
+        foreach (var c in s)
+        {
+            if (c is >= (char)0x01 and <= (char)0x7f)
+            {
+                result.Add((byte)c);
+            }
+            else if (c <= (char)0x7ff)
+            {
+                result.Add((byte)(0xc0 | (c >> 6)));
+                result.Add((byte)(0x80 | (c & 0x3f)));
+            }
+            else
+            {
+                result.Add((byte)(0xe0 | (c >> 12)));
+                result.Add((byte)(0x80 | ((c >> 6) & 0x3f)));
+                result.Add((byte)(0x80 | (c & 0x3f)));
+            }
+        }
+        return result.ToArray();
+    }
+
+    internal static string DecodeModifiedUtf8(ReadOnlySpan<byte> bytes)
+    {
+        var builder = new StringBuilder(bytes.Length);
+        for (var i = 0; i < bytes.Length;)
+        {
+            var b = bytes[i];
+            if (b < 0x80)
+            {
+                builder.Append((char)b);
+                i++;
+            }
+            else if ((b & 0xe0) == 0xc0 && i + 1 < bytes.Length)
+            {
+                builder.Append((char)(((b & 0x1f) << 6) | (bytes[i + 1] & 0x3f)));
+                i += 2;
+            }
+            else if ((b & 0xf0) == 0xe0 && i + 2 < bytes.Length)
+            {
+                builder.Append((char)(((b & 0x0f) << 12) | ((bytes[i + 1] & 0x3f) << 6) | (bytes[i + 2] & 0x3f)));
+                i += 3;
+            }
+            else if ((b & 0xf8) == 0xf0 && i + 3 < bytes.Length)
+            {
+                // 不是 Java 写的，而是标准 UTF-8 的四字节字符，也认。
+                var cp = ((b & 0x07) << 18) | ((bytes[i + 1] & 0x3f) << 12) | ((bytes[i + 2] & 0x3f) << 6) | (bytes[i + 3] & 0x3f);
+                builder.Append(cp is <= 0x10ffff and not (>= 0xd800 and <= 0xdfff) ? char.ConvertFromUtf32(cp) : ((char)0xfffd).ToString());
+                i += 4;
+            }
+            else
+            {
+                builder.Append((char)0xfffd);
+                i++;
+            }
+        }
+        return builder.ToString();
     }
 
     private sealed class Reader(byte[] data)
@@ -77,7 +146,7 @@ public static class Nbt
         public string Str()
         {
             var length = (ushort)I16();
-            var s = Encoding.UTF8.GetString(data, _pos, length);
+            var s = DecodeModifiedUtf8(data.AsSpan(_pos, length));
             _pos += length;
             return s;
         }
@@ -178,7 +247,8 @@ public static class Nbt
 
         public void Str(string s)
         {
-            var bytes = Encoding.UTF8.GetBytes(s);
+            var bytes = EncodeModifiedUtf8(s);
+            if (bytes.Length > ushort.MaxValue) throw new InvalidDataException("NBT 字符串太长");
             I16((short)bytes.Length);
             stream.Write(bytes);
         }

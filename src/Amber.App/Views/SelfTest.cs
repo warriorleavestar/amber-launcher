@@ -3,8 +3,12 @@ using Amber.App.ViewModels;
 using Amber.Core.Content;
 using Amber.Core.Game;
 using Avalonia;
+using Avalonia.Automation.Peers;
+using Avalonia.Automation.Provider;
+using Avalonia.Controls;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 
 namespace Amber.App.Views;
 
@@ -73,20 +77,61 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         window.Close();
     }
 
+    /// <summary>在当前窗口的控件树里找可见的控件（界面刚切换时要等布局完成）。</summary>
+    private async Task<T?> FindAsync<T>(Func<T, bool> match, int seconds = 10) where T : Control
+    {
+        T? found = null;
+        await WaitAsync(() =>
+        {
+            found = Dispatcher.UIThread.Invoke(() => window.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.IsEffectivelyVisible && match(c)));
+            return found is not null;
+        }, seconds);
+        return found;
+    }
+
+    /// <summary>像读屏软件一样“按下”按钮：走自动化接口，按钮禁用或不可见时按不动。</summary>
+    private static bool Press(Button? button) => Dispatcher.UIThread.Invoke(() =>
+    {
+        if (button is not { IsEffectivelyEnabled: true, IsEffectivelyVisible: true }) return false;
+        if (ControlAutomationPeer.CreatePeerForElement(button).GetProvider<IInvokeProvider>() is not { } invoke) return false;
+        invoke.Invoke();
+        return true;
+    });
+
+    /// <summary>下载页全程操作控件：搜索框输入、点“安装…”、在下拉框选 Fabric、改名字、点“开始安装”。</summary>
     private async Task InstallLoaderAsync()
     {
         var download = Page<DownloadViewModel>();
         main.CurrentPage = download;
         await WaitAsync(() => download.Items.Count > 0, 30);
         Check("下载页加载版本列表", download.Items.Count > 0, $"{download.Items.Count} 个");
-        download.ConfigureCommand.Execute(download.Items.First(i => i.Id == "1.21.1"));
-        download.SelectedLoader = download.LoaderChoices.First(c => c.Label == "Fabric");
-        await WaitAsync(() => download.SelectedLoaderVersion is not null, 30);
-        Check("加载器版本列表", download.SelectedLoaderVersion is not null, download.SelectedLoaderVersion?.Version ?? "");
-        download.CustomName = FabricName;
+
+        var search = await FindAsync<TextBox>(t => t.PlaceholderText?.StartsWith("搜索版本号", StringComparison.Ordinal) == true);
+        Dispatcher.UIThread.Invoke(() => search!.Text = "1.21.1");
+        var row = await FindAsync<Button>(b => b.Content as string == "安装…" && b.DataContext is RemoteVersionItem { Id: "1.21.1" });
+        Check("搜索框过滤出 1.21.1 并显示安装按钮", row is not null && download.Items.All(i => i.Id.Contains("1.21.1")), $"{download.Items.Count} 个");
+        Check("点“安装…”打开安装面板", Press(row) && await WaitAsync(() => download.IsConfiguring && download.Target?.Id == "1.21.1", 5));
+
+        var loaderBox = await FindAsync<ComboBox>(c => ReferenceEquals(c.ItemsSource, download.LoaderChoices));
+        Dispatcher.UIThread.Invoke(() => loaderBox!.SelectedItem = download.LoaderChoices.First(c => c.Label == "Fabric"));
+        var versionBox = await FindAsync<ComboBox>(c => ReferenceEquals(c.ItemsSource, download.LoaderVersions));
+        var gotVersion = await WaitAsync(() => Dispatcher.UIThread.Invoke(() => versionBox?.SelectedItem is not null), 30);
+        Check("下拉框选 Fabric 后列出加载器版本", gotVersion && download.SelectedLoader.Label == "Fabric", download.SelectedLoaderVersion?.Version ?? download.LoaderHint);
+
+        var nameBox = await FindAsync<TextBox>(t => t.Text == download.CustomName && download.CustomName.StartsWith("fabric-loader-", StringComparison.Ordinal));
+        Check("默认名字按加载器版本生成", nameBox is not null, download.CustomName);
+        Dispatcher.UIThread.Invoke(() => nameBox!.Text = FabricName);
+        Check("名字输入框写回", download.CustomName == FabricName, download.CustomName);
         await ShotAsync("安装面板");
-        await download.InstallCommand.ExecuteAsync(null);
-        Check("安装 Fabric（自定义名字）", download.Status.Contains("安装完成"), download.Status);
+
+        var install = await FindAsync<Button>(b => b.Content as string == "开始安装");
+        Check("点“开始安装”", Press(install));
+        await WaitAsync(() => download.IsBusy, 5);
+        Check("安装中按钮变灰", !download.IsBusy || Dispatcher.UIThread.Invoke(() => !install!.IsEffectivelyEnabled));
+        await WaitAsync(() => !download.IsBusy, 600);
+        Check("安装 Fabric（自定义名字）", download.Status.Contains("安装完成") && !download.IsConfiguring
+                                         && File.Exists(Path.Combine(GameRoot(), "versions", FabricName, FabricName + ".json")), download.Status);
+        Dispatcher.UIThread.Invoke(() => search!.Text = "");
     }
 
     private async Task InstallModAsync()
@@ -224,6 +269,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await instance.BackupWorldCommand.ExecuteAsync(instance.Worlds.First());
         Check("备份世界", instance.Status.Contains("备份完成"), instance.Status);
         await ShotAsync("世界页");
+        await DatapacksAsync(instance, world);
         instance.DeleteWorldCommand.Execute(instance.Worlds.First());
         Check("删除世界进回收站", !Directory.Exists(world), instance.Status);
 
@@ -232,6 +278,60 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             instance.TabIndex = tab;
             await ShotAsync($"实例标签{tab}");
         }
+    }
+
+    private async Task DatapacksAsync(InstanceViewModel instance, string world)
+    {
+        main.CurrentPage = instance;
+        instance.TabIndex = 2;
+        await WaitAsync(() => instance.Worlds.Count > 0, 5);
+        var button = await FindAsync<Button>(b => b.Content as string == "数据包" && b.DataContext is WorldItem w && w.World.Path == world);
+        Check("点世界的“数据包”", Press(button) && instance.HasDatapackWorld);
+
+        var zip = Path.Combine(reportDir, "selftest-datapack.zip");
+        File.Delete(zip);
+        using (var archive = ZipFile.Open(zip, ZipArchiveMode.Create))
+        {
+            using (var w = new StreamWriter(archive.CreateEntry("pack.mcmeta").Open())) w.Write("""{"pack":{"pack_format":48,"description":"自检数据包"}}""");
+            using (var w = new StreamWriter(archive.CreateEntry("data/selftest/function/hi.mcfunction").Open())) w.Write("say hi");
+        }
+        instance.AddDatapacks([zip]);
+        var item = instance.Datapacks.FirstOrDefault(d => d.Name == "selftest-datapack.zip");
+        Check("添加数据包", item is { Enabled: true } && item.Meta.Contains("自检数据包"), instance.Status);
+        if (item is not null)
+        {
+            item.Enabled = false;
+            var disabled = DatapackManager.List(world).Single(d => d.FileName == "selftest-datapack.zip");
+            Check("禁用数据包写进 level.dat", !disabled.Enabled && File.Exists(Path.Combine(world, "level.dat_old")), instance.Status);
+            item.Enabled = true;
+        }
+        await ShotAsync("数据包");
+
+        // “下载数据包…”跳到资源页，类型、版本、世界都选好。
+        Check("点“下载数据包…”", Press(await FindAsync<Button>(b => b.Content as string == "下载数据包…")));
+        var content = Page<ContentViewModel>();
+        Check("跳到资源页的数据包搜索", main.CurrentPage == content && content.IsDatapack && content.TargetInstance == FabricName
+                                    && content.TargetWorld?.World.Path == world, $"{content.TargetInstance} / {content.TargetWorld?.Label}");
+        await WaitAsync(() => content.Results.Count > 0 || content.Status.Contains("失败"), 30);
+        Check("Modrinth 数据包搜索", content.Results.Count > 0, content.Status);
+        var installed = false;
+        foreach (var project in content.Results.Take(6).ToList())
+        {
+            content.Selected = project;
+            if (!await WaitAsync(() => content.SelectedFile is not null, 15)) continue;
+            await content.InstallCommand.ExecuteAsync(null);
+            installed = content.Status.StartsWith("已把", StringComparison.Ordinal);
+            if (installed) break;
+        }
+        var dir = DatapackManager.DirectoryOf(world);
+        Check("下载数据包进世界", installed && Directory.EnumerateFiles(dir, "*.zip").Count() >= 2, content.Status);
+        await ShotAsync("资源页数据包");
+        content.TypeIndex = 0;
+        main.CurrentPage = instance;
+        instance.SelectedId = null;
+        instance.SelectedId = FabricName;
+        instance.TabIndex = 2;
+        await WaitAsync(() => instance.Worlds.Count > 0, 5);
     }
 
     private async Task ToolsAsync()
@@ -268,6 +368,26 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await content.ImportLocalPackAsync(renamed);
         var mods = Path.Combine(GameRoot(), "versions", PackName, "mods");
         Check("导入 mrpack", Directory.Exists(mods) && Directory.EnumerateFiles(mods, "sodium*").Any(), content.Status);
+
+        // Prism / MultiMC 实例压缩包：套一层文件夹，带内存设置。
+        var prism = Path.Combine(reportDir, "E2E-Prism.zip");
+        File.Delete(prism);
+        using (var zip = ZipFile.Open(prism, ZipArchiveMode.Create))
+        {
+            using (var w = new StreamWriter(zip.CreateEntry("E2E-Prism/instance.cfg").Open()))
+                w.Write("[General]\nInstanceType=OneSix\nname=E2E-Prism\nOverrideMemory=true\nMaxMemAlloc=2500\n");
+            using (var w = new StreamWriter(zip.CreateEntry("E2E-Prism/mmc-pack.json").Open()))
+                w.Write("""{"components":[{"uid":"net.minecraft","version":"1.21.1"},{"uid":"net.fabricmc.fabric-loader","version":"0.16.5"}],"formatVersion":1}""");
+            var sodium = Directory.EnumerateFiles(Path.Combine(GameRoot(), "versions", FabricName, "mods"), "sodium*.jar").First();
+            zip.CreateEntryFromFile(sodium, "E2E-Prism/.minecraft/mods/" + Path.GetFileName(sodium));
+        }
+        await content.ImportLocalPackAsync(prism);
+        var gameDir = new GameDirectory(GameRoot());
+        var prismDir = Path.Combine(GameRoot(), "versions", "E2E-Prism");
+        var prismMods = Path.Combine(prismDir, "mods");
+        var prismSettings = Amber.Core.Launch.InstanceSettings.Load(gameDir, "E2E-Prism");
+        Check("导入 Prism 实例", Directory.Exists(prismMods) && Directory.EnumerateFiles(prismMods, "sodium*").Any() && prismSettings.MaxMemoryMb == 2500
+                              && GameInstance.Detect(gameDir, "E2E-Prism", prismDir).Loader == "fabric", content.Status);
     }
 
     /// <summary>导入时版本名字来自整合包名字，改一下避免和原实例同名。</summary>

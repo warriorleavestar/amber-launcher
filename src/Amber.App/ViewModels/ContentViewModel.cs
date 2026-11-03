@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Amber.App.Services;
 using Amber.Core.Content;
+using Amber.Core.Game;
 using Amber.Core.Install;
 using Amber.Core.Net;
 using Avalonia.Media.Imaging;
@@ -36,7 +37,12 @@ public sealed record FileItem(ContentFile File)
     private string ChannelText => File.Channel switch { "release" => "正式版", "beta" => "测试版", "alpha" => "早期版", var c => c };
 }
 
-/// <summary>资源页：在 Modrinth / CurseForge 搜索并安装模组、资源包、光影、整合包。</summary>
+public sealed record WorldChoice(WorldInfo World)
+{
+    public string Label => World.Name == World.FolderName ? World.Name : $"{World.Name}（{World.FolderName}）";
+}
+
+/// <summary>资源页：在 Modrinth / CurseForge 搜索并安装模组、资源包、光影、整合包、数据包。</summary>
 public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
 {
     private const int PageSize = 20;
@@ -51,15 +57,20 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     public override string Title => "资源";
     public override string Icon => "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z";
 
-    public string[] TypeNames { get; } = ["模组", "资源包", "光影", "整合包"];
+    public string[] TypeNames { get; } = ["模组", "资源包", "光影", "整合包", "数据包"];
     public string[] SourceNames { get; } = ["Modrinth", "CurseForge"];
 
     public ObservableCollection<string> Instances { get; } = [];
     public ObservableCollection<ProjectItem> Results { get; } = [];
     public ObservableCollection<FileItem> Files { get; } = [];
+    public ObservableCollection<WorldChoice> Worlds { get; } = [];
+
+    /// <summary>数据包装到哪个世界。</summary>
+    [ObservableProperty]
+    public partial WorldChoice? TargetWorld { get; set; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsModpack))]
+    [NotifyPropertyChangedFor(nameof(IsModpack), nameof(IsDatapack))]
     public partial int TypeIndex { get; set; }
 
     [ObservableProperty]
@@ -102,6 +113,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     public partial string Status { get; set; } = "输入关键词搜索，或直接点搜索看热门内容";
 
     public bool IsModpack => CurrentType == ContentType.Modpack;
+    public bool IsDatapack => CurrentType == ContentType.Datapack;
 
     private ContentType CurrentType => (ContentType)TypeIndex;
     private IContentProvider Provider => SourceIndex == 0 ? _service.Modrinth : _service.CurseForge;
@@ -121,11 +133,47 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         TargetInstance = keep is not null && Instances.Contains(keep) ? keep : _service.Settings.LastVersion is { } last && Instances.Contains(last) ? last : Instances.FirstOrDefault();
     }
 
-    partial void OnTypeIndexChanged(int value) => _ = SearchFromStart();
+    partial void OnTypeIndexChanged(int value)
+    {
+        if (IsDatapack) RefreshWorlds();
+        _ = SearchFromStart();
+    }
     partial void OnSourceIndexChanged(int value) => _ = SearchFromStart();
     partial void OnSelectedChanged(ProjectItem? value) => _ = LoadFilesAsync();
     partial void OnShowUnstableChanged(bool value) => _ = LoadFilesAsync();
-    partial void OnTargetInstanceChanged(string? value) { if (Selected is not null) _ = LoadFilesAsync(); }
+    partial void OnTargetInstanceChanged(string? value)
+    {
+        if (IsDatapack) RefreshWorlds();
+        if (Selected is not null) _ = LoadFilesAsync();
+    }
+
+    private void RefreshWorlds()
+    {
+        var keep = TargetWorld?.World.FolderName;
+        Worlds.Clear();
+        try
+        {
+            if (CurrentInstance() is { } instance)
+                foreach (var w in WorldManager.List(instance.SavesDir)) Worlds.Add(new WorldChoice(w));
+        }
+        catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException)
+        {
+            // 版本文件坏了就没有世界可选。
+        }
+        TargetWorld = Worlds.FirstOrDefault(w => w.World.FolderName == keep) ?? Worlds.FirstOrDefault();
+    }
+
+    /// <summary>从实例页的“下载数据包”跳过来：切到数据包，并选好版本和世界。</summary>
+    public void BrowseDatapacksFor(string instanceId, string worldFolder)
+    {
+        if (Instances.Contains(instanceId)) TargetInstance = instanceId;
+        // 之前搜模组留下的关键词对数据包没意义，清掉后显示热门数据包。
+        Query = "";
+        if (TypeIndex != (int)ContentType.Datapack) TypeIndex = (int)ContentType.Datapack;
+        else _ = SearchFromStart();
+        RefreshWorlds();
+        TargetWorld = Worlds.FirstOrDefault(w => w.World.FolderName == worldFolder) ?? TargetWorld;
+    }
 
     private Task SearchFromStart()
     {
@@ -217,8 +265,14 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         try
         {
             var instance = IsModpack || !FilterByInstance ? null : CurrentInstance();
-            // 资源包和光影的加载器字段含义不同，只按游戏版本过滤。
-            var loader = CurrentType == ContentType.Mod ? instance?.Loader : null;
+            // 资源包和光影的加载器字段含义不同，只按游戏版本过滤。数据包在 Modrinth 上的加载器写作 datapack，
+            // 同一个项目常常还有模组版，要按它挑出数据包文件。
+            var loader = CurrentType switch
+            {
+                ContentType.Mod => instance?.Loader,
+                ContentType.Datapack => "datapack",
+                _ => null,
+            };
             var files = await Provider.GetFilesAsync(selected.Project.Id, instance?.McVersion, loader, cts.Token);
             if (cts.IsCancellationRequested) return;
             foreach (var f in files.Where(f => f.IsRelease || ShowUnstable)) Files.Add(new FileItem(f));
@@ -260,12 +314,18 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             Status = "请先选择要安装到哪个版本";
             return;
         }
+        var world = TargetWorld;
+        if (IsDatapack && world is null)
+        {
+            Status = "数据包要装进某个世界：这个版本还没有存档，先进游戏建一个世界";
+            return;
+        }
 
         IsBusy = true;
         _workCts = new CancellationTokenSource();
         try
         {
-            var target = instance.DirectoryFor(CurrentType);
+            var target = IsDatapack ? DatapackManager.DirectoryOf(world!.World.Path) : instance.DirectoryFor(CurrentType);
             var plan = new InstallPlan([file], []);
             if (CurrentType == ContentType.Mod)
             {
@@ -283,16 +343,17 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             var extra = plan.Files.Count > 1 ? $"（含 {plan.Files.Count - 1} 个依赖）" : "";
             var problems = plan.Problems.Count > 0 ? "。注意：" + string.Join("；", plan.Problems) : "";
             var noLoader = CurrentType == ContentType.Mod && instance.Loader is null ? "。注意：这个版本没装加载器，模组不会生效" : "";
-            Status = $"已把 {file.DisplayName}{extra} 安装到 {instance.Id}{problems}{noLoader}";
+            var where = IsDatapack ? $"{instance.Id} 的世界 {world!.Label}" : instance.Id;
+            Status = $"已把 {file.DisplayName}{extra} 安装到 {where}{problems}{noLoader}";
             _service.NotifyContentChanged();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
             Status = "已取消";
         }
         catch (Exception e)
         {
-            Status = "安装失败：" + e.Message;
+            Status = "安装失败：" + Describe(e);
         }
         finally
         {
@@ -312,13 +373,13 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             await _service.Downloader.DownloadOneAsync(ContentInstaller.ToItem(file, Path.GetDirectoryName(temp)!), _workCts.Token);
             await ImportCoreAsync(temp, NewInstanceName, _workCts.Token);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
             Status = "已取消";
         }
         catch (Exception e)
         {
-            Status = "安装失败：" + e.Message;
+            Status = "安装失败：" + Describe(e);
         }
         finally
         {
@@ -338,13 +399,13 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             var info = ModpackService.Inspect(path);
             await ImportCoreAsync(path, SafeName(info.Name), _workCts.Token);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
             Status = "已取消";
         }
         catch (Exception e)
         {
-            Status = "导入失败：" + e.Message;
+            Status = "导入失败：" + Describe(e);
         }
         finally
         {
@@ -369,6 +430,9 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
 
     [RelayCommand]
     private void Cancel() => _workCts?.Cancel();
+
+    /// <summary>没点取消却收到取消，是网络请求超时。</summary>
+    private static string Describe(Exception e) => e is OperationCanceledException ? "网络请求超时，请稍后重试" : e.Message;
 
     public async Task RunSnapshotDemoAsync()
     {

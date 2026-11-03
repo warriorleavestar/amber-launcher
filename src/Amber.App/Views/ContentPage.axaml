@@ -21,6 +21,14 @@
         <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding TargetInstance}" MinWidth="260" />
         <CheckBox Content="只看适用于这个版本的内容" IsChecked="{Binding FilterByInstance}" />
       </StackPanel>
+      <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding IsDatapack}">
+        <TextBlock Text="装进世界" VerticalAlignment="Center" />
+        <ComboBox ItemsSource="{Binding Worlds}" SelectedItem="{Binding TargetWorld}" MinWidth="260" PlaceholderText="这个版本还没有存档">
+          <ComboBox.ItemTemplate>
+            <DataTemplate DataType="vm:WorldChoice"><TextBlock Text="{Binding Label}" /></DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+      </StackPanel>
     </StackPanel>
 
     <Grid Grid.Row="2" ColumnDefinitions="*,Auto">

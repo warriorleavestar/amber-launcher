@@ -1,6 +1,6 @@
 namespace Amber.Core.Content;
 
-public enum ContentType { Mod, ResourcePack, Shader, Modpack }
+public enum ContentType { Mod, ResourcePack, Shader, Modpack, Datapack }
 
 public enum ContentSource { Modrinth, CurseForge }
 
