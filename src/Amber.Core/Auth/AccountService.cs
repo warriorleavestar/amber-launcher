@@ -23,7 +23,7 @@ public sealed class AccountService(HttpClient http, AccountStore store, string d
     }
 
     public MicrosoftAuth CreateMicrosoftAuth() =>
-        new(http, MicrosoftClientId ?? throw new InvalidOperationException("还没有配置微软应用的 Client ID，请到「设置」页填写"));
+        new(http, MicrosoftClientId ?? throw new InvalidOperationException("没有可用的微软应用 Client ID，可以到「账号」页填写"));
 
     public ExternalAuth External { get; } = new(http);
 

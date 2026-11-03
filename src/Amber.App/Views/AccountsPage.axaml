@@ -55,8 +55,8 @@
           <StackPanel Spacing="10" IsVisible="{Binding IsMicrosoftTab}">
             <TextBlock Text="Azure 应用 Client ID（可选，留空用内置默认值）" />
             <TextBox Text="{Binding ClientIdInput}" PlaceholderText="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
-            <TextBlock Classes="hint" IsVisible="{Binding MicrosoftMissingClientId}"
-                       Text="微软登录需要你自己的 Client ID：在 Azure 门户注册一个公共客户端应用，允许个人账号并开启设备码流程，再向 Mojang 申请 Minecraft API 权限。也可以用环境变量 AMBER_MS_CLIENT_ID。" />
+            <TextBlock Classes="hint"
+                       Text="高级：可以换成你自己的 Azure 应用 Client ID，也可以用环境变量 AMBER_MS_CLIENT_ID。一般不用填。" />
             <Button Classes="amber" Content="用微软账号登录" Command="{Binding LoginMicrosoftCommand}" />
             <Border IsVisible="{Binding HasDeviceCode}" Background="{DynamicResource PageBackground}" CornerRadius="8" Padding="12">
               <StackPanel Spacing="8">

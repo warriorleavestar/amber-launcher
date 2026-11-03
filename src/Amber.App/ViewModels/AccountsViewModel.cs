@@ -190,7 +190,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         SaveClientId();
         if (_service.Accounts.MicrosoftClientId is null)
         {
-            Status = "请先填写你自己的 Azure 应用 Client ID";
+            Status = "没有可用的 Azure 应用 Client ID";
             return;
         }
 

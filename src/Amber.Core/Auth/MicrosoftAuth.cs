@@ -8,7 +8,7 @@ public sealed record DeviceCodeInfo(string UserCode, string VerificationUri, str
 
 /// <summary>
 /// 微软账号登录（设备码流程）：微软令牌 → Xbox Live → XSTS → Minecraft 令牌 → 档案。
-/// Client ID 必须来自用户配置或环境变量，这里不写任何默认值。
+/// Client ID 的优先级：界面里填写的 > 环境变量 AMBER_MS_CLIENT_ID > 内置的 <see cref="DefaultClientId"/>。
 /// </summary>
 public sealed class MicrosoftAuth(HttpClient http, string clientId)
 {
