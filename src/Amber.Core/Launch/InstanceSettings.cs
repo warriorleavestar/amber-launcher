@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Amber.Core.Auth;
 using Amber.Core.Game;
 
 namespace Amber.Core.Launch;
@@ -49,6 +50,32 @@ public sealed class InstanceSettings
     {
         Directory.CreateDirectory(dir.VersionDir(id));
         File.WriteAllText(Path.Combine(dir.VersionDir(id), FileName), JsonSerializer.Serialize(this, Options));
+    }
+
+    /// <summary>
+    /// 按这份（已合并全局的）设置生成启动参数：内存（含自动内存）、工作目录（版本隔离）、JVM 和游戏参数、窗口。
+    /// 启动器的正式启动、Connector 预处理、导出启动脚本和命令行都用它，各处的设置不会对不上。
+    /// </summary>
+    public LaunchOptions ToLaunchOptions(GameDirectory dir, string id, string javaPath, GameSession session, IReadOnlyList<string> sessionJvmArgs)
+    {
+        var workDir = Isolate == true ? dir.VersionDir(id) : dir.Root;
+        var memory = AutoMemory == true
+            ? MemoryPlanner.AutoMemoryMb(new Amber.Core.Content.ModManager(Path.Combine(workDir, "mods")).CountEnabled(), MemoryPlanner.FreePhysicalMb())
+            : MaxMemoryMb ?? 4096;
+        return new LaunchOptions
+        {
+            VersionId = id,
+            JavaPath = javaPath,
+            Session = session,
+            ExtraJvmArgs = [.. sessionJvmArgs, .. ArgumentSplitter.Split(JvmArgs)],
+            ExtraGameArgs = ArgumentSplitter.Split(GameArgs),
+            MaxMemoryMb = memory,
+            WorkingDirectory = Isolate == true ? workDir : null,
+            WindowWidth = WindowWidth,
+            WindowHeight = WindowHeight,
+            Fullscreen = Fullscreen == true,
+            LauncherVersion = UpdateChecker.CurrentVersion,
+        };
     }
 
     /// <summary>this 是版本设置，fallback 是全局设置。</summary>

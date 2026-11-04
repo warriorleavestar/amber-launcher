@@ -198,7 +198,7 @@ public sealed class EasyTierSession : IEasyTierSession
     private readonly Process _process;
     private readonly string _cliPath;
     private readonly int _rpcPort;
-    private readonly ProcessJob? _job;
+    private readonly IDisposable? _job;
     private readonly Queue<string> _output = new();
 
     public EasyTierOptions Options { get; }
@@ -239,7 +239,7 @@ public sealed class EasyTierSession : IEasyTierSession
             }
             catch (System.ComponentModel.Win32Exception)
             {
-                job?.Dispose();
+                if (OperatingSystem.IsWindows()) job?.Dispose();
                 job = null;
             }
         }

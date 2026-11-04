@@ -7,7 +7,8 @@ using Amber.Core.Net;
 namespace Amber.Core.Content;
 
 /// <summary>mods 文件夹里的一个模组。</summary>
-public sealed record LocalMod(string Path, string FileName, bool Enabled, string? ModId, string Name, string? Version, string? Description, string? Authors, byte[]? Icon)
+public sealed record LocalMod(string Path, string FileName, bool Enabled, string? ModId, string Name, string? Version, string? Description, string? Authors, byte[]? Icon,
+    ModRequirements? Requirements = null)
 {
     public string DisplayName => Name;
 }
@@ -22,11 +23,44 @@ public sealed partial class ModManager(string modsDir)
     public List<LocalMod> List()
     {
         if (!Directory.Exists(ModsDir)) return [];
-        return Directory.EnumerateFiles(ModsDir)
+        // 几百个模组的大整合包：并行读，读过的按大小和修改时间缓存（启用 / 禁用只改文件名，不用重读）。
+        var mods = Directory.EnumerateFiles(ModsDir)
             .Where(IsModFile)
-            .Select(Read)
+            .AsParallel()
+            .Select(ReadCached)
             .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        // 这个文件夹里已经不在的文件（更新换了文件名、删了）从缓存里去掉，免得越积越多。
+        var present = mods.Select(m => CacheKey(m.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var prefix = Path.GetFullPath(ModsDir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        foreach (var key in Cache.Keys)
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !present.Contains(key)) Cache.TryRemove(key, out _);
+        return mods;
+    }
+
+    private sealed record CacheEntry(long Size, DateTime Modified, LocalMod Mod);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, CacheEntry> Cache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>缓存的键：去掉 .disabled 的完整路径。</summary>
+    private static string CacheKey(string path) =>
+        path.EndsWith(DisabledSuffix, StringComparison.OrdinalIgnoreCase) ? path[..^DisabledSuffix.Length] : path;
+
+    private static LocalMod ReadCached(string path)
+    {
+        path = Path.GetFullPath(path);
+        var info = new FileInfo(path);
+        var key = CacheKey(path);
+        // 列文件和读文件之间文件被删掉 / 改名了（比如正在更新模组）：不缓存，按读不到处理。
+        if (!info.Exists) return Read(path);
+        if (Cache.TryGetValue(key, out var hit) && hit.Size == info.Length && hit.Modified == info.LastWriteTimeUtc)
+        {
+            var fileName = System.IO.Path.GetFileName(path);
+            return hit.Mod with { Path = path, FileName = fileName, Enabled = !fileName.EndsWith(DisabledSuffix, StringComparison.OrdinalIgnoreCase) };
+        }
+        var mod = Read(path, out var cacheable);
+        if (cacheable) Cache[key] = new CacheEntry(info.Length, info.LastWriteTimeUtc, mod);
+        return mod;
     }
 
     /// <summary>只数文件不解压，启动页和自动内存用。</summary>
@@ -49,26 +83,45 @@ public sealed partial class ModManager(string modsDir)
         return target;
     }
 
-    public static LocalMod Read(string path)
+    /// <summary>读一个模组时可能遇到的问题：文件损坏或正被别的程序改动、元数据格式不对。都只影响这一个文件。</summary>
+    private static bool IsBadMetadata(Exception e) =>
+        e is InvalidDataException or IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or FormatException;
+
+    public static LocalMod Read(string path) => Read(path, out _);
+
+    /// <param name="cacheable">读的时候文件正被占用（比如还在下载、写入）时为 false：这次读不到不代表文件坏了，不能缓存。</param>
+    private static LocalMod Read(string path, out bool cacheable)
     {
+        cacheable = true;
         var fileName = System.IO.Path.GetFileName(path);
         var enabled = !fileName.EndsWith(DisabledSuffix, StringComparison.OrdinalIgnoreCase);
         var fallbackName = enabled ? fileName : fileName[..^DisabledSuffix.Length];
+        ModRequirements? requirements = null;
         try
         {
             using var zip = ZipFile.OpenRead(path);
+            // 同一次打开里把兼容检查要的元数据也读了。
+            try
+            {
+                requirements = ModCompat.ReadZip(zip, nested: true);
+            }
+            catch (Exception e) when (IsBadMetadata(e))
+            {
+                cacheable &= e is not (IOException or UnauthorizedAccessException);
+            }
             var meta = ReadFabric(zip) ?? ReadQuilt(zip) ?? ReadToml(zip, "META-INF/neoforge.mods.toml") ?? ReadToml(zip, "META-INF/mods.toml") ?? ReadMcmodInfo(zip);
             if (meta is not null)
             {
                 var version = meta.Version is null or "${file.jarVersion}" ? ManifestVersion(zip) : meta.Version;
-                return new LocalMod(path, fileName, enabled, meta.Id, string.IsNullOrWhiteSpace(meta.Name) ? fallbackName : meta.Name, version, meta.Description, meta.Authors, ReadIcon(zip, meta.IconPath));
+                return new LocalMod(path, fileName, enabled, meta.Id, string.IsNullOrWhiteSpace(meta.Name) ? fallbackName : meta.Name, version, meta.Description, meta.Authors, ReadIcon(zip, meta.IconPath), requirements);
             }
         }
-        catch (Exception e) when (e is InvalidDataException or IOException or JsonException)
+        catch (Exception e) when (IsBadMetadata(e))
         {
-            // 损坏的压缩包也显示出来，方便用户发现并删除。
+            cacheable &= e is not (IOException or UnauthorizedAccessException);
+            // 损坏的压缩包、写得不规范的元数据也照样显示出来，方便用户发现并删除。
         }
-        return new LocalMod(path, fileName, enabled, null, fallbackName, null, null, null, null);
+        return new LocalMod(path, fileName, enabled, null, fallbackName, null, null, null, null, requirements);
     }
 
     private sealed record ModMeta(string? Id, string? Name, string? Version, string? Description, string? Authors, string? IconPath);
@@ -205,7 +258,7 @@ public sealed partial class ModManager(string modsDir)
         foreach (var (fp, file) in matches)
         {
             var files = await curseForge.GetFilesAsync(file.ProjectId, mcVersion, loader, ct);
-            var newest = files.FirstOrDefault(f => f.IsRelease) ?? files.FirstOrDefault();
+            var newest = files.PickPreferred();
             if (newest is not null && newest.FileId != file.FileId && newest.Date > file.Date)
                 updates.Add(new ModUpdate(fingerprints[fp].Path, newest));
         }

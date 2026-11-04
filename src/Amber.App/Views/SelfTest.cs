@@ -578,6 +578,10 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         var fabricMod = instance.Mods.FirstOrDefault(m => m.Mod.FileName.StartsWith("morechathistory", StringComparison.Ordinal));
         Check("模组兼容：Fabric 模组标为经 Connector 运行", fabricMod?.CompatText.Contains("Connector") == true, fabricMod?.CompatText ?? "没有这个模组");
         Check("模组兼容：装了 Connector 就不再提示安装", !instance.NeedsConnector, instance.CompatSummary);
+        var expected = ConnectorWarmup.Pending(instance.ModsDir![..^"mods".Length].TrimEnd('\\', '/'), instance.Mods.Select(m => m.Mod), "neoforge").Count;
+        await WaitAsync(() => instance.HasConnectorPending == expected > 0, 15);
+        Check("Connector 预先处理：提示和缓存一致", instance.HasConnectorPending == expected > 0 && instance.PrewarmConnectorCommand.CanExecute(null),
+            $"还有 {expected} 个没转换；{(instance.HasConnectorPending ? instance.ConnectorPendingText : "不显示提示")}");
 
         var wrong = Path.Combine(instance.ModsDir!, "amber-selftest-wrongversion.jar");
         FakeJar(wrong, "META-INF/neoforge.mods.toml", "[[mods]]\nmodId=\"selftestold\"\n[[dependencies.selftestold]]\nmodId=\"minecraft\"\ntype=\"required\"\nversionRange=\"[1.20.4,1.20.5)\"\n");
@@ -590,6 +594,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("模组兼容：汇总里有不匹配数", instance.CompatSummary.Contains("不匹配"), instance.CompatSummary);
         await ShotAsync("模组兼容");
         File.Delete(wrong);
+        await FindMatchingAsync(instance, neo);
 
         instance.SelectedId = FabricName;
         instance.TabIndex = 1;
@@ -604,6 +609,41 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         File.Delete(forgeOnFabric);
         instance.SelectedId = null;
         instance.SelectedId = FabricName;
+    }
+
+    /// <summary>“找对应版本”：放进一个真实的旧版本模组（FerriteCore 1.20.4 NeoForge），点按钮后应换成适合实例的版本。</summary>
+    private async Task FindMatchingAsync(InstanceViewModel instance, string id)
+    {
+        const string ferriteCore = "uXXizFIs";
+        using var http = Amber.Core.Net.Downloader.CreateHttpClient();
+        var old = (await new Amber.Core.Content.ModrinthProvider(http).GetFilesAsync(ferriteCore, "1.20.4", "neoforge")).PickPreferred();
+        if (old is null)
+        {
+            Log("SKIP 找对应版本：Modrinth 上没取到 FerriteCore 1.20.4 的文件");
+            return;
+        }
+        var oldPath = Path.Combine(instance.ModsDir!, old.FileName);
+        await File.WriteAllBytesAsync(oldPath, await http.GetByteArrayAsync(old.Url));
+        var before = Directory.GetFiles(instance.ModsDir!).ToHashSet();
+        instance.SelectedId = null;
+        instance.SelectedId = id;
+        instance.TabIndex = 1;
+        await WaitAsync(() => instance.Mods.Any(m => m.Mod.FileName == old.FileName && m.Compat is not null), 15);
+        var item = instance.Mods.FirstOrDefault(m => m.Mod.FileName == old.FileName);
+        Check("找对应版本：真实的旧版本模组被标出", item is { CanFindMatching: true }, item?.CompatText ?? "没读到");
+        if (item is not { CanFindMatching: true })
+        {
+            File.Delete(oldPath);
+            return;
+        }
+        instance.FindMatchingCommand.Execute(item);
+        await WaitAsync(() => !File.Exists(oldPath) && instance.Mods.Any(m => !before.Contains(m.Mod.Path) && m.Compat is not null), 60);
+        var added = Directory.GetFiles(instance.ModsDir!).Where(f => !before.Contains(f)).ToList();
+        var replacement = instance.Mods.FirstOrDefault(m => added.Contains(m.Mod.Path));
+        Check("找对应版本：换成了适合实例的版本", !File.Exists(oldPath) && replacement is { HasCompatProblem: false },
+            $"{old.FileName} → {replacement?.Mod.FileName ?? "无"}（{instance.Status}）");
+        foreach (var f in added) File.Delete(f);
+        if (File.Exists(oldPath)) File.Delete(oldPath);
     }
 
     private async Task ToolsAsync()

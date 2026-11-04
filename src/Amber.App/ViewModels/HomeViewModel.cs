@@ -189,26 +189,12 @@ public sealed partial class HomeViewModel : PageViewModel
             Status = "正在验证账号……";
             var session = await _service.Accounts.ResolveAsync(account, _cts.Token);
 
-            var memory = settings.AutoMemory == true
-                ? MemoryPlanner.AutoMemoryMb(new ModManager(Path.Combine(workDir, "mods")).CountEnabled(), MemoryPlanner.FreePhysicalMb())
-                : settings.MaxMemoryMb ?? 4096;
-
-            var options = new LaunchOptions
+            var options = _service.BaseLaunchOptions(id, javaPath, session.Session, session.ExtraJvmArgs) with
             {
-                VersionId = id,
-                JavaPath = javaPath,
-                Session = session.Session,
-                ExtraJvmArgs = [.. session.ExtraJvmArgs, .. ArgumentSplitter.Split(settings.JvmArgs)],
-                ExtraGameArgs = ArgumentSplitter.Split(settings.GameArgs),
-                MaxMemoryMb = memory,
-                WorkingDirectory = settings.Isolate == true ? _service.Directory.VersionDir(id) : null,
-                WindowWidth = settings.WindowWidth,
-                WindowHeight = settings.WindowHeight,
-                Fullscreen = settings.Fullscreen == true,
                 JoinServer = request.JoinServer ?? settings.JoinServer,
                 JoinWorld = request.JoinWorld,
-                LauncherVersion = UpdateChecker.CurrentVersion,
             };
+            var memory = options.MaxMemoryMb;
 
             if (!string.IsNullOrWhiteSpace(settings.PreLaunchCommand))
             {
@@ -224,6 +210,7 @@ public sealed partial class HomeViewModel : PageViewModel
             var parser = new GameLogParser();
             var launcher = new GameLauncher(_service.Directory);
             started = DateTime.UtcNow;
+            using var running = _service.MarkRunning(workDir);
             _game = launcher.Launch(options, line =>
             {
                 lock (parser)

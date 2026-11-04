@@ -356,8 +356,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
                 Status = "正在解析依赖……";
                 if (_viaConnector)
                 {
-                    var hasConnector = Directory.Exists(instance.ModsDir)
-                                       && ConnectorInstaller.IsInstalled(Directory.EnumerateFiles(instance.ModsDir, "*.jar").Select(ModCompat.Read));
+                    var hasConnector = ConnectorInstaller.IsInstalled(new ModManager(instance.ModsDir).List().Where(m => m.Enabled).Select(m => m.Requirements));
                     plan = await ConnectorInstaller.PlanFabricModAsync(file, instance, _service.Modrinth, _service.ContentInstaller, null, hasConnector, _workCts.Token);
                 }
                 else

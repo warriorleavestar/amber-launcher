@@ -12,7 +12,9 @@ public sealed class ContentInstaller(Downloader downloader, IReadOnlyDictionary<
     /// 沿必需依赖展开。依赖没有指定版本时，选匹配实例游戏版本和加载器的最新版（正式版优先）。
     /// installedProjects 里的项目（实例已有的模组）不重复安装。
     /// </summary>
-    public async Task<InstallPlan> ResolveAsync(ContentFile root, GameInstance instance, ISet<string>? installedProjects = null, CancellationToken ct = default)
+    /// <param name="loaderPreference">依赖按这个顺序找版本（比如经 Connector 装 Fabric 模组时先找原生 NeoForge 版，再找 Fabric 版）；为空时只用实例的加载器。</param>
+    public async Task<InstallPlan> ResolveAsync(ContentFile root, GameInstance instance, ISet<string>? installedProjects = null, CancellationToken ct = default,
+        IReadOnlyList<string?>? loaderPreference = null)
     {
         var plan = new List<ContentFile>();
         var problems = new List<string>();
@@ -42,8 +44,12 @@ public sealed class ContentInstaller(Downloader downloader, IReadOnlyDictionary<
                     else if (dep.ProjectId is { } projectId)
                     {
                         if (installedProjects?.Contains(projectId) == true || seen.Contains(projectId)) continue;
-                        var candidates = await provider.GetFilesAsync(projectId, instance.McVersion, instance.Loader, ct);
-                        resolved = candidates.FirstOrDefault(c => c.IsRelease) ?? candidates.FirstOrDefault();
+                        resolved = null;
+                        foreach (var loader in loaderPreference ?? [instance.Loader])
+                        {
+                            resolved = (await provider.GetFilesAsync(projectId, instance.McVersion, loader, ct)).PickPreferred();
+                            if (resolved is not null) break;
+                        }
                     }
                     else continue;
                 }

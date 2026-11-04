@@ -91,6 +91,32 @@ public class ContentTests : IDisposable
     }
 
     [Fact]
+    public void ModManager_CacheFollowsFileChanges()
+    {
+        var mods = Path.Combine(_root, "mods");
+        var path = MakeZip("mods/a.jar", ("fabric.mod.json", """{"id":"a","version":"1"}"""));
+        var manager = new ModManager(mods);
+        Assert.Equal("1", manager.List().Single().Version);
+
+        // 同一个文件名换了内容（更新模组）：大小或修改时间变了就重新读。
+        File.Delete(path);
+        MakeZip("mods/a.jar", ("fabric.mod.json", """{"id":"a","version":"2.0.0"}"""));
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(1));
+        Assert.Equal("2.0.0", manager.List().Single().Version);
+
+        // 禁用后命中缓存，但路径和启用状态跟着文件名走。
+        var off = manager.List().Single();
+        var disabledPath = ModManager.SetEnabled(off, false);
+        var disabled = manager.List().Single();
+        Assert.Equal((disabledPath, false, "2.0.0"), (disabled.Path, disabled.Enabled, disabled.Version));
+
+        // 读文件时文件已经没了：不抛异常，按读不到处理。
+        File.Delete(disabledPath);
+        Assert.Empty(manager.List());
+        Assert.Null(ModManager.Read(disabledPath).ModId);
+    }
+
+    [Fact]
     public void Inspect_ReadsMrpackAndCurseForgeManifests()
     {
         var mr = ModpackService.Inspect(MakeZip("a.mrpack", ("modrinth.index.json", """{"formatVersion":1,"game":"minecraft","name":"P","versionId":"1","files":[{}],"dependencies":{"minecraft":"1.21.1","neoforge":"21.1.1"}}""")));
@@ -138,6 +164,42 @@ public class ContentTests : IDisposable
         Assert.Equal(["a1", "b-rel", "d1"], plan.Files.Select(f => f.FileId));
         var problem = Assert.Single(plan.Problems);
         Assert.Contains("GONE", problem);
+    }
+
+    /// <summary>按加载器过滤的假数据源：同一个项目可以有 Fabric 版和 NeoForge 版。</summary>
+    private sealed class LoaderProvider(params ContentFile[] files) : IContentProvider
+    {
+        public ContentSource Source => ContentSource.Modrinth;
+        public Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<ContentProject> GetProjectAsync(string projectId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<ContentFile>> GetFilesAsync(string projectId, string? gameVersion, string? loader, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ContentFile>>(files.Where(f => f.ProjectId == projectId && (loader is null || f.Loaders.Contains(loader))).ToList());
+        public Task<ContentFile> GetFileAsync(string projectId, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    private static ContentFile LoaderFile(string project, string id, string loader, params ContentDependency[] deps) =>
+        new(ContentSource.Modrinth, project, id, id, id + ".jar", "https://x/" + id, null, 1, ["1.21.1"], [loader], "release", default, deps);
+
+    [Fact]
+    public async Task Resolver_LoaderPreference_PrefersNativeThenFallsBack()
+    {
+        var mod = LoaderFile("MOD", "mod-fabric", "fabric", Dep("CLOTH"), Dep("ONLYFAB"));
+        var provider = new LoaderProvider(
+            mod,
+            LoaderFile("CLOTH", "cloth-fabric", "fabric"),
+            LoaderFile("CLOTH", "cloth-neo", "neoforge", Dep("NEODEP")),
+            LoaderFile("NEODEP", "neodep-neo", "neoforge"),
+            LoaderFile("ONLYFAB", "onlyfab-fabric", "fabric"));
+        var installer = new ContentInstaller(null!, new Dictionary<ContentSource, IContentProvider> { [ContentSource.Modrinth] = provider });
+        var instance = new GameInstance("i", "1.21.1", "neoforge", "21.1", _root);
+
+        var plan = await installer.ResolveAsync(mod, instance, null, default, ["neoforge", "fabric"]);
+        // 有原生版的用原生版（连带它自己的依赖），没有的退回 Fabric 版。
+        Assert.Equal(["mod-fabric", "cloth-neo", "onlyfab-fabric", "neodep-neo"], plan.Files.Select(f => f.FileId));
+
+        // 不给优先顺序时只按实例的加载器找，只有 Fabric 版的依赖找不到。
+        var plain = await installer.ResolveAsync(mod, instance);
+        Assert.DoesNotContain(plain.Files, f => f.FileId == "onlyfab-fabric");
     }
 
     [Fact]

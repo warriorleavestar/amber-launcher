@@ -92,6 +92,11 @@
                            Text="有 Fabric 模组：装上开源的 Sinytra Connector 后，很多 Fabric 模组能在 Forge / NeoForge 上运行（不是全部）。" />
                 <Button Content="安装 Sinytra Connector" Command="{Binding InstallConnectorCommand}" />
               </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasConnectorPending}">
+                <TextBlock Classes="hint" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="560" Text="{Binding ConnectorPendingText}" />
+                <Button Content="预先处理" Command="{Binding PrewarmConnectorCommand}"
+                        ToolTip.Tip="启动一次游戏，等 Connector 把 Fabric 模组转换完就自动关掉，之后正式启动就快了。期间会短暂出现游戏的加载窗口。" />
+              </StackPanel>
             </StackPanel>
             <TextBlock Grid.Row="2" Classes="hint" Text="还没有模组。去「资源」页搜索安装，或者点“添加文件”。" IsVisible="{Binding !Mods.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
             <ListBox Grid.Row="2" ItemsSource="{Binding Mods}" Background="Transparent">

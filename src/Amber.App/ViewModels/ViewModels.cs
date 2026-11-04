@@ -88,7 +88,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     public string VersionText { get; } = $"v{UpdateChecker.CurrentVersion} · 无云控 · 无遥测";
 
-    partial void OnCurrentPageChanged(PageViewModel? oldValue, PageViewModel newValue)
+    partial void OnCurrentPageChanged(PageViewModel oldValue, PageViewModel newValue)
     {
         if (oldValue is not null) oldValue.IsCurrent = false;
         newValue.IsCurrent = true;

@@ -37,6 +37,13 @@ public sealed record ContentFile(
     public bool IsRelease => Channel == "release";
 }
 
+public static class ContentFileExtensions
+{
+    /// <summary>挑一个版本：有正式版用最新的正式版，没有就用最新的。列表已按时间从新到旧排好。</summary>
+    public static ContentFile? PickPreferred(this IEnumerable<ContentFile> files) =>
+        files.FirstOrDefault(f => f.IsRelease) ?? files.FirstOrDefault();
+}
+
 public sealed record SearchResult(IReadOnlyList<ContentProject> Items, int Total);
 
 public sealed record SearchQuery(ContentType Type, string Text, string? GameVersion, string? Loader, int Offset = 0, int Limit = 20);

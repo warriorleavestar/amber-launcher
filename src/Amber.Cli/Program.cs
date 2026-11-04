@@ -151,9 +151,9 @@ try
             var viaConnector = argList.Remove("--via-connector");
             var loaderFilter = type == ContentType.Mod ? (viaConnector ? "fabric" : instance.Loader) : null;
             var files = await provider.GetFilesAsync(argList[2], instance.McVersion, loaderFilter, cts.Token);
-            var file = files.FirstOrDefault(f => f.IsRelease) ?? files.FirstOrDefault()
+            var file = files.PickPreferred()
                        ?? throw new InvalidOperationException($"没有适用于 {instance.McVersion} / {loaderFilter} 的版本");
-            var hasConnector = ConnectorInstaller.IsInstalled(Directory.Exists(instance.ModsDir) ? Directory.EnumerateFiles(instance.ModsDir, "*.jar").Select(ModCompat.Read) : []);
+            var hasConnector = ConnectorInstaller.IsInstalled(new ModManager(instance.ModsDir).List().Where(m => m.Enabled).Select(m => m.Requirements));
             var plan = viaConnector
                 ? await ConnectorInstaller.PlanFabricModAsync(file, instance, modrinth, contentInstaller, null, hasConnector, cts.Token)
                 : await contentInstaller.ResolveAsync(file, instance, null, cts.Token);
@@ -168,8 +168,52 @@ try
             var isolate = argList.Remove("--isolate");
             var instance = Instance(argList[1], isolate);
             Console.WriteLine($"{instance.Id}：游戏 {instance.McVersion}，加载器 {instance.Loader} {instance.LoaderVersion}");
-            foreach (var m in new ModManager(instance.ModsDir).List())
-                Console.WriteLine($"{(m.Enabled ? "  " : "× ")}{m.Name} | {m.Version} | {m.ModId} | {m.Authors} | {(m.Icon is null ? "无图标" : "有图标")}");
+            // --compat：同时做兼容检查；--quiet 只打印汇总和用时（测性能用）。
+            var compat = argList.Remove("--compat");
+            var quiet = argList.Remove("--quiet");
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var list = new ModManager(instance.ModsDir).List();
+            var listMs = watch.ElapsedMilliseconds;
+            // --twice：同一进程里再扫一遍，看缓存命中后的用时。
+            if (argList.Remove("--twice"))
+            {
+                var again = System.Diagnostics.Stopwatch.StartNew();
+                new ModManager(instance.ModsDir).List();
+                Console.WriteLine($"SCAN-AGAIN {again.ElapsedMilliseconds} ms");
+            }
+            // 和模组页一样只按启用的模组算前置和 Connector，禁用的不检查。
+            var enabled = list.Where(m => m.Enabled).ToList();
+            var ids = new HashSet<string>(enabled.SelectMany(m => m.Requirements?.Ids ?? []), StringComparer.OrdinalIgnoreCase);
+            var connector = ConnectorInstaller.IsInstalled(enabled.Select(m => m.Requirements));
+            var results = list.Select(m => compat && m.Enabled ? ModCompat.Check(m.Requirements, instance.Loader, instance.McVersion, ids, connector) : null).ToList();
+            var compatMs = watch.ElapsedMilliseconds - listMs;
+            var problems = results.Count(r => r?.IsProblem == true);
+            if (!quiet)
+                foreach (var (m, result) in list.Zip(results))
+                    Console.WriteLine($"{(m.Enabled ? "  " : "× ")}{m.Name} | {m.Version} | {m.ModId} | {m.Authors} | {(m.Icon is null ? "无图标" : "有图标")}{(result is null ? "" : " | " + result.Text)}");
+            Console.WriteLine($"SCAN {list.Count} 个模组：读元数据 {listMs} ms，兼容检查 {compatMs} ms，问题 {problems} 个");
+            break;
+        }
+        case "prewarm":
+        {
+            // Connector 预处理：列出还没转换的 Fabric 模组，启动一次游戏转换完就结束。
+            var isolate = argList.Remove("--isolate");
+            var instance = Instance(argList[1], isolate);
+            var pending = ConnectorWarmup.Pending(instance.WorkDir, new ModManager(instance.ModsDir).List(), instance.Loader);
+            Console.WriteLine($"PENDING {pending.Count}：{string.Join("、", pending.Select(m => m.FileName))}");
+            if (pending.Count == 0) break;
+            await installer.CompleteAsync(instance.Id, null, cts.Token);
+            // 和启动器一样按这个版本的设置启动（命令行没有全局设置，只用版本自己的）。
+            var settings = InstanceSettings.Load(dir, instance.Id);
+            if (isolate) settings.Isolate = true;
+            var java = !string.IsNullOrEmpty(settings.JavaPath) && File.Exists(settings.JavaPath)
+                ? settings.JavaPath
+                : await javaManager.ForVersionAsync(dir.ResolveVersion(instance.Id), cts.Token);
+            var options = settings.ToLaunchOptions(dir, instance.Id, java, OfflineAccount.Create("Player"), []);
+            var result = await ConnectorWarmup.RunAsync(new GameLauncher(dir), options, new SyncProgress<string>(Console.WriteLine), TimeSpan.FromMinutes(15), cts.Token);
+            Console.WriteLine($"WARMUP {(result.Done ? "DONE" : "FAIL")} {result.Detail}");
+            var left = ConnectorWarmup.Pending(instance.WorkDir, new ModManager(instance.ModsDir).List(), instance.Loader);
+            Console.WriteLine($"PENDING-AFTER {left.Count}");
             break;
         }
         case "check-updates" or "update-mods":
@@ -377,6 +421,7 @@ try
             var authlib = TakeOption(argList, "--authlib");
             var joinServer = TakeOption(argList, "--server");
             var joinWorld = TakeOption(argList, "--world");
+            var extraJvm = TakeOption(argList, "--jvm");
 
             await installer.CompleteAsync(id, null, cts.Token);
             var version = dir.ResolveVersion(id);
@@ -392,6 +437,7 @@ try
                 WorkingDirectory = isolate ? dir.VersionDir(id) : null,
                 JoinServer = joinServer,
                 JoinWorld = joinWorld,
+                ExtraJvmArgs = ArgumentSplitter.Split(extraJvm),
             };
             if (authlib is not null)
             {

@@ -17,8 +17,7 @@ public static class ConnectorInstaller
     {
         if (instance.Loader is not ("forge" or "neoforge")) return null;
         var files = await modrinth.GetFilesAsync(ModCompat.ConnectorProject, instance.McVersion, instance.Loader, ct);
-        var latest = files.FirstOrDefault(f => f.IsRelease) ?? files.FirstOrDefault();
-        if (latest is null) return null;
+        if (files.PickPreferred() is not { } latest) return null;
         return await installer.ResolveAsync(latest, instance, installedProjects, ct);
     }
 
@@ -40,7 +39,8 @@ public static class ConnectorInstaller
         }
         var skip = new HashSet<string>(installedProjects ?? new HashSet<string>(), StringComparer.Ordinal) { FabricApiProjectId };
         foreach (var f in files) skip.Add(f.ProjectId);
-        var mod = await installer.ResolveAsync(fabricFile, AsFabric(instance), skip, ct);
+        // 前置（比如 Cloth Config）有原生的 Forge / NeoForge 版就用原生版，没有再用 Fabric 版；各自的下一层依赖也按选中的那个版本展开。
+        var mod = await installer.ResolveAsync(fabricFile, instance, skip, ct, [instance.Loader, "fabric"]);
         files.AddRange(mod.Files.Where(f => files.All(x => x.ProjectId != f.ProjectId)));
         problems.AddRange(mod.Problems);
         problems.Add("Fabric 模组经 Sinytra Connector 运行，不是每个都能用；进不去游戏时先禁用它");
@@ -57,9 +57,7 @@ public static class ConnectorInstaller
         var identified = await modrinth.IdentifyBySha1Async([sha1], ct);
         if (!identified.TryGetValue(sha1, out var current)) return null;
         var files = await modrinth.GetFilesAsync(current.ProjectId, instance.McVersion, instance.Loader, ct);
-        return files.FirstOrDefault(f => f.IsRelease) ?? files.FirstOrDefault();
+        return files.PickPreferred();
     }
 
-    /// <summary>Fabric 模组本身的依赖：Fabric API 由 Forgified Fabric API 顶替，其余按 Fabric 版解析。</summary>
-    public static GameInstance AsFabric(GameInstance instance) => instance with { Loader = "fabric" };
 }

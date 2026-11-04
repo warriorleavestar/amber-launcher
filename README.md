@@ -45,6 +45,8 @@
 - 管理实例里的模组，以及每个世界的数据包（启用、禁用、删除）
 - 模组兼容检查：读每个模组声明的加载器、游戏版本和前置，标出装错的，一键找对应版本
 - Fabric 模组上 Forge / NeoForge：可以自动装开源的 Sinytra Connector 和 Forgified Fabric API（不是每个 Fabric 模组都能用）；Quilt 实例直接用 Fabric 模组
+- Connector 预先处理：提前把 Fabric 模组转换好，之后启动不用再等
+- 模组多也读得快：几百个模组的文件夹不到 1 秒，没变的再次打开只要几毫秒
 
 ### 游戏管理与崩溃分析
 

@@ -38,7 +38,7 @@ public sealed partial class ModItem(LocalMod mod) : ObservableObject
     [NotifyPropertyChangedFor(nameof(CompatText), nameof(HasCompatProblem), nameof(CanFindMatching))]
     public partial CompatResult? Compat { get; set; }
 
-    public ModRequirements? Requirements { get; set; }
+    public ModRequirements? Requirements => Mod.Requirements;
     public string CompatText => Compat is null || Compat.Level == CompatLevel.Ok && Compat.Text == "匹配" ? "" : Compat.Text;
     public bool HasCompatProblem => Compat?.IsProblem == true;
 
@@ -315,29 +315,90 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
     }
 
+    /// <summary>离线身份的启动参数（预处理和导出脚本用），其余和正式启动一样。</summary>
+    private async Task<LaunchOptions> OfflineLaunchOptionsAsync(GameInstance c, CancellationToken ct)
+    {
+        var settings = _service.EffectiveSettings(c.Id);
+        var version = _service.Directory.ResolveVersion(c.Id);
+        var java = !string.IsNullOrEmpty(settings.JavaPath) && File.Exists(settings.JavaPath) ? settings.JavaPath : await _service.Java.ForVersionAsync(version, ct);
+        var account = _service.Accounts.Store.Selected;
+        var session = account is { Kind: AccountKind.Offline } ? OfflineAccount.Create(account.Name) : OfflineAccount.Create("Player");
+        return _service.BaseLaunchOptions(c.Id, java, session, []);
+    }
+
+    [ObservableProperty] public partial string ConnectorPendingText { get; set; } = "";
+    [ObservableProperty] public partial bool HasConnectorPending { get; set; }
+
+    private void RecheckConnectorPending(bool connectorInstalled)
+    {
+        if (Current is not { } c) return;
+        if (!connectorInstalled)
+        {
+            // 还没装 Connector 时由“安装 Sinytra Connector”那一行提示，这里不用算。
+            HasConnectorPending = false;
+            ConnectorPendingText = "";
+            return;
+        }
+        // 连续勾选时只认最后一次的结果：旧的还在算的作废，算完也不会盖掉新的。
+        _pendingCheck?.Cancel();
+        var cts = _pendingCheck = new CancellationTokenSource();
+        var mods = Mods.Select(m => m.Mod).ToList();
+        _ = UpdateAsync();
+
+        async Task UpdateAsync()
+        {
+            List<LocalMod> pending;
+            try
+            {
+                pending = await Task.Run(() => ConnectorWarmup.Pending(c.WorkDir, mods, c.Loader), cts.Token);
+            }
+            catch (Exception e) when (e is OperationCanceledException or IOException or UnauthorizedAccessException)
+            {
+                return;
+            }
+            // await 之后回到界面线程。
+            if (cts.IsCancellationRequested || Current != c) return;
+            HasConnectorPending = pending.Count > 0;
+            ConnectorPendingText = pending.Count == 0 ? "" :
+                $"{pending.Count} 个 Fabric 模组还没被 Connector 转换过（{string.Join("、", pending.Take(3).Select(m => m.Name))}{(pending.Count > 3 ? "……" : "")}），第一次启动会慢一些。";
+        }
+    }
+
+    private CancellationTokenSource? _pendingCheck;
+
+    /// <summary>预先处理：启动一次游戏，等 Connector 转换完就结束，下次正式启动就快了。</summary>
+    [RelayCommand]
+    private async Task PrewarmConnectorAsync()
+    {
+        if (Current is not { } c) return;
+        if (_service.IsRunningIn(c.WorkDir))
+        {
+            // 同一个目录同时跑两个游戏，两边的 Connector 会一起写缓存。
+            Status = "这个实例（或同一个游戏目录里的版本）正在运行，关掉游戏后再预先处理。";
+            return;
+        }
+        await RunWorkAsync(async ct =>
+        {
+            using var running = _service.MarkRunning(c.WorkDir);
+            Status = "正在检查游戏文件……";
+            await _service.Installer.CompleteAsync(c.Id, null, ct);
+            Status = "正在启动游戏做预处理（会短暂出现游戏的加载窗口，处理完自动关闭）……";
+            var options = await OfflineLaunchOptionsAsync(c, ct);
+            var result = await ConnectorWarmup.RunAsync(new GameLauncher(_service.Directory), options,
+                new Progress<string>(p => Status = p), TimeSpan.FromMinutes(15), ct);
+            Status = result.Done ? result.Detail + "，下次启动就不用再转换了。" : "预处理没完成：" + result.Detail;
+        });
+        RecheckCompat();
+    }
+
     public async Task ExportLaunchScriptAsync(string path)
     {
         if (Current is not { } c) return;
         await RunWorkAsync(async ct =>
         {
-            var settings = _service.EffectiveSettings(c.Id);
-            var version = _service.Directory.ResolveVersion(c.Id);
-            var java = !string.IsNullOrEmpty(settings.JavaPath) && File.Exists(settings.JavaPath) ? settings.JavaPath : await _service.Java.ForVersionAsync(version, ct);
-            var account = _service.Accounts.Store.Selected;
-            var session = account is { Kind: AccountKind.Offline } ? OfflineAccount.Create(account.Name) : OfflineAccount.Create("Player");
-            var args = new GameLauncher(_service.Directory).BuildArguments(new LaunchOptions
-            {
-                VersionId = c.Id,
-                JavaPath = java,
-                Session = session,
-                MaxMemoryMb = settings.MaxMemoryMb ?? 4096,
-                WorkingDirectory = c.WorkDir,
-                ExtraJvmArgs = ArgumentSplitter.Split(settings.JvmArgs),
-                ExtraGameArgs = ArgumentSplitter.Split(settings.GameArgs),
-                WindowWidth = settings.WindowWidth,
-                WindowHeight = settings.WindowHeight,
-            });
-            Toolbox.WriteLaunchScript(path, java, c.WorkDir, args, session.AccessToken);
+            var options = await OfflineLaunchOptionsAsync(c, ct);
+            var args = new GameLauncher(_service.Directory).BuildArguments(options);
+            Toolbox.WriteLaunchScript(path, options.JavaPath, c.WorkDir, args, options.Session.AccessToken);
             Status = "启动脚本已导出（离线身份）：" + path;
         });
     }
@@ -462,15 +523,19 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     private void LoadMods() => _ = LoadModsAsync();
 
+    private int _modsGeneration;
+
     private async Task LoadModsAsync()
     {
         if (Current is not { } c) return;
+        // 快速切换实例或连续刷新时，只用最后一次读的结果；旧的读完不再往列表里加（否则会混进别的实例的模组、重复显示）。
+        var generation = ++_modsGeneration;
         Mods.Clear();
         var list = await Task.Run(() => new ModManager(c.ModsDir).List());
-        var requirements = await Task.Run(() => list.ToDictionary(m => m.Path, m => ModCompat.Read(m.Path)));
+        if (generation != _modsGeneration || Current != c) return;
         foreach (var mod in list)
         {
-            var item = new ModItem(mod) { Requirements = requirements[mod.Path], EnabledChanged = RecheckCompat };
+            var item = new ModItem(mod) { EnabledChanged = RecheckCompat };
             Mods.Add(item);
             if (mod.Icon is { } icon) _ = DecodeIconAsync(item, icon);
         }
@@ -491,6 +556,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         var problems = Mods.Count(m => m.HasCompatProblem);
         NeedsConnector = !connector && Mods.Any(m => m.Compat?.Level == CompatLevel.NeedsConnector);
         CompatSummary = problems == 0 ? (Mods.Count > 0 ? "全部匹配这个实例" : "") : $"{problems} 个模组和这个实例不匹配，看下面标出的原因";
+        RecheckConnectorPending(connector);
     }
 
     [RelayCommand]

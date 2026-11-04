@@ -47,6 +47,8 @@ Amber needs 64-bit Windows 10 or later. You don't need to set up Java either: Am
 - Manage the mods in each instance and the data packs in each world (enable, disable, delete)
 - Mod compatibility check: reads each mod's declared loader, game version and dependencies, flags mismatches and finds the matching version in one click
 - Fabric mods on Forge / NeoForge via the open-source Sinytra Connector and Forgified Fabric API, installed automatically (not every Fabric mod works); Quilt instances use Fabric mods directly
+- Connector pre-processing: convert Fabric mods ahead of time so later launches skip the wait
+- Fast mod scanning: a folder of a few hundred mods reads in under a second, and unchanged folders reopen in milliseconds
 
 ### Game management and crash analysis
 

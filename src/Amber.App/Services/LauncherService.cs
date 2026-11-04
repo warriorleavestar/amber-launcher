@@ -110,6 +110,31 @@ public sealed class LauncherService : IDisposable
 
     public string WorkDirFor(string id) => EffectiveSettings(id).Isolate == true ? Directory.VersionDir(id) : Directory.Root;
 
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _runningDirs = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>记下这个游戏目录里有游戏在运行（启动页的正式启动、实例页的预处理），Dispose 时去掉。</summary>
+    public IDisposable MarkRunning(string workDir)
+    {
+        var key = Path.GetFullPath(workDir);
+        _runningDirs.AddOrUpdate(key, 1, (_, n) => n + 1);
+        return new RunningMark(() => _runningDirs.AddOrUpdate(key, 0, (_, n) => n - 1));
+    }
+
+    public bool IsRunningIn(string workDir) => _runningDirs.TryGetValue(Path.GetFullPath(workDir), out var n) && n > 0;
+
+    private sealed class RunningMark(Action release) : IDisposable
+    {
+        private int _done;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _done, 1) == 0) release();
+        }
+    }
+
+    /// <summary>按这个版本的有效设置（版本设置盖在全局设置上）生成启动参数。</summary>
+    public LaunchOptions BaseLaunchOptions(string id, string javaPath, GameSession session, IReadOnlyList<string> sessionJvmArgs) =>
+        EffectiveSettings(id).ToLaunchOptions(Directory, id, javaPath, session, sessionJvmArgs);
+
     public GameInstance GetInstance(string id) => GameInstance.Detect(Directory, id, WorkDirFor(id));
 
     /// <summary>整合包的文件都在版本目录里，这个版本必须固定开启隔离。</summary>

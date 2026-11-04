@@ -5,13 +5,26 @@ using System.Text.RegularExpressions;
 
 namespace Amber.Core.Content;
 
-/// <summary>一个模组 jar 写明支持的加载器、游戏版本要求和必需依赖。</summary>
+/// <summary>某个加载器的元数据里写的要求：游戏版本范围（fabric 或 maven 语法）和必需前置。</summary>
+public sealed record LoaderRequirement(string? MinecraftRange, string Syntax, IReadOnlyList<string> RequiredDeps);
+
+/// <summary>
+/// 一个模组 jar 写明支持的加载器、模组 id 和各加载器下的要求。
+/// 很多模组一个 jar 同时带 Fabric 和 Forge / NeoForge 的元数据，各自的版本范围和前置不同，要分开看。
+/// </summary>
 public sealed record ModRequirements(
     IReadOnlySet<string> Loaders,
     IReadOnlyList<string> Ids,
-    string? MinecraftRange,
-    string MinecraftRangeSyntax,
-    IReadOnlyList<string> RequiredDeps);
+    IReadOnlyDictionary<string, LoaderRequirement> PerLoader)
+{
+    /// <summary>实例用这个加载器时该看哪一份元数据。</summary>
+    public LoaderRequirement? For(string loader) => loader switch
+    {
+        "quilt" => PerLoader.GetValueOrDefault("quilt") ?? PerLoader.GetValueOrDefault("fabric"),
+        "neoforge" => PerLoader.GetValueOrDefault("neoforge") ?? PerLoader.GetValueOrDefault("forge"),
+        _ => PerLoader.GetValueOrDefault(loader),
+    };
+}
 
 public enum CompatLevel { Ok, ViaConnector, NeedsConnector, WrongLoader, WrongVersion, MissingDeps, Unknown }
 
@@ -53,77 +66,91 @@ public static partial class ModCompat
     /// 读一个 jar 的元数据。nested 为真时，再看 META-INF/jarjar/metadata.json 里列出的内嵌 jar（只看一层）：
     /// Sinytra Connector 这类“外壳”jar 自己没有元数据，真正的模组 id 在内嵌 jar 里。
     /// </summary>
-    private static ModRequirements? ReadZip(ZipArchive zip, bool nested)
+    internal static ModRequirements? ReadZip(ZipArchive zip, bool nested)
     {
-        {
-            var loaders = new HashSet<string>(StringComparer.Ordinal);
-            var ids = new List<string>();
-            var deps = new List<string>();
-            string? mc = null;
-            var syntax = "fabric";
+        var loaders = new HashSet<string>(StringComparer.Ordinal);
+        var ids = new List<string>();
+        var per = new Dictionary<string, LoaderRequirement>(StringComparer.Ordinal);
 
-            if (ReadJson(zip, "fabric.mod.json") is JsonObject fabric)
+        if (ReadJson(zip, "fabric.mod.json") is JsonObject fabric)
+        {
+            loaders.Add("fabric");
+            AddId(ids, fabric["id"]);
+            foreach (var p in fabric["provides"] as JsonArray ?? []) AddId(ids, p);
+            string? mc = null;
+            var deps = new List<string>();
+            if (fabric["depends"] is JsonObject depends)
             {
-                loaders.Add("fabric");
-                AddId(ids, fabric["id"]);
-                foreach (var p in fabric["provides"] as JsonArray ?? []) AddId(ids, p);
-                if (fabric["depends"] is JsonObject depends)
+                foreach (var (key, value) in depends)
                 {
-                    foreach (var (key, value) in depends)
-                    {
-                        if (key == "minecraft") mc = Range(value);
-                        else if (!Builtin.Contains(key)) deps.Add(key);
-                    }
+                    if (key == "minecraft") mc = Range(value);
+                    else if (!Builtin.Contains(key)) deps.Add(key);
                 }
             }
-            if (ReadJson(zip, "quilt.mod.json")?["quilt_loader"] is JsonObject quilt)
-            {
-                loaders.Add("quilt");
-                AddId(ids, quilt["id"]);
-                foreach (var d in quilt["depends"] as JsonArray ?? [])
-                {
-                    var id = d is JsonValue ? Str(d) : Str(d?["id"]);
-                    if (id is null) continue;
-                    if (id == "minecraft") mc ??= d is JsonObject o ? Range(o["versions"]) : null;
-                    else if (!Builtin.Contains(id) && d?["optional"]?.GetValue<bool>() != true) deps.Add(id);
-                }
-            }
-            foreach (var (entry, loader) in new[] { ("META-INF/neoforge.mods.toml", "neoforge"), ("META-INF/mods.toml", "forge") })
-            {
-                if (zip.GetEntry(entry) is not { } e) continue;
-                loaders.Add(loader);
-                using var reader = new StreamReader(e.Open());
-                var toml = reader.ReadToEnd();
-                foreach (Match m in TomlModId().Matches(toml)) if (!ids.Contains(m.Groups[1].Value)) ids.Add(m.Groups[1].Value);
-                foreach (var dep in TomlDependencies(toml))
-                {
-                    if (dep.Id == "minecraft") { mc ??= dep.Range; syntax = mc == dep.Range ? "maven" : syntax; }
-                    else if (dep.Required && !Builtin.Contains(dep.Id)) deps.Add(dep.Id);
-                }
-            }
-            if (loaders.Count == 0 && zip.GetEntry("mcmod.info") is not null) loaders.Add("forge-legacy");
-            if (nested && ReadJson(zip, "META-INF/jarjar/metadata.json")?["jars"] is JsonArray jars)
-            {
-                var hadOwn = loaders.Count > 0;
-                foreach (var jar in jars)
-                {
-                    if (Str(jar?["path"]) is not { } inner || zip.GetEntry(inner) is not { } entry) continue;
-                    try
-                    {
-                        using var memory = new MemoryStream();
-                        using (var s = entry.Open()) s.CopyTo(memory);
-                        memory.Position = 0;
-                        using var innerZip = new ZipArchive(memory, ZipArchiveMode.Read);
-                        if (ReadZip(innerZip, nested: false) is not { } child) continue;
-                        foreach (var id in child.Ids) if (!ids.Contains(id)) ids.Add(id);
-                        if (!hadOwn) loaders.UnionWith(child.Loaders);
-                    }
-                    catch (InvalidDataException) { }
-                }
-            }
-            if (loaders.Count == 0) return null;
-            return new ModRequirements(loaders, ids.Distinct().ToList(), mc, syntax, deps.Distinct().ToList());
+            per["fabric"] = new LoaderRequirement(mc, "fabric", deps);
         }
+        if (ReadJson(zip, "quilt.mod.json")?["quilt_loader"] is JsonObject quilt)
+        {
+            loaders.Add("quilt");
+            AddId(ids, quilt["id"]);
+            string? mc = null;
+            var deps = new List<string>();
+            foreach (var d in quilt["depends"] as JsonArray ?? [])
+            {
+                var id = d is JsonValue ? Str(d) : Str(d?["id"]);
+                if (id is null) continue;
+                if (id == "minecraft") mc ??= d is JsonObject o ? Range(o["versions"]) : null;
+                else if (!Builtin.Contains(id) && d?["optional"]?.GetValue<bool>() != true) deps.Add(id);
+            }
+            per["quilt"] = new LoaderRequirement(mc, "fabric", deps);
+        }
+        foreach (var (entry, loader) in new[] { ("META-INF/neoforge.mods.toml", "neoforge"), ("META-INF/mods.toml", "forge") })
+        {
+            if (zip.GetEntry(entry) is not { } e) continue;
+            loaders.Add(loader);
+            using var reader = new StreamReader(e.Open());
+            var toml = reader.ReadToEnd();
+            foreach (Match m in TomlModId().Matches(toml)) if (!ids.Contains(m.Groups[1].Value)) ids.Add(m.Groups[1].Value);
+            string? mc = null;
+            var deps = new List<string>();
+            foreach (var dep in TomlDependencies(toml))
+            {
+                if (dep.Id == "minecraft") mc ??= dep.Range;
+                else if (dep.Required && !Builtin.Contains(dep.Id)) deps.Add(dep.Id);
+            }
+            per[loader] = new LoaderRequirement(mc, "maven", deps.Distinct().ToList());
+        }
+        if (loaders.Count == 0 && zip.GetEntry("mcmod.info") is not null) loaders.Add("forge-legacy");
+        if (nested)
+        {
+            // 有 metadata.json 就按它列的；老一点的（比如 1.20.1 的 Connector）没有，就看 META-INF/jarjar/ 下所有 jar。
+            var paths = ReadJson(zip, "META-INF/jarjar/metadata.json")?["jars"] is JsonArray listed
+                ? listed.Select(j => Str(j?["path"])).OfType<string>().ToList()
+                : zip.Entries.Where(e => e.FullName.StartsWith("META-INF/jarjar/", StringComparison.Ordinal) && e.FullName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase)).Select(e => e.FullName).ToList();
+            var hadOwn = loaders.Count > 0;
+            foreach (var inner in paths)
+            {
+                // 只读模组 id，太大的内嵌 jar（几十 MB 的库）跳过，免得整个读进内存。
+                if (zip.GetEntry(inner) is not { } entry || entry.Length > 32 * 1024 * 1024) continue;
+                try
+                {
+                    using var memory = new MemoryStream();
+                    using (var s = entry.Open()) s.CopyTo(memory);
+                    memory.Position = 0;
+                    using var innerZip = new ZipArchive(memory, ZipArchiveMode.Read);
+                    if (ReadZip(innerZip, nested: false) is not { } child) continue;
+                    foreach (var id in child.Ids) if (!ids.Contains(id)) ids.Add(id);
+                    if (!hadOwn)
+                    {
+                        loaders.UnionWith(child.Loaders);
+                        foreach (var (k, v) in child.PerLoader) per.TryAdd(k, v);
+                    }
+                }
+                catch (InvalidDataException) { }
+            }
+        }
+        if (loaders.Count == 0) return null;
+        return new ModRequirements(loaders, ids.Distinct().ToList(), per);
     }
 
     private static void AddId(List<string> ids, JsonNode? node)
@@ -171,16 +198,8 @@ public static partial class ModCompat
     {
         if (mod is null) return new CompatResult(CompatLevel.Unknown, "读不到模组信息");
         var loader = instanceLoader ?? "vanilla";
-        var nativeOk = loader switch
-        {
-            "fabric" => mod.Loaders.Contains("fabric"),
-            "quilt" => mod.Loaders.Contains("quilt") || mod.Loaders.Contains("fabric"),
-            "forge" => mod.Loaders.Contains("forge") || mod.Loaders.Contains("forge-legacy"),
-            // NeoForge 1.20.1 就是 Forge；之后也还认 mods.toml 的老包，但不保证。
-            "neoforge" => mod.Loaders.Contains("neoforge") || mod.Loaders.Contains("forge"),
-            _ => false,
-        };
-        var viaConnector = !nativeOk && loader is "forge" or "neoforge" && mod.Loaders.Contains("fabric");
+        var nativeOk = IsNative(mod, loader);
+        var viaConnector = RunsViaConnector(mod, loader);
 
         if (loader == "vanilla") return new CompatResult(CompatLevel.WrongLoader, "这个版本没装加载器，模组不会生效");
         if (!nativeOk && !viaConnector)
@@ -190,9 +209,11 @@ public static partial class ModCompat
                 ? $"这是 {LoaderNames(mod)} 模组，Fabric / Quilt 上没有可靠的办法运行 Forge 模组"
                 : $"这是 {LoaderNames(mod)} 模组，和这个实例的 {loader} 不匹配");
         }
-        if (mod.MinecraftRange is { } range && !VersionMatches(mcVersion, range, mod.MinecraftRangeSyntax))
+        // 只看实例实际会用的那份元数据（同一个 jar 里 Fabric 和 Forge 的要求可能不同）。
+        var req = mod.For(viaConnector ? "fabric" : loader);
+        if (req?.MinecraftRange is { } range && !VersionMatches(mcVersion, range, req.Syntax))
             return new CompatResult(CompatLevel.WrongVersion, $"需要游戏版本 {range}，这个实例是 {mcVersion}");
-        var missing = mod.RequiredDeps.Where(d => !installedIds.Contains(d) && !(viaConnector && d is "fabric-api" or "fabric")).ToList();
+        var missing = (req?.RequiredDeps ?? []).Where(d => !installedIds.Contains(d) && !(viaConnector && (d is "fabric-api" or "fabric" || HasNativeAlias(d, installedIds)))).ToList();
         if (missing.Count > 0) return new CompatResult(CompatLevel.MissingDeps, "缺少前置：" + string.Join("、", missing));
         if (viaConnector)
             return hasConnector
@@ -201,6 +222,33 @@ public static partial class ModCompat
         if (loader == "quilt" && !mod.Loaders.Contains("quilt")) return new CompatResult(CompatLevel.Ok, "Fabric 模组，Quilt 直接支持");
         return new CompatResult(CompatLevel.Ok, "匹配");
     }
+
+    /// <summary>
+    /// 经 Connector 运行时，Fabric 模组要的前置可以由原生 Forge / NeoForge 版满足，而两边的模组 id 常常只差连字符和下划线
+    /// （Fabric 上是 cloth-config，NeoForge 上是 cloth_config）；Connector 自己也按这类别名对应。
+    /// </summary>
+    internal static bool HasNativeAlias(string fabricId, IReadOnlySet<string> installedIds)
+    {
+        var key = AliasKey(fabricId);
+        return installedIds.Any(id => AliasKey(id) == key);
+    }
+
+    private static string AliasKey(string id) => id.Replace("-", "", StringComparison.Ordinal).Replace("_", "", StringComparison.Ordinal).ToLowerInvariant();
+
+    /// <summary>这个加载器能直接加载这个模组。</summary>
+    public static bool IsNative(ModRequirements mod, string? loader) => loader switch
+    {
+        "fabric" => mod.Loaders.Contains("fabric"),
+        "quilt" => mod.Loaders.Contains("quilt") || mod.Loaders.Contains("fabric"),
+        "forge" => mod.Loaders.Contains("forge") || mod.Loaders.Contains("forge-legacy"),
+        // NeoForge 1.20.1 就是 Forge；之后也还认 mods.toml 的老包，但不保证。
+        "neoforge" => mod.Loaders.Contains("neoforge") || mod.Loaders.Contains("forge"),
+        _ => false,
+    };
+
+    /// <summary>这个 Fabric 模组在 Forge / NeoForge 上要经 Sinytra Connector 运行。模组页和预处理都按这一条判断。</summary>
+    public static bool RunsViaConnector(ModRequirements mod, string? loader) =>
+        loader is "forge" or "neoforge" && !IsNative(mod, loader) && mod.Loaders.Contains("fabric");
 
     private static string LoaderNames(ModRequirements mod) => string.Join(" / ", mod.Loaders.Select(l => l switch
     {
