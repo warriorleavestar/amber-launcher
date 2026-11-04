@@ -111,7 +111,8 @@ public static partial class JoinTarget
             // 本机解析出私有地址的名字（内网 DNS、hosts 文件）不经出口——出口那边解析出来的多半不是同一台机器。
             if (real.Length > 0 && real.Any(a => !ExitPolicy.IsGloballyRoutable(a))) return Skip($"{host} 在本机解析成了局域网地址，直接连");
             // 只有 IPv6 地址的服务器：出口只转 IPv4，经出口进不去，直接连（和没开转发时一样）。
-            if (real.Length > 0 && !real.Any(IsIPv4)) return Skip(IPv6Only);
+            // 看全部结果（包括假 IP）：代理软件的假 IP 是 IPv4，那种情况按名字交给出口解析。
+            if (addresses.Length > 0 && !addresses.Any(IsIPv4)) return Skip(IPv6Only);
         }
         catch (Exception e) when (e is System.Net.Sockets.SocketException or ArgumentException)
         {

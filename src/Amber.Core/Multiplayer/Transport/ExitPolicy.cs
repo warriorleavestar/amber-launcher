@@ -113,11 +113,13 @@ public sealed partial class ExitPolicy : IDisposable
         catch (OperationCanceledException) { }
     }
 
-    private async Task RefreshPublicAsync(CancellationToken ct)
+    private async Task RefreshPublicAsync(CancellationToken ct, bool onlyIfStale = false)
     {
         await _refreshLock.WaitAsync(ct);
         try
         {
+            // 连接触发的重查：等锁期间后台刚查过（结果还新），就不再查。
+            if (onlyIfStale && IsFresh(MaxPublicIpAge)) return;
             var generation = Volatile.Read(ref _generation);
             var ok = await (Discover ?? (c => DiscoverPublicAddressAsync(_stunServers, c)))(ct);
             // 检查“期间网络没变”和设成可用放在同一把锁里：网络变化（也拿这把锁）不会插在两步中间。
@@ -155,7 +157,7 @@ public sealed partial class ExitPolicy : IDisposable
         Task refresh;
         lock (_lock)
         {
-            if (_inflight is null || _inflight.IsCompleted) _inflight = RefreshPublicAsync(_cts.Token);
+            if (_inflight is null || _inflight.IsCompleted) _inflight = RefreshPublicAsync(_cts.Token, onlyIfStale: true);
             refresh = _inflight;
         }
         try
@@ -164,11 +166,11 @@ public sealed partial class ExitPolicy : IDisposable
         }
         catch (TimeoutException)
         {
-            return false;
+            return IsFresh(MaxPublicIpAge);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return false;
+            return IsFresh(MaxPublicIpAge);
         }
         return IsFresh(MaxPublicIpAge);
     }
@@ -203,7 +205,11 @@ public sealed partial class ExitPolicy : IDisposable
         }
         RefreshLocal();
         // 收集网卡期间开始、按旧网段算的查询也作废。
-        lock (_lock) _generation++;
+        lock (_lock)
+        {
+            _ready = false;
+            _generation++;
+        }
         _failure = null;
         Volatile.Read(ref _wake).TrySetResult();
     }

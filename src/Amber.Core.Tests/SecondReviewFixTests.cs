@@ -38,7 +38,7 @@ public class SecondReviewFixTests
         var serve = Socks5.ServeAsync(server, default, allow: policy.Allows, ensureReady: c => policy.EnsureFreshAsync(TimeSpan.FromSeconds(2), c));
         await Task.Delay(300);   // 连接开着，公网 IP 变旧了
         var e = await Assert.ThrowsAsync<IOException>(() => Socks5.ConnectAsync(client, newIp.ToString(), 25565, default));
-        Assert.Contains("拒绝", e.Message);
+        Assert.StartsWith("出口拒绝连接", e.Message);
         Assert.Equal(1, calls);
         await serve.WaitAsync(TimeSpan.FromSeconds(5));
         a.Dispose();
@@ -120,6 +120,9 @@ public class SecondReviewFixTests
         Assert.Contains("IPv4", skipped);
         static Task<IPAddress[]> Both(string _, CancellationToken __) => Task.FromResult(new[] { IPAddress.Parse("2606:4700::1"), IPAddress.Parse("1.1.1.1") });
         Assert.NotNull(await JoinTarget.ResolveForRelayAsync("both.example.org", default, Both, NoSrv));
+        // 本机代理软件的假 IP（IPv4）加 IPv6：按名字交给出口。
+        static Task<IPAddress[]> FakeAndV6(string _, CancellationToken __) => Task.FromResult(new[] { IPAddress.Parse("198.18.0.7"), IPAddress.Parse("2606:4700::1") });
+        Assert.NotNull(await JoinTarget.ResolveForRelayAsync("tun.example.org", default, FakeAndV6, NoSrv));
         // SRV 指向 IPv6 地址也一样。
         static (string, int)? SrvV6(string _) => ("2606:4700::1", 25570);
         Assert.Null(await JoinTarget.ResolveForRelayAsync("srv.example.org", default, Both, SrvV6));
