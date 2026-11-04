@@ -1,3 +1,4 @@
+using Amber.Core.Multiplayer.Transport;
 using System.Collections.ObjectModel;
 using System.Net.Sockets;
 using Amber.App.Services;
@@ -121,6 +122,64 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     }
     public ObservableCollection<PeerItem> ExitCandidates { get; } = [];
 
+    // ---- 数据封装和“仅游戏”转发 ----
+
+    public sealed record TransportChoice(TransportMode Mode, string Label)
+    {
+        public string Detail => TransportProfile.Describe(Mode);
+        public override string ToString() => Label;
+    }
+
+    /// <summary>极端加密要系统支持 ML-KEM（较新的 Windows 11）；不支持时不列出来。</summary>
+    public IReadOnlyList<TransportChoice> TransportChoices { get; } =
+    [
+        new(TransportMode.General, "通用"),
+        new(TransportMode.Minecraft, "MC 专用"),
+        new(TransportMode.High, "高加密"),
+        .. NoiseHandshake.HybridSupported ? [new TransportChoice(TransportMode.Extreme, "极端加密")] : Array.Empty<TransportChoice>(),
+    ];
+
+    /// <summary>开房间时用的封装方式；加入时跟着房间码走。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanDisguise))]
+    public partial TransportChoice SelectedTransport { get; set; }
+
+    [ObservableProperty] public partial bool DisguiseAsMinecraft { get; set; }
+    public bool CanDisguise => SelectedTransport.Mode != TransportMode.General;
+
+    /// <summary>允许房间成员经我的电脑转发游戏流量（只开一个转发服务，不建网卡、不需要管理员权限）。</summary>
+    [ObservableProperty] public partial bool AllowGameProxy { get; set; }
+
+    /// <summary>当前“仅游戏”转发经过的成员（虚拟 IP），空表示没开。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UsingGameProxy), nameof(GameProxyBanner), nameof(CanUseGameProxy))]
+    public partial string GameProxyIp { get; set; } = "";
+
+    public bool UsingGameProxy => GameProxyIp.Length > 0;
+    public string GameProxyBanner => UsingGameProxy
+        ? $"从 Amber 启动的游戏，HTTP 请求（进服务器时的会话校验、皮肤）经 {GameProxyIp} 的电脑和网络出去；启动页填了“进入服务器”时那个服务器也经它连（只转 IPv4）。在游戏里的服务器列表点别的服务器是直接连的；域名在你这边查询；Amber 自己刷新登录不经过它。"
+        : "";
+
+    /// <summary>允许别人经自己转发、但查不到自己公网 IP 时的提示（这时不转发）。</summary>
+    [ObservableProperty] public partial string ExitWarning { get; set; } = "";
+
+    /// <summary>这个房间实际用的封装方式（显示用）。</summary>
+    [ObservableProperty] public partial string TransportText { get; set; } = "";
+
+    private RoomTransport? _transport;
+    private DateTime _joinedAt;
+    /// <summary>这次加入之后连上过房主没有：连上过就不再提示“还没连上房主，检查房间码”。</summary>
+    private bool _hostSeen;
+
+    /// <summary>刚加入或者刚重启了联机组件：从现在开始计时，20 秒还没连上房主才提示。</summary>
+    private void MarkJoinStarted(bool newRoom)
+    {
+        _joinedAt = DateTime.UtcNow;
+        if (newRoom) _hostSeen = false;
+    }
+    /// <summary>当前会话实际用的参数（完整局域网模式下换转发不重启 EasyTier，参数记在这里）。</summary>
+    private EasyTierOptions? _currentOptions;
+
     // ---- 聊天 ----
     public ObservableCollection<ChatLine> ChatLines { get; } = [];
     [ObservableProperty] public partial string ChatInput { get; set; } = "";
@@ -166,6 +225,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     public MultiplayerViewModel(LauncherService service)
     {
         _service = service;
+        SelectedTransport = TransportChoices[0];
         service.GameOutput += OnGameOutput;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
         InitDirect();
@@ -349,6 +409,9 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     /// <summary>自检用：同一个程序里再开一个联机页（扮演加入方）。</summary>
     internal MultiplayerViewModel CreateTestPeer() => new(_service);
 
+    /// <summary>测试用：这个页面自己的“仅游戏”转发（测试里两个页面共用一个 LauncherService）。</summary>
+    internal GameProxy? TestGameProxy => _transport?.Proxy;
+
     /// <summary>测试用：额外的监听地址和对端（两个实例在同一台电脑上直接互连，不经过公共节点）。</summary>
     internal IReadOnlyList<string>? TestListeners { get; set; }
     internal IReadOnlyList<string>? TestPeers { get; set; }
@@ -378,8 +441,11 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             Status = "还没有联机节点：在下面“联机节点”里添加一个（自己搭的，或导入朋友的节点分享码），双方要用同一个节点。";
             return;
         }
-        var room = RoomCode.Create(port.Value);
-        if (!TryStartSession(new EasyTierOptions(room, true, TestPeers ?? _service.MultiplayerPeers, EasyTierArgs.FreeTcpPort(), null, TestListeners, Guid.NewGuid().ToString(), FullLanMode, null, FullLanMode && AllowExitNode))) return;
+        var room = RoomCode.Create(port.Value) with { Tunnel = new TunnelSettings(SelectedTransport.Mode, CanDisguise && DisguiseAsMinecraft) };
+        if (!TryStartSession(new EasyTierOptions(room, true, TestPeers ?? _service.MultiplayerPeers, EasyTierArgs.FreeTcpPort(), null, TestListeners, Guid.NewGuid().ToString(), FullLanMode, null, FullLanMode && AllowExitNode)
+            {
+                AllowProxy = AllowGameProxy,
+            })) return;
         Mode = "host";
         RoomCodeText = room.ToString();
         _room = room;
@@ -401,7 +467,12 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         if (!RoomCode.TryParse(JoinCode, out var room))
         {
-            Status = "房间码格式不对，应该像 AMB-XXXXXXXX-XXXXXXXXXXXX-25565";
+            Status = "房间码格式不对，应该像 AMB-XXXXXXXX-XXXXXXXXXXXX-25565，封装模式的码在 AMB- 后面多一段模式，比如 AMB-T2D-XXXXXXXX-XXXXXXXXXXXX-25565";
+            return;
+        }
+        if (room.Tunnel.Mode == TransportMode.Extreme && !NoiseHandshake.HybridSupported)
+        {
+            Status = "这个房间用的是极端加密，需要系统支持 ML-KEM（较新的 Windows 11），这台电脑不支持。请房主换成“高加密”。";
             return;
         }
         if ((TestPeers ?? _service.MultiplayerPeers).Count == 0)
@@ -409,10 +480,17 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             Status = "还没有联机节点：在下面“联机节点”里添加和房主相同的节点（可以让房主导出节点分享码发给你）。";
             return;
         }
-        var local = FullLanMode ? (int?)null : EasyTierArgs.FreeTcpPort();
-        var chatPort = FullLanMode ? (int?)null : EasyTierArgs.FreeTcpPort();
-        if (!TryStartSession(new EasyTierOptions(room, false, TestPeers ?? _service.MultiplayerPeers, EasyTierArgs.FreeTcpPort(), local, TestListeners, Guid.NewGuid().ToString(), FullLanMode, chatPort, FullLanMode && AllowExitNode))) return;
+        // 封装模式下游戏和聊天都先连本机的 Amber，再封装着发给房主（完整局域网模式也一样）。
+        var wraps = room.Tunnel.Wraps;
+        var local = FullLanMode && !wraps ? (int?)null : EasyTierArgs.FreeTcpPort();
+        var chatPort = FullLanMode && !wraps ? (int?)null : EasyTierArgs.FreeTcpPort();
+        if (!TryStartSession(new EasyTierOptions(room, false, TestPeers ?? _service.MultiplayerPeers, EasyTierArgs.FreeTcpPort(), local, TestListeners, Guid.NewGuid().ToString(), FullLanMode, chatPort, FullLanMode && AllowExitNode)
+            {
+                LocalTunnelPort = wraps && !FullLanMode ? EasyTierArgs.FreeTcpPort() : null,
+                AllowProxy = AllowGameProxy,
+            })) return;
         _room = room;
+        MarkJoinStarted(newRoom: true);
         RestoreChatHistory(room);
         _localChatPort = chatPort;
         ChatStatus = "连上房主后自动进入聊天";
@@ -440,6 +518,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             Status = "联机没有启动：" + e.Message;
             return false;
         }
+        if (!TryStartTransport(options)) return false;
         _sessionCts = new CancellationTokenSource();
         var ipIndex = EasyTierArgs.Build(options).IndexOf("--ipv4");
         MyVirtualIp = options.Tun ? EasyTierArgs.Build(options)[ipIndex + 1] : "";
@@ -447,6 +526,98 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _timer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => _ = RefreshPeersAsync());
         _timer.Start();
         OnPropertyChanged(nameof(CanUseExit));
+        return true;
+    }
+
+    private bool TryStartTransport(EasyTierOptions options)
+    {
+        try
+        {
+            _transport = RoomTransport.Start(options, line => _diag.Add("封装", line));
+            _currentOptions = options;
+        }
+        catch (System.Net.Sockets.SocketException e)
+        {
+            _session?.Dispose();
+            _session = null;
+            Status = $"联机没有启动：封装通道的本机端口 {TunnelSettings.Port} 被占用（{e.Message}）。是不是开着另一个 Amber？";
+            return false;
+        }
+        _service.ActiveGameProxy = _transport.Proxy;
+        GameProxyIp = _transport.Proxy?.ExitIp ?? "";
+        var t = options.Room.Tunnel;
+        TransportText = t.Wraps
+            ? $"数据封装：{TransportChoices.FirstOrDefault(c => c.Mode == t.Mode)?.Label ?? t.Mode.ToString()}{(t.Disguise ? "，伪装成 MC" : "")}。{TransportProfile.Describe(t.Mode)}"
+            : "数据封装：通用（只靠 EasyTier 自带的加密）";
+        OnPropertyChanged(nameof(CanUseGameProxy));
+        return true;
+    }
+
+    private void StopTransport()
+    {
+        var transport = _transport;
+        _transport = null;
+        _service.ActiveGameProxy = null;
+        _currentOptions = null;
+        GameProxyIp = "";
+        TransportText = "";
+        if (transport is not null) _ = transport.DisposeAsync().AsTask();
+    }
+
+    public bool CanUseGameProxy => _session is not null && !UsingGameProxy;
+
+    /// <summary>“仅游戏”转发：游戏经选中成员的网络连服务器、登录。要用新的转发参数重启联机组件（几秒，聊天会自动重连）。</summary>
+    [RelayCommand]
+    private async Task UseGameProxyAsync()
+    {
+        if (SelectedExitPeer is not { } peer || _session is null || _currentOptions is not { } current) return;
+        var options = current with
+        {
+            ProxyExit = peer.Peer.Ip,
+            LocalSocksPort = EasyTierArgs.FreeTcpPort(),
+            LocalExitPort = current.Tun ? null : EasyTierArgs.FreeTcpPort(),
+        };
+        if (await RestartForProxyAsync(options))
+            Status = $"游戏流量会经 {peer.Name}（{peer.Peer.Ip}）的电脑出去。对方要先勾选“允许成员经我的电脑转发游戏流量”。之后从启动页启动游戏生效。";
+    }
+
+    [RelayCommand]
+    private async Task StopGameProxyAsync()
+    {
+        if (_currentOptions is not { } current || !UsingGameProxy) return;
+        if (await RestartForProxyAsync(current with { ProxyExit = null, LocalSocksPort = null, LocalExitPort = null }))
+            Status = "已停止转发游戏流量，之后启动的游戏直接连网。";
+    }
+
+    /// <summary>换“仅游戏”转发的设置：不建网卡时要重启联机组件（转发规则是启动参数）；完整局域网模式下只换 Amber 自己的部分。</summary>
+    private async Task<bool> RestartForProxyAsync(EasyTierOptions options)
+    {
+        if (_transport is { } t)
+        {
+            _transport = null;
+            await t.DisposeAsync();
+        }
+        if (!options.Tun)
+        {
+            _session?.Dispose();
+            try
+            {
+                _session = EasyTierSession.Start(_service.EasyTier, options, Path.Combine(AppSettings.DataDir, "easytier", "run"));
+                _service.ActiveMultiplayer = _session;
+                MarkJoinStarted(newRoom: false);
+            }
+            catch (Exception e) when (e is IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
+            {
+                StopSession();
+                Status = "联机组件没能重启：" + e.Message;
+                return false;
+            }
+        }
+        if (!TryStartTransport(options))
+        {
+            StopSession();
+            return false;
+        }
         return true;
     }
 
@@ -569,6 +740,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (old is EasyTierElevatedSession { HasExited: false } elevated)
         {
             elevated.Restart(options);
+            MarkJoinStarted(newRoom: false);
             return true;
         }
         old.Dispose();
@@ -576,6 +748,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         {
             _session = EasyTierElevatedSession.Start(_service.EasyTier, options, Path.Combine(AppSettings.DataDir, "easytier", "run-lan"));
             _service.ActiveMultiplayer = _session;
+            MarkJoinStarted(newRoom: false);
             return true;
         }
         catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
@@ -621,6 +794,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _refreshing = true;
         try
         {
+            ExitWarning = _transport?.ExitProblem ?? "";
             var peers = await session.PeersAsync();
             TickDirect(peers);
             if (UsingExit) OnPropertyChanged(nameof(ExitBanner));
@@ -637,7 +811,10 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             }
             var host = Peers.FirstOrDefault(p => p.Peer.Ip == EasyTierArgs.HostIp && p.Peer.Cost != "Local");
             TickChat(host is not null);
-            if (IsJoined)
+            if (host is not null) _hostSeen = true;
+            if (IsJoined && host is null && !_hostSeen && DateTime.UtcNow - _joinedAt > TimeSpan.FromSeconds(20))
+                Status = "还没连上房主。请确认房间码完整（包括开头的 AMB- 和模式段），双方用同样的联机节点，而且都是同一版本的 Amber（封装模式需要 v0.5.7 或更新）。";
+            else if (IsJoined)
                 Status = host is null ? "正在连接房主……（第一次可能要十几秒）"
                     : $"已连上房主{(host.Peer.LatencyMs is { } ms ? $"，延迟 {ms:F0} ms" : "")}。在游戏里添加服务器 {JoinAddress}，或点下面的按钮直接进入";
             else if (IsHosting)
@@ -714,6 +891,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         else _session?.Dispose();
         _session = null;
         _service.ActiveMultiplayer = null;
+        StopTransport();
         Peers.Clear();
         if (_room is { } leftRoom) SaveChatHistory(leftRoom);
         _room = null;

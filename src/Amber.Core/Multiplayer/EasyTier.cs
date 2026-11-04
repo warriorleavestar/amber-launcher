@@ -99,7 +99,21 @@ public sealed record EasyTierOptions(
     bool AllowExit = false,
     string? ExitNode = null,
     IReadOnlyList<string>? ExtraArgs = null,
-    IReadOnlyList<(int Local, int Remote)>? ExtraForwards = null);
+    IReadOnlyList<(int Local, int Remote)>? ExtraForwards = null)
+{
+    /// <summary>封装模式下加入方：本机这个端口经 EasyTier 转发到房主的封装端口（游戏和聊天都走它）。</summary>
+    public int? LocalTunnelPort { get; init; }
+    /// <summary>允许房间里的人经自己“仅游戏”转发（只开 SOCKS5，不用建网卡）。</summary>
+    public bool AllowProxy { get; init; }
+    /// <summary>“仅游戏”转发经过的成员（虚拟 IP）。</summary>
+    public string? ProxyExit { get; init; }
+    /// <summary>本机给游戏用的 SOCKS5 端口。</summary>
+    public int? LocalSocksPort { get; init; }
+    /// <summary>不建网卡时：本机这个端口经 EasyTier 转发到出口成员的封装 / SOCKS5 端口。</summary>
+    public int? LocalExitPort { get; init; }
+    /// <summary>直连房间的房主：对加入方提供测速端口。</summary>
+    public bool ServesSpeedTest { get; init; }
+}
 
 public static class EasyTierArgs
 {
@@ -116,8 +130,8 @@ public static class EasyTierArgs
     {
         var args = new List<string>
         {
-            "--network-name", o.Room.NetworkName,
-            "--network-secret", o.Room.Secret,
+            "--network-name", o.Room.EasyTierNetworkName,
+            "--network-secret", o.Room.EasyTierSecret,
             "--ipv4", o.IsHost ? HostIp : Subnet + JoinerHost(o.MachineId),
             "--rpc-portal", $"127.0.0.1:{o.RpcPort}",
             "--hostname", o.IsHost ? "amber-host" : "amber-guest",
@@ -145,12 +159,35 @@ public static class EasyTierArgs
         // EasyTier 默认把出站连接绑到物理网卡上，连本机回环地址会报 10049；节点在本机时（自测、或者节点和游戏在同一台电脑）关掉绑定。
         if (o.Peers.Concat(o.Listeners ?? []).Any(IsLoopback)) args.AddRange(["--bind-device", "false"]);
         if (o.ExtraArgs is { } extra) args.AddRange(extra);
-        if (!o.IsHost && !o.Tun)
+        // 不建网卡时，EasyTier 会把别的成员发到本机虚拟地址的连接交给本机同一端口——不限制的话，
+        // 房间里的人（自己改 EasyTier 参数就行）能连到本机回环上的任何服务，包括 EasyTier 自己的管理端口。
+        // 所以只放行这台电脑在这次联机里真正提供的端口；UDP 都不需要。完整局域网模式本来就是要互通，不限制。
+        if (!o.Tun)
+        {
+            // 端口用逗号连在一个参数里（EasyTier 2.6.4 的写法）。
+            args.AddRange(["--tcp-whitelist", string.Join(',', ServedPorts(o).Select(p => p.ToString(System.Globalization.CultureInfo.InvariantCulture)))]);
+            args.AddRange(["--udp-whitelist", "1"]);
+            args.AddRange(["--rpc-portal-whitelist", "127.0.0.1/32"]);
+        }
+        if (!o.IsHost && !o.Tun && o.Room.Tunnel.Wraps)
+        {
+            // 封装模式：游戏和聊天都由 Amber 先封装，再经这一个转发连到房主的封装端口。
+            var tunnel = o.LocalTunnelPort ?? throw new ArgumentException("加入方需要封装通道的本机转发端口");
+            args.AddRange(["--port-forward", $"tcp://127.0.0.1:{tunnel}/{HostIp}:{Transport.TunnelSettings.Port}"]);
+        }
+        else if (!o.IsHost && !o.Tun)
         {
             var local = o.LocalForwardPort ?? throw new ArgumentException("加入方需要本机转发端口");
             args.AddRange(["--port-forward", $"tcp://127.0.0.1:{local}/{HostIp}:{o.Room.Port}"]);
             // 房间聊天：本机另一个端口转发到房主的聊天服务。
             if (o.LocalChatPort is { } chat) args.AddRange(["--port-forward", $"tcp://127.0.0.1:{chat}/{HostIp}:{RoomChat.Port}"]);
+        }
+        if (!o.Tun && o.ProxyExit is { } proxyExit)
+        {
+            if (!System.Net.IPAddress.TryParse(proxyExit, out _) || !proxyExit.StartsWith(Subnet, StringComparison.Ordinal)) throw new ArgumentException($"转发出口必须是房间里成员的虚拟 IP：{proxyExit}");
+            var exitLocal = o.LocalExitPort ?? throw new ArgumentException("转发需要出口的本机转发端口");
+            var exitPort = o.Room.Tunnel.Wraps ? Transport.TunnelSettings.Port : Transport.TunnelSettings.PlainSocksPort;
+            args.AddRange(["--port-forward", $"tcp://127.0.0.1:{exitLocal}/{proxyExit}:{exitPort}"]);
         }
         if (!o.IsHost)
         {
@@ -158,6 +195,31 @@ public static class EasyTierArgs
         }
         return args;
     }
+
+    /// <summary>
+    /// 这台电脑经 EasyTier 对房间提供的 TCP 端口。房主：封装模式只有封装端口，通用模式是游戏端口和聊天端口；直连房间再加测速端口；
+    /// 允许别人借自己转发时加上转发端口。什么都不提供时放一个不会有人听的端口（列表不能空，空的等于不限制）。
+    /// </summary>
+    public static IReadOnlyList<int> ServedPorts(EasyTierOptions o)
+    {
+        var ports = new SortedSet<int>();
+        if (o.IsHost)
+        {
+            if (o.Room.Tunnel.Wraps) ports.Add(Transport.TunnelSettings.Port);
+            else
+            {
+                ports.Add(o.Room.Port);
+                ports.Add(RoomChat.Port);
+            }
+            if (o.ServesSpeedTest) ports.Add(SpeedTestServer.Port);
+        }
+        if (o.AllowProxy) ports.Add(o.Room.Tunnel.Wraps ? Transport.TunnelSettings.Port : Transport.TunnelSettings.PlainSocksPort);
+        if (ports.Count == 0) ports.Add(1);
+        return [.. ports];
+    }
+
+    /// <summary>这次会话里本机的虚拟 IP。</summary>
+    public static string VirtualIp(EasyTierOptions o) => o.IsHost ? HostIp : Subnet + JoinerHost(o.MachineId);
 
     private static bool IsLoopback(string url) =>
         Uri.TryCreate(url.Trim(), UriKind.Absolute, out var u) && (u.IsLoopback || u.Host == "localhost");

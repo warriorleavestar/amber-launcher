@@ -7,6 +7,8 @@ namespace Amber.Core.Multiplayer;
 /// 联机房间码：AMB-网络名8位-密钥12位-房主端口，例如 AMB-K7Q2M9XD-4HZP8RW2N6TC-25565。
 /// 字母数字用 Crockford Base32（不含 I L O U），手抄时把 I/L 看成 1、O 看成 0 也能认。
 /// 网络名和密钥都只在房主电脑上随机生成，不经过任何 Amber 的服务器。
+/// 房主选了封装模式时，AMB- 后面先写模式段：T模式号（1–3），伪装成 MC 再加 D，例如 AMB-T2D-K7Q2M9XD-4HZP8RW2N6TC-25565。
+/// 放在这个位置是故意的：不认识封装模式的旧版本（v0.5.6 及以前）会直接说房间码格式不对，而不是悄悄按通用模式去连。
 /// </summary>
 public sealed record RoomCode(string Network, string Secret, int Port)
 {
@@ -17,7 +19,28 @@ public sealed record RoomCode(string Network, string Secret, int Port)
     /// <summary>EasyTier 的网络名。加前缀避免和别人在公共节点上手动起的网络撞名。</summary>
     public string NetworkName => "amber-" + Network.ToLowerInvariant();
 
-    public override string ToString() => $"AMB-{Network}-{Secret}-{Port}";
+    /// <summary>
+    /// 给 EasyTier 用的网络名和密钥。封装模式的房间用按模式派生的另一套（HKDF），
+    /// 这样房间码末尾的模式被删掉或改掉的人连 EasyTier 网络都进不来，碰不到房主没封装的端口。通用模式和以前一样。
+    /// </summary>
+    public string EasyTierNetworkName => Tunnel.Wraps
+        ? "amber-" + Convert.ToHexStringLower(HKDF.DeriveKey(HashAlgorithmName.SHA256, Encoding.UTF8.GetBytes(Secret), 8, Encoding.UTF8.GetBytes(NetworkName),
+            Encoding.UTF8.GetBytes($"amber-et-name-v1|{(int)Tunnel.Mode}|{(Tunnel.Disguise ? 1 : 0)}")))
+        : NetworkName;
+
+    public string EasyTierSecret => Tunnel.Wraps
+        ? Convert.ToHexStringLower(HKDF.DeriveKey(HashAlgorithmName.SHA256, Encoding.UTF8.GetBytes(Secret), 32, Encoding.UTF8.GetBytes(NetworkName),
+            Encoding.UTF8.GetBytes($"amber-et-v1|{(int)Tunnel.Mode}|{(Tunnel.Disguise ? 1 : 0)}")))
+        : Secret;
+
+    /// <summary>要在日志里遮掉的密钥（房间密钥和派生出来的 EasyTier 密钥）。</summary>
+    public IReadOnlyList<string> Secrets => Tunnel.Wraps ? [Secret, EasyTierSecret] : [Secret];
+
+    /// <summary>联机和聊天的封装方式，房间里所有人一样。</summary>
+    public Transport.TunnelSettings Tunnel { get; init; } = Transport.TunnelSettings.Default;
+
+    public override string ToString() =>
+        Tunnel.Wraps ? $"AMB-T{(int)Tunnel.Mode}{(Tunnel.Disguise ? "D" : "")}-{Network}-{Secret}-{Port}" : $"AMB-{Network}-{Secret}-{Port}";
 
     public static RoomCode Create(int port)
     {
@@ -40,7 +63,18 @@ public sealed record RoomCode(string Network, string Secret, int Port)
         var upper = text.ToUpperInvariant();
         var start = upper.IndexOf("AMB-", StringComparison.Ordinal);
         if (start < 0) return false;
-        var parts = upper[(start + 4)..].Split('-', 3);
+        var body = upper[(start + 4)..];
+        var tunnel = Transport.TunnelSettings.Default;
+        // 模式段：AMB- 后面第一段如果不是 8 位网络名，就必须是 T1–T3（可选 D），只认半角字符；别的写法一律算格式不对。
+        var firstDash = body.IndexOf('-');
+        if (firstDash is > 0 and < NetworkLength)
+        {
+            var marker = body[..firstDash].Trim();
+            if (marker.Length is < 2 or > 3 || marker[0] != 'T' || marker[1] is < '1' or > '3' || marker.Length == 3 && marker[2] != 'D') return false;
+            tunnel = new Transport.TunnelSettings((Transport.TransportMode)(marker[1] - '0'), marker.Length == 3);
+            body = body[(firstDash + 1)..];
+        }
+        var parts = body.Split('-', 3);
         if (parts.Length != 3) return false;
 
         var network = Normalize(parts[0]);
@@ -48,7 +82,12 @@ public sealed record RoomCode(string Network, string Secret, int Port)
         var digits = new string(parts[2].TakeWhile(char.IsAsciiDigit).ToArray());
         if (network is not { Length: NetworkLength } || secret is not { Length: SecretLength }) return false;
         if (!int.TryParse(digits, out var port) || port is < 1 or > 65535) return false;
-        room = new RoomCode(network, secret, port);
+        // 端口后面紧跟字母数字（被改坏的码）、或者“-T数字”（旧的把模式写在末尾的写法）算格式不对；
+        // 空格、中文、“-thanks”这类粘贴时带上的普通文字可以。
+        var rest = parts[2][digits.Length..];
+        if (rest.Length > 0 && char.IsAsciiLetterOrDigit(rest[0])) return false;
+        if (rest.Length > 2 && rest[0] == '-' && rest[1] == 'T' && char.IsAsciiDigit(rest[2])) return false;
+        room = new RoomCode(network, secret, port) { Tunnel = tunnel };
         return true;
     }
 
