@@ -1,18 +1,19 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Amber.App.ViewModels"
+             xmlns:l="using:Amber.App.Localization"
              xmlns:auth="using:Amber.Core.Auth"
              x:Class="Amber.App.Views.AccountsPage"
              x:DataType="vm:AccountsViewModel">
   <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,Auto">
-    <TextBlock Classes="h1" Text="账号" Grid.ColumnSpan="2" />
+    <TextBlock Classes="h1" Text="{l:T accounts.title}" Grid.ColumnSpan="2" />
 
     <Border Grid.Row="1" Classes="card" Padding="8">
       <!-- 皮肤预览放在列表左边一块固定大小的区域里，不再挤在下面留一大块空白 -->
       <Grid ColumnDefinitions="Auto,*">
         <Border Width="104" Margin="4,4,10,4" VerticalAlignment="Top" IsVisible="{Binding Current.Body, Converter={x:Static ObjectConverters.IsNotNull}}">
           <Image Source="{Binding Current.Body}" Width="96" Height="192" Stretch="Uniform"
-                 RenderOptions.BitmapInterpolationMode="None" ToolTip.Tip="当前账号的皮肤" />
+                 RenderOptions.BitmapInterpolationMode="None" ToolTip.Tip="{l:T accounts.skin.tooltip}" />
         </Border>
         <ListBox Grid.Column="1" ItemsSource="{Binding Accounts}" Background="Transparent">
           <ListBox.ItemTemplate>
@@ -28,13 +29,13 @@
                 <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
                   <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
-                    <TextBlock Text="当前" IsVisible="{Binding IsCurrent}" Foreground="{DynamicResource AmberAccent}" />
+                    <TextBlock Text="{l:T accounts.current.label}" IsVisible="{Binding IsCurrent}" Foreground="{DynamicResource AmberAccent}" />
                   </StackPanel>
                   <TextBlock Text="{Binding KindText}" Classes="hint" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding KindText}" />
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                  <Button Content="使用" Command="{Binding $parent[ListBox].((vm:AccountsViewModel)DataContext).UseCommand}" CommandParameter="{Binding}" />
-                  <Button Content="移除" Command="{Binding $parent[ListBox].((vm:AccountsViewModel)DataContext).RemoveCommand}" CommandParameter="{Binding}" />
+                  <Button Content="{l:T common.use}" Command="{Binding $parent[ListBox].((vm:AccountsViewModel)DataContext).UseCommand}" CommandParameter="{Binding}" />
+                  <Button Content="{l:T common.remove}" Command="{Binding $parent[ListBox].((vm:AccountsViewModel)DataContext).RemoveCommand}" CommandParameter="{Binding}" />
                 </StackPanel>
               </Grid>
             </DataTemplate>
@@ -46,41 +47,41 @@
     <Border Grid.Row="1" Grid.Column="1" Classes="card" Margin="14,0,0,14" Width="320" MinWidth="240">
       <ScrollViewer>
         <StackPanel Spacing="10">
-          <TextBlock Classes="h2" Text="添加账号" Margin="0" />
+          <TextBlock Classes="h2" Text="{l:T accounts.add.title}" Margin="0" />
           <ComboBox ItemsSource="{Binding LoginKinds}" SelectedIndex="{Binding LoginTab}" HorizontalAlignment="Stretch" />
 
           <StackPanel Spacing="10" IsVisible="{Binding IsOfflineTab}">
-            <TextBox Text="{Binding OfflineName}" PlaceholderText="玩家名（3-16 位字母数字下划线）" MaxLength="16" />
-            <Button Classes="amber" Content="添加离线账号" Command="{Binding AddOfflineCommand}" />
-            <TextBlock Classes="hint" Text="离线账号只能进单人和离线模式服务器。" TextWrapping="Wrap" />
+            <TextBox Text="{Binding OfflineName}" PlaceholderText="{l:T accounts.offline.name_placeholder}" MaxLength="16" />
+            <Button Classes="amber" Content="{l:T accounts.offline.add}" Command="{Binding AddOfflineCommand}" />
+            <TextBlock Classes="hint" Text="{l:T accounts.offline.hint}" TextWrapping="Wrap" />
           </StackPanel>
 
           <StackPanel Spacing="10" IsVisible="{Binding IsMicrosoftTab}">
-            <TextBlock Text="Azure 应用 Client ID（可选，留空用内置默认值）" TextWrapping="Wrap" />
+            <TextBlock Text="{l:T accounts.microsoft.client_id_label}" TextWrapping="Wrap" />
             <TextBox Text="{Binding ClientIdInput}" PlaceholderText="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
             <TextBlock Classes="hint"
-                       Text="高级：可以换成你自己的 Azure 应用 Client ID，也可以用环境变量 AMBER_MS_CLIENT_ID。一般不用填。" />
-            <Button Classes="amber" Content="用微软账号登录" Command="{Binding LoginMicrosoftCommand}" />
+                       Text="{l:T accounts.microsoft.client_id_hint}" />
+            <Button Classes="amber" Content="{l:T accounts.microsoft.login}" Command="{Binding LoginMicrosoftCommand}" />
             <Border IsVisible="{Binding HasDeviceCode}" Background="{DynamicResource PageBackground}" CornerRadius="8" Padding="12">
               <StackPanel Spacing="8">
-                <TextBlock Text="在浏览器里输入这个代码：" />
+                <TextBlock Text="{l:T accounts.microsoft.device_code_hint}" />
                 <SelectableTextBlock Text="{Binding DeviceCode}" FontSize="26" FontWeight="Bold" Foreground="{DynamicResource AmberAccent}" />
                 <SelectableTextBlock Text="{Binding DeviceUri}" Classes="hint" TextWrapping="Wrap" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                  <Button Content="打开浏览器" Command="{Binding OpenDeviceUriCommand}" />
-                  <Button Content="取消" Command="{Binding CancelLoginCommand}" />
+                  <Button Content="{l:T accounts.microsoft.open_browser}" Command="{Binding OpenDeviceUriCommand}" />
+                  <Button Content="{l:T common.cancel}" Command="{Binding CancelLoginCommand}" />
                 </StackPanel>
               </StackPanel>
             </Border>
           </StackPanel>
 
           <StackPanel Spacing="10" IsVisible="{Binding IsExternalTab}">
-            <TextBox Text="{Binding ServerUrl}" PlaceholderText="皮肤站地址，例如 littleskin.cn" />
-            <TextBox Text="{Binding ExternalUser}" PlaceholderText="账号或邮箱" />
-            <TextBox Text="{Binding ExternalPassword}" PasswordChar="●" PlaceholderText="密码（只用于这次登录，不保存）" />
-            <Button Classes="amber" Content="登录" Command="{Binding LoginExternalCommand}" />
+            <TextBox Text="{Binding ServerUrl}" PlaceholderText="{l:T accounts.external.server_placeholder}" />
+            <TextBox Text="{Binding ExternalUser}" PlaceholderText="{l:T accounts.external.user_placeholder}" />
+            <TextBox Text="{Binding ExternalPassword}" PasswordChar="●" PlaceholderText="{l:T accounts.external.password_placeholder}" />
+            <Button Classes="amber" Content="{l:T accounts.external.login}" Command="{Binding LoginExternalCommand}" />
             <StackPanel Spacing="8" IsVisible="{Binding NeedsProfileChoice}">
-              <TextBlock Text="选择角色" />
+              <TextBlock Text="{l:T accounts.external.choose_profile}" />
               <ComboBox ItemsSource="{Binding ExternalProfiles}" SelectedItem="{Binding SelectedProfile}" HorizontalAlignment="Stretch">
                 <ComboBox.ItemTemplate>
                   <DataTemplate DataType="auth:ExternalProfile">
@@ -88,9 +89,9 @@
                   </DataTemplate>
                 </ComboBox.ItemTemplate>
               </ComboBox>
-              <Button Content="确定" Command="{Binding ConfirmProfileCommand}" />
+              <Button Content="{l:T common.confirm}" Command="{Binding ConfirmProfileCommand}" />
             </StackPanel>
-            <TextBlock Classes="hint" Text="支持 authlib-injector 协议的皮肤站（LittleSkin、Blessing Skin 等）。" TextWrapping="Wrap" />
+            <TextBlock Classes="hint" Text="{l:T accounts.external.hint}" TextWrapping="Wrap" />
           </StackPanel>
         </StackPanel>
       </ScrollViewer>

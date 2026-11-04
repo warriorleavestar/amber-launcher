@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -60,13 +61,13 @@ public static class AsciiPaths
                 p.WaitForExit(10000);
                 if (Directory.Exists(link))
                 {
-                    log?.Invoke($"路径里有当前系统语言表示不了的字符，改用联接 {link} → {full}");
+                    log?.Invoke(L.F("core.launch.paths.junctionfallback", link, full));
                     return link;
                 }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { }
         }
-        log?.Invoke("路径里有当前系统语言表示不了的字符，而且建不了英文名的联接，游戏可能启动不了");
+        log?.Invoke(L.T("core.launch.paths.junctionunavailable"));
         return full;
     }
 
@@ -99,7 +100,7 @@ public static class AsciiPaths
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
-            log?.Invoke("[Amber] 建不了旧版本用的家目录联接：" + e.Message);
+            log?.Invoke(L.F("core.launch.paths.homejunctionfailed", e.Message));
         }
         return null;
     }

@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core;
 using System.Buffers;
 using System.Collections.Concurrent;
@@ -147,7 +148,7 @@ public sealed class Downloader
             var host = HostOf(url);
             if (!_hostCooldowns.TryGetValue(host, out var current) || current < until) _hostCooldowns[host] = until;
         }
-        throw new HostThrottledException($"{HostOf(url)} 限流了（HTTP {(int)response.StatusCode}）");
+        throw new HostThrottledException(L.F("core.net.download.throttled", HostOf(url), (int)response.StatusCode));
     }
 
     private static string HostOf(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Authority : url;
@@ -190,7 +191,7 @@ public sealed class Downloader
                 NoteFailure(url);
             }
         }
-        throw new HttpRequestException($"所有下载源都失败了：{officialUrl}", last);
+        throw new HttpRequestException(L.F("core.net.download.allsourcesfailed", officialUrl), last);
     }
 
     public async Task DownloadAllAsync(IReadOnlyCollection<DownloadItem> items, IProgress<DownloadProgress>? progress = null, CancellationToken ct = default)
@@ -256,7 +257,7 @@ public sealed class Downloader
         Report(null, true);
 
         if (failures.Count > 0)
-            throw new DownloadException($"{failures.Count} 个文件下载失败，例如 {failures[0].Item1.Url}：{failures[0].Item2.Message}", failures);
+            throw new DownloadException(L.P("core.net.download.filesfailed", failures.Count, failures.Count, failures[0].Item1.Url, failures[0].Item2.Message), failures);
     }
 
     /// <summary>返回实际下载的字节数（跳过则为 0）。</summary>
@@ -320,21 +321,21 @@ public sealed class Downloader
                 }
             }
         }
-        throw last ?? new IOException($"下载失败：{item.Url}");
+        throw last ?? new IOException(L.F("core.net.download.failed", item.Url));
     }
 
     /// <summary>streamedSha1 是下载时顺带算好的；有它就不用把刚写完的文件再读一遍。</summary>
     private static async Task VerifyAsync(DownloadItem item, string temp, string? streamedSha1, CancellationToken ct)
     {
         var info = new FileInfo(temp);
-        if (!info.Exists) throw new InvalidDataException("下载结果不存在");
+        if (!info.Exists) throw new InvalidDataException(L.T("core.net.download.missingresult"));
         if (item.Size is { } size && info.Length != size)
-            throw new InvalidDataException($"文件大小不对（期望 {size}，实际 {info.Length}）");
+            throw new InvalidDataException(L.F("core.net.download.wrongsize", size, info.Length));
         if (item.Sha1 is not null)
         {
             var actual = streamedSha1 ?? await Sha1Async(temp, ct);
             if (!actual.Equals(item.Sha1, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException($"SHA1 不匹配（期望 {item.Sha1}，实际 {actual}）");
+                throw new InvalidDataException(L.F("core.net.download.wrongsha1", item.Sha1, actual));
         }
     }
 
@@ -404,7 +405,7 @@ public sealed class Downloader
             return output.WriteAsync(buffer, token);
         }, onBytes, ct);
         if (response.Content.Headers.ContentLength is { } expected && written != expected)
-            throw new IOException($"连接提前结束（收到 {written}，应有 {expected}）");
+            throw new IOException(L.F("core.net.download.connectionended", written, expected));
         return (written, hash is null ? null : Convert.ToHexStringLower(hash.GetHashAndReset()));
     }
 
@@ -455,7 +456,7 @@ public sealed class Downloader
                         received += delta;
                         onBytes(delta);
                     }, token);
-                    if (position != chunk.End + 1) throw new IOException("分块提前结束");
+                    if (position != chunk.End + 1) throw new IOException(L.T("core.net.download.chunkended"));
 
                     Interlocked.Add(ref written, received);
                     lock (state)
@@ -505,7 +506,7 @@ public sealed class Downloader
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
-                    throw new IOException($"下载卡住了：{StallTimeout.TotalSeconds:F0} 秒没有收到数据");
+                    throw new IOException(L.P("core.net.download.stalled", (long)Math.Round(StallTimeout.TotalSeconds), StallTimeout.TotalSeconds));
                 }
                 if (read == 0) return total;
                 await write(buffer.AsMemory(0, read), ct);
@@ -553,7 +554,7 @@ public sealed class Downloader
         try { File.Delete(path); } catch { /* 临时文件删不掉不影响结果 */ }
     }
 
-    private sealed class RangeNotSupportedException() : IOException("这个下载源不支持分块");
+    private sealed class RangeNotSupportedException() : IOException(L.T("core.net.download.rangenotsupported"));
 
     private sealed class HostThrottledException(string message) : IOException(message);
 

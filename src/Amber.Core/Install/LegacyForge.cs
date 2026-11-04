@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Security.Cryptography;
@@ -57,21 +58,21 @@ public static class LegacyForge
     {
         var dir = ctx.Dir;
         var mc = version.McVersion;
-        progress?.Report(new($"安装原版 {mc}"));
-        await ctx.Vanilla.InstallAsync(mc, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, "下载原版文件", p)), ct);
+        progress?.Report(new(L.F("core.install.loader.installvanilla", mc)));
+        await ctx.Vanilla.InstallAsync(mc, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, L.T("core.install.loader.downloadvanilla"), p)), ct);
         var vanilla = dir.ResolveVersion(mc);
         var vanillaJar = dir.VersionJarPath(vanilla.Jar ?? mc);
-        if (!File.Exists(vanillaJar)) throw new FileNotFoundException("原版客户端 jar 不存在", vanillaJar);
+        if (!File.Exists(vanillaJar)) throw new FileNotFoundException(L.T("core.install.legacyforge.missingclient"), vanillaJar);
 
         var work = Path.Combine(Path.GetTempPath(), "amber-oldforge-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(work);
         try
         {
-            progress?.Report(new("下载 Forge"));
+            progress?.Report(new(L.T("core.install.legacyforge.download")));
             var forgeZip = Path.Combine(work, "forge.zip");
             await DownloadForgeAsync(ctx.Downloader, version.Version, forgeZip, ct);
 
-            progress?.Report(new("合成客户端 jar"));
+            progress?.Report(new(L.T("core.install.legacyforge.mergeclient")));
             var target = dir.VersionJarPath(id);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             MergeJar(vanillaJar, forgeZip, target);
@@ -79,14 +80,14 @@ public static class LegacyForge
             var libs = ReadFmlLibraries(forgeZip, mc);
             if (libs.Count > 0)
             {
-                progress?.Report(new($"下载 FML 需要的 {libs.Count} 个库"));
+                progress?.Report(new(L.P("core.install.legacyforge.downloadlibraries", libs.Count, libs.Count)));
                 var cache = FmlCacheDir(dir.Root);
                 Directory.CreateDirectory(cache);
                 var done = 0;
                 foreach (var lib in libs)
                 {
                     await FetchVerifiedAsync(ctx.Downloader, lib, Path.Combine(cache, lib.Name), ct);
-                    progress?.Report(new($"下载 FML 库 {++done}/{libs.Count}", 100.0 * done / libs.Count));
+                    progress?.Report(new(L.F("core.install.legacyforge.libraryprogress", ++done, libs.Count), 100.0 * done / libs.Count));
                 }
             }
 
@@ -132,7 +133,7 @@ public static class LegacyForge
                 last = e;
             }
         }
-        throw new InvalidDataException($"找不到 Forge {fullVersion} 的 universal 或 client 包：{last?.Message}");
+        throw new InvalidDataException(L.F("core.install.legacyforge.packageunavailable", fullVersion, last?.Message));
     }
 
     /// <summary>新 jar = Forge 包里的全部文件 + 原版 jar 里 Forge 没覆盖的文件；两边的 META-INF 都不要（签名会让改过的类加载失败）。</summary>
@@ -175,7 +176,7 @@ public static class LegacyForge
             var strings = Utf8Constants(memory.ToArray());
             var names = strings.Where(s => s.EndsWith(".jar", StringComparison.Ordinal) && !s.Contains('/') && s.Length > 4).ToList();
             var hashes = strings.Where(IsSha1).ToList();
-            if (names.Count != hashes.Count) throw new InvalidDataException($"读不懂这个 Forge 的库列表（{names.Count} 个文件、{hashes.Count} 个哈希）");
+            if (names.Count != hashes.Count) throw new InvalidDataException(L.F("core.install.legacyforge.invalidlibrarylist", names.Count, hashes.Count));
             result.AddRange(names.Zip(hashes, (n, h) => new FmlLibrary(n, h)));
         }
         foreach (var name in new[] { "fmlversion.properties", "forgeversion.properties" })
@@ -194,7 +195,7 @@ public static class LegacyForge
     /// <summary>读 Java 类文件常量池里的 UTF-8 字符串，按出现顺序。</summary>
     internal static List<string> Utf8Constants(byte[] data)
     {
-        if (data.Length < 10 || BinaryPrimitives.ReadUInt32BigEndian(data) != 0xCAFEBABE) throw new InvalidDataException("不是 Java 类文件");
+        if (data.Length < 10 || BinaryPrimitives.ReadUInt32BigEndian(data) != 0xCAFEBABE) throw new InvalidDataException(L.T("core.install.legacyforge.invalidclass"));
         var count = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(8));
         var result = new List<string>();
         var i = 10;
@@ -213,7 +214,7 @@ public static class LegacyForge
                 case 7 or 8 or 16 or 19 or 20: i += 3; break;
                 case 9 or 10 or 11 or 12 or 17 or 18: i += 5; break;
                 case 15: i += 4; break;
-                default: throw new InvalidDataException($"类文件常量池里有不认识的标记 {tag}");
+                default: throw new InvalidDataException(L.F("core.install.legacyforge.unknownconstant", tag));
             }
         }
         return result;
@@ -230,15 +231,15 @@ public static class LegacyForge
             {
                 await downloader.DownloadOneAsync(new DownloadItem(url, path, lib.Sha1), ct);
                 if (await Sha1Async(path, ct) == lib.Sha1) return;
-                errors.Add($"{url}：内容不对");
+                errors.Add(L.F("core.install.legacyforge.invalidcontent", url));
             }
             catch (Exception e) when (e is HttpRequestException or DownloadException or IOException or InvalidDataException)
             {
-                errors.Add($"{new Uri(url).Host}：{e.Message}");
+                errors.Add(L.F("core.install.legacyforge.mirror_error", new Uri(url).Host, e.Message));
             }
         }
         try { File.Delete(path); } catch (IOException) { }
-        throw new InvalidDataException($"下载不到 FML 需要的 {lib.Name}（{string.Join("；", errors)}）");
+        throw new InvalidDataException(L.F("core.install.legacyforge.librarydownloadfailed", lib.Name, string.Join(L.T("common.error_separator"), errors)));
     }
 
     private static async Task<string> Sha1Async(string path, CancellationToken ct)
@@ -260,7 +261,7 @@ public static class LegacyForge
             var source = Path.Combine(FmlCacheDir(root), lib.Name);
             if (!File.Exists(source))
             {
-                log?.Invoke($"[Amber] 缺少 FML 库 {lib.Name}，请到实例页点“补全文件”或重新安装这个 Forge");
+                log?.Invoke(L.F("core.install.legacyforge.missinglibrary", lib.Name));
                 continue;
             }
             File.Copy(source, target, true);

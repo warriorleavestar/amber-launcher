@@ -6,6 +6,7 @@ using Amber.Core.Content;
 using Amber.Core.Diagnostics;
 using Amber.Core.Install;
 using Amber.Core.Launch;
+using Amber.Core.Localization;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -33,15 +34,15 @@ public sealed partial class HomeViewModel : PageViewModel
             ExtraGameArgs = hasProxyArg ? options.ExtraGameArgs : [.. options.ExtraGameArgs, .. proxy.GameArgs],
         };
         if (!hasProxyArg)
-            _proxyNotes.Add($"[Amber] 仅游戏转发：游戏里的 HTTP 请求（进服务器时的会话校验、皮肤）经 {proxy.ExitIp} 的电脑出去；域名在本机查询，Amber 自己刷新登录不经过它");
+            _proxyNotes.Add(L.F("home.proxy.http_forwarding", proxy.ExitIp));
         else
-            _proxyNotes.Add("[Amber] 游戏参数里已经有你自己写的 --proxyHost：游戏会用你的代理，进服务器时的会话校验不经出口");
+            _proxyNotes.Add(L.T("home.proxy.custom_proxy"));
         if (options.JoinServer is not { Length: > 0 } server) return (options, null);
         // 本机、局域网、本机解析成私有地址的服务器不经出口（出口也会拒绝），游戏照常直连；端口是 25565 时像游戏一样查 SRV。
-        if (await Amber.Core.Multiplayer.Transport.JoinTarget.ResolveForRelayAsync(server, onSkip: reason => _proxyNotes.Add("[Amber] 进服务器不经出口：" + reason)) is not { } plan)
+        if (await Amber.Core.Multiplayer.Transport.JoinTarget.ResolveForRelayAsync(server, onSkip: reason => _proxyNotes.Add(L.T("home.proxy.direct_join") + reason)) is not { } plan)
             return (options, null);
         var relay = proxy.RelayTo(plan);
-        _proxyNotes.Add($"[Amber] 进入 {plan.HandshakeHost} 也经 {proxy.ExitIp} 转发（游戏里显示的地址是本机转发端口 127.0.0.1:{relay.Port}）");
+        _proxyNotes.Add(L.F("home.proxy.server_forwarding", plan.HandshakeHost, proxy.ExitIp, relay.Port));
         return (options with { JoinServer = $"127.0.0.1:{relay.Port}" }, relay);
     }
 
@@ -55,8 +56,22 @@ public sealed partial class HomeViewModel : PageViewModel
     private bool _stoppedByUser;
     private List<string> _lastRunFiles = [];
     private bool _refreshingAccounts;
+    private (string WorkDir, DateTime Started, string[] Output)? _crashInput;
+    /// <summary>每次显示新的崩溃结果（或清掉）加一：换语言的重新分析只在期间没有新结果时才替换。</summary>
+    private int _crashGeneration;
 
-    public override string Title => "启动";
+    partial void OnCrashChanged(CrashAnalysis? value) => _crashGeneration++;
+
+    protected override void OnLanguageChanged()
+    {
+        if (Crash is null || _crashInput is not { } input) return;
+        var generation = _crashGeneration;
+        _ = Task.Run(() => CrashAnalyzer.AnalyzeRun(input.WorkDir, input.Started, input.Output)).ContinueWith(
+            t => { if (t.IsCompletedSuccessfully && Crash is not null && generation == _crashGeneration) Crash = t.Result; },
+            TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    public override string Title => L.T("home.title");
     public override string Icon => "M8 5v14l11-7z";
 
     public ObservableCollection<string> Versions { get; } = [];
@@ -90,7 +105,21 @@ public sealed partial class HomeViewModel : PageViewModel
     public partial double Progress { get; set; }
 
     [ObservableProperty]
-    public partial string Status { get; set; } = "准备就绪";
+    public partial string Status { get; set; } = L.T("home.status.ready");
+
+    /// <summary>空闲时的状态文字对应的翻译键；换语言时按它重新取文字。显示的是别的内容（进度、错误）时为 null。</summary>
+    private string? _statusKey = "home.status.ready";
+
+    private void SetIdleStatus(string key)
+    {
+        _statusKey = key;
+        Status = L.T(key);
+    }
+
+    partial void OnStatusChanged(string value)
+    {
+        if (_statusKey is not null && value != L.T(_statusKey)) _statusKey = null;
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasCrash))]
@@ -111,6 +140,11 @@ public sealed partial class HomeViewModel : PageViewModel
         service.LaunchRequested += request => Dispatcher.UIThread.Post(() => _ = RunAsync(request));
         RefreshVersions();
         RefreshAccounts();
+        L.Changed += () => Dispatcher.UIThread.Post(() =>
+        {
+            OnSelectedVersionChanged(SelectedVersion);
+            if (_statusKey is { } key) Status = L.T(key);
+        });
     }
 
     private void RefreshAccounts()
@@ -136,7 +170,7 @@ public sealed partial class HomeViewModel : PageViewModel
         Versions.Clear();
         foreach (var v in _service.InstalledVersions()) Versions.Add(v);
         SelectedVersion = keep is not null && Versions.Contains(keep) ? keep : Versions.FirstOrDefault();
-        if (Versions.Count == 0) Status = "还没有安装任何版本，去「下载」页装一个吧";
+        if (Versions.Count == 0) SetIdleStatus("home.status.no_versions");
     }
 
     partial void OnSelectedVersionChanged(string? value)
@@ -146,13 +180,13 @@ public sealed partial class HomeViewModel : PageViewModel
         try
         {
             var instance = _service.GetInstance(value);
-            var loader = instance.Loader is null ? "原版" : $"{instance.Loader} {instance.LoaderVersion}";
+            var loader = instance.Loader is null ? L.T("home.version.vanilla") : $"{instance.Loader} {instance.LoaderVersion}";
             var mods = new ModManager(instance.ModsDir).CountEnabled();
-            VersionInfo = $"游戏 {instance.McVersion} · {loader}{(mods > 0 ? $" · {mods} 个模组" : "")}";
+            VersionInfo = L.F("home.version.info", instance.McVersion, loader, mods == 0 ? "" : L.P("home.version.mod_count", mods, mods));
         }
         catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException)
         {
-            VersionInfo = "版本文件读取失败：" + e.Message;
+            VersionInfo = L.F("home.version.read_failed", e.Message);
         }
     }
 
@@ -178,7 +212,7 @@ public sealed partial class HomeViewModel : PageViewModel
         if (IsBusy) return;
         if (SelectedAccount is not { } account)
         {
-            Status = "请先到「账号」页添加账号";
+            Status = L.T("home.status.account_required");
             return;
         }
         var id = request.VersionId;
@@ -196,15 +230,15 @@ public sealed partial class HomeViewModel : PageViewModel
         try
         {
             var settings = _service.EffectiveSettings(id);
-            Status = "正在检查游戏文件……";
+            Status = L.T("home.status.checking_game_files");
             await _service.Installer.CompleteAsync(id, new Progress<InstallProgress>(p =>
             {
                 if (p.Stage == InstallStage.Files && p.Files.TotalFiles > 0)
                 {
                     Progress = 100.0 * p.Files.CompletedFiles / p.Files.TotalFiles;
                     Status = p.Files.BytesDownloaded > 0
-                        ? $"补全文件 {p.Files.CompletedFiles}/{p.Files.TotalFiles}"
-                        : $"检查文件 {p.Files.CompletedFiles}/{p.Files.TotalFiles}";
+                        ? L.F("home.status.completing_files", p.Files.CompletedFiles, p.Files.TotalFiles)
+                        : L.F("home.status.checking_files", p.Files.CompletedFiles, p.Files.TotalFiles);
                 }
             }), _cts.Token);
 
@@ -216,7 +250,7 @@ public sealed partial class HomeViewModel : PageViewModel
                 javaPath = await _service.Java.ForVersionAsync(version, _cts.Token);
             }
 
-            Status = "正在验证账号……";
+            Status = L.T("home.status.verifying_account");
             var session = await _service.Accounts.ResolveAsync(account, _cts.Token);
 
             var options = _service.BaseLaunchOptions(id, javaPath, session.Session, session.ExtraJvmArgs) with
@@ -232,15 +266,15 @@ public sealed partial class HomeViewModel : PageViewModel
 
             if (!string.IsNullOrWhiteSpace(settings.PreLaunchCommand))
             {
-                Status = "正在运行启动前命令……";
+                Status = L.T("home.status.pre_launch_command");
                 await RunUserCommandAsync(settings.PreLaunchCommand, id, workDir, _cts.Token);
             }
 
-            Status = "正在启动……";
+            Status = L.T("home.status.launching");
             Progress = 100;
             _log.Clear();
             _recentOutput.Clear();
-            _log.AddRaw($"[Amber] 启动 {id}，Java：{javaPath}，最大内存 {memory} MB");
+            _log.AddRaw(L.F("home.log.launch", id, javaPath, memory));
             foreach (var note in _proxyNotes) _log.AddRaw(note);
             var parser = new GameLogParser();
             var launcher = new GameLauncher(_service.Directory);
@@ -257,27 +291,29 @@ public sealed partial class HomeViewModel : PageViewModel
                 _service.NotifyGameOutput(id, line);
             });
             IsRunning = true;
-            Status = $"{id} 运行中（{memory} MB）";
+            Status = L.F("home.status.running", id, memory);
             await _game.WaitForExitAsync();
             IsRunning = false;
 
             var code = _game.ExitCode;
             if (_stoppedByUser)
             {
-                Status = "已结束游戏";
+                Status = L.T("home.status.stopped");
             }
             else if (code == 0)
             {
-                Status = "游戏已正常退出";
+                Status = L.T("home.status.exited");
             }
             else
             {
-                Status = $"游戏异常退出（代码 {code}）";
+                Status = L.F("home.status.crashed", code);
                 string[] output;
                 lock (parser) output = _recentOutput.ToArray();
                 var analysis = await Task.Run(() => CrashAnalyzer.AnalyzeRun(workDir, started, output));
+                // 崩溃分析的标题和建议是按当时的语言写的：记下输入，换语言时重新分析一遍。
+                _crashInput = (workDir, started, output);
                 _lastRunFiles = [.. analysis.SourceFiles];
-                _log.AddRaw("[Amber] 崩溃分析：" + analysis.Summary);
+                _log.AddRaw(L.F("home.log.crash_analysis", analysis.Summary));
                 Crash = analysis;
             }
 
@@ -286,11 +322,11 @@ public sealed partial class HomeViewModel : PageViewModel
         }
         catch (OperationCanceledException)
         {
-            Status = "已取消";
+            Status = L.T("common.cancelled");
         }
         catch (Exception e)
         {
-            Status = "启动失败：" + e.Message;
+            Status = L.F("home.status.launch_failed", e.Message);
             _log.AddRaw("[Amber] " + e);
         }
         finally
@@ -320,11 +356,11 @@ public sealed partial class HomeViewModel : PageViewModel
             using var process = Process.Start(psi);
             if (process is null) return;
             await process.WaitForExitAsync(ct);
-            _log.AddRaw($"[Amber] 命令“{command}”退出代码 {process.ExitCode}");
+            _log.AddRaw(L.F("home.log.command_exited", command, process.ExitCode));
         }
         catch (System.ComponentModel.Win32Exception e)
         {
-            _log.AddRaw($"[Amber] 命令“{command}”运行失败：{e.Message}");
+            _log.AddRaw(L.F("home.log.command_failed", command, e.Message));
         }
     }
 
@@ -339,7 +375,7 @@ public sealed partial class HomeViewModel : PageViewModel
     public void ExportCrashBundle(string zipPath)
     {
         CrashAnalyzer.ExportBundle(zipPath, _lastRunFiles, _recentOutput);
-        Status = "错误报告已导出：" + zipPath;
+        Status = L.F("home.status.report_exported", zipPath);
     }
 
     [RelayCommand]

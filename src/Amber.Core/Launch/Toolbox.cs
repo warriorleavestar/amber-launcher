@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -37,10 +38,10 @@ public static class Toolbox
 
         return
         [
-            new JunkGroup("旧日志", "logs 文件夹里压缩过的旧日志，最新的 latest.log 会保留", logs, SizeOf(logs)),
-            new JunkGroup("崩溃报告", "crash-reports 和 JVM 错误文件", crashes, SizeOf(crashes)),
-            new JunkGroup("natives", "解压出来的本地库，下次启动会重新生成（游戏运行时清不掉）", natives, SizeOf(natives)),
-            new JunkGroup("下载残留", "没下载完的 .part 文件", parts, SizeOf(parts)),
+            new JunkGroup(L.T("core.launch.cleanup.oldlogs"), L.T("core.launch.cleanup.oldlogsdescription"), logs, SizeOf(logs)),
+            new JunkGroup(L.T("core.launch.cleanup.crashes"), L.T("core.launch.cleanup.crashesdescription"), crashes, SizeOf(crashes)),
+            new JunkGroup("natives", L.T("core.launch.cleanup.nativesdescription"), natives, SizeOf(natives)),
+            new JunkGroup(L.T("core.launch.cleanup.partialdownloads"), L.T("core.launch.cleanup.partialdownloadsdescription"), parts, SizeOf(parts)),
         ];
     }
 
@@ -138,7 +139,7 @@ public sealed class UpdateChecker(HttpClient http)
         using var doc = JsonDocument.Parse(await http.GetStringAsync(feedUrl, ct));
         var root = doc.RootElement;
         var tag = (root.TryGetProperty("tag_name", out var t) ? t.GetString() : root.TryGetProperty("version", out var v) ? v.GetString() : null)
-                  ?? throw new InvalidDataException("更新地址返回的内容里没有版本号");
+                  ?? throw new InvalidDataException(L.T("core.launch.update.missingversion"));
         var url = root.TryGetProperty("html_url", out var u) ? u.GetString() : root.TryGetProperty("url", out var u2) ? u2.GetString() : null;
         var notes = root.TryGetProperty("body", out var b) ? b.GetString() : null;
         return IsNewer(tag, currentVersion) ? new UpdateInfo(tag.TrimStart('v'), url, notes) : null;

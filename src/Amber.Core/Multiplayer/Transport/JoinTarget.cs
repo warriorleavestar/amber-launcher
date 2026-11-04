@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Net;
 using System.Runtime.InteropServices;
 
@@ -73,15 +74,15 @@ public static partial class JoinTarget
             onSkip?.Invoke(reason);
             return null;
         }
-        if (!TryParse(server, out var typedHost, out var typedPort, out _)) return Skip($"“{server}”不是有效的服务器地址");
+        if (!TryParse(server, out var typedHost, out var typedPort, out _)) return Skip(L.F("core.mp.join.invalid_address", server));
         if (IPAddress.TryParse(typedHost, out var typedIp))
         {
-            if (!ExitPolicy.IsGloballyRoutable(typedIp)) return Skip($"{typedHost} 是本机或局域网地址，直接连");
+            if (!ExitPolicy.IsGloballyRoutable(typedIp)) return Skip(L.F("core.mp.join.local_address", typedHost));
             if (!IsIPv4(typedIp)) return Skip(IPv6Only);
             return new RelayPlan(typedHost, typedPort, typedHost, typedPort);
         }
-        if (IsLocalName(typedHost)) return Skip($"{typedHost} 是本机或局域网的名字，直接连");
-        if (typedHost.Length > 253) return Skip("服务器名字太长");
+        if (IsLocalName(typedHost)) return Skip(L.F("core.mp.join.local_name", typedHost));
+        if (typedHost.Length > 253) return Skip(L.T("core.mp.join.name_too_long"));
         var (host, port) = (typedHost, typedPort);
         // 和游戏一样：端口是默认的 25565（写没写都算）时查 SRV 记录。
         if (typedPort == DefaultPort)
@@ -98,18 +99,18 @@ public static partial class JoinTarget
         // 游戏按 SRV 查到的主机和端口去连，握手包里写的也是它们（和直接进时一样）。
         if (IPAddress.TryParse(host, out var ip))
         {
-            if (!ExitPolicy.IsGloballyRoutable(ip)) return Skip($"{typedHost} 指向本机或局域网地址，直接连");
+            if (!ExitPolicy.IsGloballyRoutable(ip)) return Skip(L.F("core.mp.join.points_to_local_address", typedHost));
             if (!IsIPv4(ip)) return Skip(IPv6Only);
             return new RelayPlan(host, port, host, port);
         }
-        if (IsLocalName(host)) return Skip($"{typedHost} 指向本机或局域网的名字，直接连");
+        if (IsLocalName(host)) return Skip(L.F("core.mp.join.points_to_local_name", typedHost));
         try
         {
             var addresses = await (resolve ?? ((h, c) => Dns.GetHostAddressesAsync(h, c)))(host, ct);
             // 本机的 Clash / sing-box 等代理会把名字解析成 198.18.0.0/15 的假地址：当成没解析，交给出口去解析。
             var real = addresses.Where(a => !IsFakeIp(a)).ToArray();
             // 本机解析出私有地址的名字（内网 DNS、hosts 文件）不经出口——出口那边解析出来的多半不是同一台机器。
-            if (real.Length > 0 && real.Any(a => !ExitPolicy.IsGloballyRoutable(a))) return Skip($"{host} 在本机解析成了局域网地址，直接连");
+            if (real.Length > 0 && real.Any(a => !ExitPolicy.IsGloballyRoutable(a))) return Skip(L.F("core.mp.join.resolves_to_lan", host));
             // 只有 IPv6 地址的服务器：出口只转 IPv4，经出口进不去，直接连（和没开转发时一样）。
             // 看全部结果（包括假 IP）：代理软件的假 IP 是 IPv4，那种情况按名字交给出口解析。
             if (addresses.Length > 0 && !addresses.Any(IsIPv4)) return Skip(IPv6Only);
@@ -121,7 +122,7 @@ public static partial class JoinTarget
         return new RelayPlan(host, port, host, port);
     }
 
-    private const string IPv6Only = "出口只转 IPv4，直接连";
+    private static string IPv6Only => L.T("core.mp.join.ipv6_only");
 
     private static bool IsIPv4(IPAddress address) => ExitPolicy.Normalize(address).AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
 

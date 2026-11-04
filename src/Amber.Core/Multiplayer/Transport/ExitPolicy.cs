@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -95,7 +96,7 @@ public sealed partial class ExitPolicy : IDisposable
                 await RefreshPublicAsync(ct);
                 if (_failure != lastLogged)
                 {
-                    log?.Invoke(_failure is { } f ? "[转发] " + f : "[转发] 已查到公网 IP，开始转发");
+                    log?.Invoke(_failure is { } f ? L.F("core.mp.exit.failure_log", f) : L.T("core.mp.exit.public_ip_ready"));
                     lastLogged = _failure;
                 }
                 var wake = Volatile.Read(ref _wake);
@@ -134,7 +135,7 @@ public sealed partial class ExitPolicy : IDisposable
                 else if (!ok)
                 {
                     _ready = false;
-                    _failure = "查不到你的公网 IP（STUN 服务器连不上，可能是 UDP 被拦了），为了不让别人经你连到你的路由器，暂时不转发。网络恢复后会自动重试。";
+                    _failure = L.T("core.mp.exit.public_ip_unavailable");
                 }
             }
         }

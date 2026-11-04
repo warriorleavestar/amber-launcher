@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Net;
 
 namespace Amber.Core.Multiplayer.Transport;
@@ -93,7 +94,7 @@ public sealed class RoomTransport : IAsyncDisposable
 
         if (!o.IsHost && settings.Wraps)
         {
-            var (host, port) = o.Tun ? (EasyTierArgs.HostIp, TunnelSettings.Port) : ("127.0.0.1", o.LocalTunnelPort ?? throw new ArgumentException("加入方需要封装通道的本机转发端口"));
+            var (host, port) = o.Tun ? (EasyTierArgs.HostIp, TunnelSettings.Port) : ("127.0.0.1", o.LocalTunnelPort ?? throw new ArgumentException(L.T("core.mp.transport.join_port_required")));
             if (o.LocalForwardPort is { } game) Game = Add(new TunnelClient(game, TunnelClient.Wrapped(host, port, room, settings, TunnelService.Game), _log));
             if (o.LocalChatPort is { } chat) Chat = Add(new TunnelClient(chat, TunnelClient.Wrapped(host, port, room, settings, TunnelService.Chat), _log));
         }
@@ -101,7 +102,7 @@ public sealed class RoomTransport : IAsyncDisposable
         if (o.ProxyExit is { } exit && o.LocalSocksPort is { } socks)
         {
             var exitPort = settings.Wraps ? TunnelSettings.Port : TunnelSettings.PlainSocksPort;
-            var (host, port) = o.Tun ? (exit, exitPort) : ("127.0.0.1", o.LocalExitPort ?? throw new ArgumentException("转发需要出口的本机转发端口"));
+            var (host, port) = o.Tun ? (exit, exitPort) : ("127.0.0.1", o.LocalExitPort ?? throw new ArgumentException(L.T("core.mp.transport.exit_port_required")));
             var open = TunnelClient.Wrapped(host, port, room, settings, TunnelService.Socks);
             Socks = Add(new TunnelClient(socks, open, _log));
             Proxy = new GameProxy(Socks.Port, exit, open);

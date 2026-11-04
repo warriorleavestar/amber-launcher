@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Collections.ObjectModel;
 using Amber.App.Services;
 using Amber.Core.Multiplayer;
@@ -27,7 +28,8 @@ public sealed partial class MultiplayerViewModel
     [ObservableProperty] public partial string DirectReplyInput { get; set; } = "";
     [ObservableProperty] public partial string MyDirectCode { get; set; } = "";
     [ObservableProperty] public partial string DirectHint { get; set; } = "";
-    [ObservableProperty] public partial string PathText { get; set; } = "";
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(CurrentPathText))] public partial string PathText { get; set; } = "";
+    public string CurrentPathText => L.F("multiplayer.direct.current_path", PathText);
     [ObservableProperty] public partial string NetworkCheckText { get; set; } = "";
     [ObservableProperty] public partial bool IsCheckingNetwork { get; set; }
     [ObservableProperty] public partial bool MatrixRunning { get; set; }
@@ -50,7 +52,7 @@ public sealed partial class MultiplayerViewModel
     }
 
     private List<string> StunServers() =>
-        StunText.Split([',', '，', ' ', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        StunText.Split([',', '\uFF0C', ' ', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     private DirectOptions MakeDirectOptions() => new(
         StunServers(),
@@ -67,12 +69,12 @@ public sealed partial class MultiplayerViewModel
     {
         if (IsCheckingNetwork) return;
         IsCheckingNetwork = true;
-        NetworkCheckText = "正在检测……";
+        NetworkCheckText = L.T("multiplayer.network.checking");
         try
         {
             using var socket = DirectBridge.CreateSocket();
             var lines = new List<string>();
-            var gathered = await DirectGatherer.GatherAsync(socket, StunServers(), true, l => { lines.Add(l); _diag.Add("检测", l); });
+            var gathered = await DirectGatherer.GatherAsync(socket, StunServers(), true, l => { lines.Add(l); _diag.Add(L.T("multiplayer.network.diagnostic_category"), l); });
             if (gathered.Mapping?.Remove is { } remove)
             {
                 try { await remove(); } catch (Exception e) when (e is HttpRequestException or System.Net.Sockets.SocketException) { }
@@ -80,16 +82,16 @@ public sealed partial class MultiplayerViewModel
             var v6 = gathered.Candidates.Any(c => c.Kind == PathKind.IPv6);
             var verdict = gathered.Nat switch
             {
-                NatKind.Open => "很好连：你能被直接连上，朋友不用发回复码",
-                NatKind.Cone => "容易打洞：和大多数网络都能直连",
-                NatKind.Symmetric => v6 ? "IPv4 是严格 NAT，但你有 IPv6，对方也有 IPv6 时能直连" : "不容易打洞：严格 NAT，也没有 IPv6；对方是普通家庭宽带时还有机会，双方都严格时需要联机节点",
-                _ => "查不出来：STUN 没回应，可能 UDP 被拦了",
+                NatKind.Open => L.T("multiplayer.network.open"),
+                NatKind.Cone => L.T("multiplayer.network.cone"),
+                NatKind.Symmetric => v6 ? L.T("multiplayer.network.symmetric_ipv6") : L.T("multiplayer.network.symmetric"),
+                _ => L.T("multiplayer.network.unknown"),
             };
             NetworkCheckText = $"{verdict}\n{string.Join("\n", lines)}";
         }
         catch (Exception e) when (e is System.Net.Sockets.SocketException or IOException)
         {
-            NetworkCheckText = "检测失败：" + e.Message;
+            NetworkCheckText = L.F("multiplayer.network.check_failed", e.Message);
         }
         finally
         {
@@ -104,17 +106,17 @@ public sealed partial class MultiplayerViewModel
         if (!IsIdle) return;
         if (!IsComponentReady)
         {
-            Status = "先下载联机组件";
+            Status = L.T("multiplayer.component.download_required");
             return;
         }
         var port = int.TryParse(ManualPort.Trim(), out var manual) && manual is > 0 and < 65536 ? manual : SelectedLanGame?.Game.Port;
         if (port is null)
         {
-            Status = "先在游戏里“对局域网开放”，或手动填写端口";
+            Status = L.T("multiplayer.lan.port_required");
             return;
         }
         var room = RoomCode.Create(port.Value);
-        Status = "正在收集能连到你的地址（IPv6、STUN、路由器端口映射）……";
+        Status = L.T("multiplayer.direct.gathering_host");
         var direct = new DirectSession(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier"), room, true, MakeDirectOptions(), _diag);
         try
         {
@@ -124,15 +126,15 @@ public sealed partial class MultiplayerViewModel
             RoomCodeText = room.ToString();
             MyDirectCode = code.Encode();
             DirectHint = code.DirectlyReachable
-                ? "你能被直接连上：把邀请码发给朋友就行，不用等回复码。"
-                : $"你的网络：{DirectText.Nat(code.Nat)}。把邀请码发给朋友，等他发回回复码，贴到下面点“连接”。";
+                ? L.T("multiplayer.direct.host_reachable")
+                : L.F("multiplayer.direct.host_reply_hint", DirectText.Nat(code.Nat));
             StartHub(room);
-            Status = "直连房间已创建";
+            Status = L.T("multiplayer.direct.created");
         }
         catch (Exception e) when (e is OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             await direct.DisposeAsync();
-            Status = "直连房间没有创建：" + e.Message;
+            Status = L.F("multiplayer.direct.create_failed", e.Message);
         }
     }
 
@@ -143,13 +145,13 @@ public sealed partial class MultiplayerViewModel
         if (_direct is not { IsHost: true } direct) return;
         if (!DirectCode.TryParse(DirectReplyInput, out var reply, out var error) || !reply.IsReply)
         {
-            Status = error ?? "这不是回复码（回复码以 AMBREPLY 开头）";
+            Status = error ?? L.T("multiplayer.direct.invalid_reply");
             return;
         }
-        Status = "正在打洞……";
+        Status = L.T("multiplayer.direct.punching");
         try
         {
-            Status = await direct.AddReplyAsync(reply) ? "打通了" : "没打通，详细原因看调试日志";
+            Status = await direct.AddReplyAsync(reply) ? L.T("multiplayer.direct.punch_succeeded") : L.T("multiplayer.direct.punch_failed");
             DirectReplyInput = "";
         }
         catch (DirectFailedException e)
@@ -165,18 +167,18 @@ public sealed partial class MultiplayerViewModel
         if (!IsIdle) return;
         if (!IsComponentReady)
         {
-            Status = "先下载联机组件";
+            Status = L.T("multiplayer.component.download_required");
             return;
         }
         if (!DirectCode.TryParse(DirectInviteInput, out var invite, out var error) || invite.IsReply)
         {
-            Status = error ?? "这不是邀请码（邀请码以 AMBDIRECT 开头）";
+            Status = error ?? L.T("multiplayer.direct.invalid_invite");
             return;
         }
         var direct = new DirectSession(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier"), invite.Room, false, MakeDirectOptions(), _diag);
         try
         {
-            Status = "正在收集能连到你的地址……";
+            Status = L.T("multiplayer.direct.gathering_guest");
             var code = await direct.PrepareAsync();
             Mode = "join";
             IsDirect = true;
@@ -185,16 +187,16 @@ public sealed partial class MultiplayerViewModel
             RoomCodeText = invite.Room.ToString();
             MyDirectCode = (code with { Session = invite.Session }).Encode();
             DirectHint = invite.DirectlyReachable
-                ? "房主能被直接连上，正在连接，不用发回复码。"
-                : "把上面的回复码发给房主，房主贴上后双方同时打洞。最多等 90 秒。";
-            Status = "正在打洞……";
+                ? L.T("multiplayer.direct.guest_reachable")
+                : L.T("multiplayer.direct.guest_reply_hint");
+            Status = L.T("multiplayer.direct.punching");
             await direct.JoinAsync(invite);
             AttachDirect(direct, invite.Room);
             JoinAddress = FullLanMode ? $"{EasyTierArgs.HostIp}:{invite.Room.Port}" : $"127.0.0.1:{direct.LocalGamePort}";
             _localChatPort = FullLanMode ? null : direct.LocalChatPort;
             RestoreChatHistory(invite.Room);
-            ChatStatus = "连上房主后自动进入聊天";
-            Status = direct.UsingFallbackNode ? "直连没打通，已改用联机节点" : "已直连";
+            ChatStatus = L.T("multiplayer.chat.awaiting_host");
+            Status = direct.UsingFallbackNode ? L.T("multiplayer.direct.fallback") : L.T("multiplayer.direct.connected");
             direct.GuestChatProbe = ChatProbeAsync;
         }
         catch (Exception e) when (e is DirectFailedException or OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception)
@@ -203,7 +205,7 @@ public sealed partial class MultiplayerViewModel
             _direct = null;
             IsDirect = false;
             Mode = "";
-            Status = "直连失败：" + e.Message;
+            Status = L.F("multiplayer.direct.connect_failed", e.Message);
         }
     }
 
@@ -245,7 +247,7 @@ public sealed partial class MultiplayerViewModel
     {
         for (var i = 0; i < 30 && !ChatReady; i++) await Task.Delay(500, ct);
         if (_chat is not { } chat) return false;
-        var text = $"[自动测试 #{step.Index}]";
+        var text = L.F("multiplayer.matrix.chat_probe", step.Index);
         await chat.SendAsync(text, ct);
         for (var i = 0; i < 20; i++)
         {
@@ -262,7 +264,7 @@ public sealed partial class MultiplayerViewModel
         if (_direct is not { IsHost: true } direct || MatrixRunning) return;
         if (direct.Bridge?.Peers.Count is not > 0)
         {
-            Status = "要先有朋友通过直连加入，才能做全条件测试";
+            Status = L.T("multiplayer.matrix.peer_required");
             return;
         }
         MatrixRunning = true;
@@ -271,26 +273,26 @@ public sealed partial class MultiplayerViewModel
         var results = new List<MatrixResult>();
         try
         {
-            Status = MatrixFullLan ? "全条件测试：先请双方确认管理员权限（只问一次）……" : "全条件测试进行中……";
+            Status = MatrixFullLan ? L.T("multiplayer.matrix.requesting_admin") : L.T("multiplayer.matrix.running");
             var progress = new Progress<MatrixResult>(r =>
             {
                 results.Add(r);
                 MatrixLines.Clear();
                 foreach (var line in TestMatrix.FormatTable(results)) MatrixLines.Add(line);
-                Status = $"全条件测试：第 {r.Step.Index} 步 {(r.Passed switch { true => "通过", false => "失败", _ => "跳过" })}";
+                Status = L.F("multiplayer.matrix.progress", r.Step.Index, (r.Passed switch { true => L.T("common.passed"), false => L.T("common.failed"), _ => L.T("common.skipped") }));
             });
             _lastMatrix = await direct.RunMatrixAsync(MatrixFullLan, progress, null, _matrixCts.Token);
             MatrixLines.Clear();
             foreach (var line in TestMatrix.FormatTable(_lastMatrix)) MatrixLines.Add(line);
-            Status = $"全条件测试完成：{_lastMatrix.Count(r => r.Passed == true)}/{_lastMatrix.Count} 通过。可以点“导出诊断报告”发给别人看。";
+            Status = L.F("multiplayer.matrix.completed", _lastMatrix.Count(r => r.Passed == true), _lastMatrix.Count);
         }
         catch (OperationCanceledException)
         {
-            Status = "全条件测试已取消";
+            Status = L.T("multiplayer.matrix.cancelled");
         }
         catch (Exception e) when (e is InvalidOperationException or IOException or System.Net.Sockets.SocketException)
         {
-            Status = "全条件测试中断：" + e.Message;
+            Status = L.F("multiplayer.matrix.failed", e.Message);
         }
         finally
         {
@@ -307,7 +309,7 @@ public sealed partial class MultiplayerViewModel
         if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
         {
             await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(clipboard, MyDirectCode);
-            Status = "已复制";
+            Status = L.T("common.copied");
         }
     }
 
@@ -317,10 +319,10 @@ public sealed partial class MultiplayerViewModel
         var table = _lastMatrix.Count > 0 ? TestMatrix.FormatTable(_lastMatrix) : MatrixLines.Count > 0 ? MatrixLines.ToList() : null;
         var secrets = _room is { } r ? r.Secrets : [];
         var extra = new List<DiagnosticEntry>();
-        if (_session is { } s) extra.AddRange(s.RecentOutput.Select(l => new DiagnosticEntry(DateTime.Now, "EasyTier 最近输出", l)));
+        if (_session is { } s) extra.AddRange(s.RecentOutput.Select(l => new DiagnosticEntry(DateTime.Now, L.T("multiplayer.diagnostics.recent_output"), l)));
         var report = NetDiagnostics.BuildReport(Amber.Core.Launch.UpdateChecker.CurrentVersion, _diag.Snapshot().Concat(extra), table, secrets, IncludePublicIps);
         File.WriteAllText(path, report);
-        Status = "诊断报告已导出：" + path;
+        Status = L.F("multiplayer.diagnostics.exported", path);
     }
 
     private async Task StopDirectAsync()

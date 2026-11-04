@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
@@ -129,15 +130,15 @@ public static class Stun
             if (await QueryAsync(socket, server.Trim(), TimeSpan.FromSeconds(2.5), ct) is { } mapped) answers.Add((server, mapped));
             if (answers.Count >= 2) break;
         }
-        if (answers.Count == 0) return new StunResult(null, NatKind.Unknown, servers.Count == 0 ? "没有设置 STUN 服务器" : "STUN 服务器都没有回应（可能 UDP 被拦）");
+        if (answers.Count == 0) return new StunResult(null, NatKind.Unknown, servers.Count == 0 ? L.T("core.mp.stun.noservers") : L.T("core.mp.stun.noresponse"));
         var first = answers[0].Mapped;
         var local = socket.LocalEndPoint as IPEndPoint;
         if (local is not null && LocalAddresses().Contains(first.Address))
-            return new StunResult(first, NatKind.Open, "本机就有公网地址");
-        if (answers.Count < 2) return new StunResult(first, NatKind.Unknown, "只有一台 STUN 服务器回应，判断不了 NAT 类型");
+            return new StunResult(first, NatKind.Open, L.T("core.mp.stun.open"));
+        if (answers.Count < 2) return new StunResult(first, NatKind.Unknown, L.T("core.mp.stun.oneresponse"));
         return answers.Select(a => a.Mapped.Port).Distinct().Count() == 1
-            ? new StunResult(first, NatKind.Cone, "锥形 NAT，比较好打洞")
-            : new StunResult(first, NatKind.Symmetric, "对称 NAT（严格），不容易打洞");
+            ? new StunResult(first, NatKind.Cone, L.T("core.mp.stun.cone"))
+            : new StunResult(first, NatKind.Symmetric, L.T("core.mp.stun.symmetric"));
     }
 
     internal static async Task<IPEndPoint> ResolveAsync(string server, CancellationToken ct)

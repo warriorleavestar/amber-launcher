@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core;
 using System.Security.Cryptography;
 using System.Text;
@@ -34,13 +35,13 @@ public sealed class Account
     [JsonIgnore]
     public string KindText => Kind switch
     {
-        AccountKind.Offline => "离线",
-        AccountKind.Microsoft => "微软",
-        AccountKind.External => ServerName is { Length: > 0 } s ? $"外置 · {s}" : "外置",
+        AccountKind.Offline => L.T("core.auth.account.offline"),
+        AccountKind.Microsoft => L.T("core.auth.account.microsoft"),
+        AccountKind.External => ServerName is { Length: > 0 } s ? L.F("core.auth.account.namedexternal", s) : L.T("core.auth.account.external"),
         _ => "",
     };
 
-    public override string ToString() => $"{Name}（{KindText}）";
+    public override string ToString() => L.F("accounts.display", Name, KindText);
 }
 
 /// <summary>账号列表，保存在 accounts.json。Windows 上令牌用 DPAPI 绑定当前用户加密。</summary>

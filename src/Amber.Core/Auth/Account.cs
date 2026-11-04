@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -14,7 +15,7 @@ public static class OfflineAccount
     /// </summary>
     public static GameSession Create(string playerName)
     {
-        if (string.IsNullOrWhiteSpace(playerName)) throw new ArgumentException("玩家名不能为空", nameof(playerName));
+        if (string.IsNullOrWhiteSpace(playerName)) throw new ArgumentException(L.T("core.auth.offline.emptyname"), nameof(playerName));
         return new GameSession(playerName, OfflineUuid(playerName), Guid.NewGuid().ToString("N"), "legacy");
     }
 

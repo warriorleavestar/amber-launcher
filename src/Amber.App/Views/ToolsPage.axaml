@@ -1,15 +1,16 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:l="using:Amber.App.Localization"
              xmlns:vm="using:Amber.App.ViewModels"
              x:Class="Amber.App.Views.ToolsPage"
              x:DataType="vm:ToolsViewModel">
   <Grid RowDefinitions="Auto,*,Auto">
-    <TextBlock Classes="h1" Text="工具箱" />
+    <TextBlock Classes="h1" Text="{l:T tools.title}" />
     <ScrollViewer Grid.Row="1">
       <StackPanel>
         <Border Classes="card">
           <StackPanel Spacing="8">
-            <TextBlock Classes="h2" Text="清理游戏垃圾" Margin="0" />
+            <TextBlock Classes="h2" Text="{l:T tools.junk.title}" Margin="0" />
             <TextBlock Classes="hint" Text="{Binding JunkStatus}" />
             <ItemsControl ItemsSource="{Binding Junk}">
               <ItemsControl.ItemTemplate>
@@ -23,44 +24,44 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
             <StackPanel Orientation="Horizontal" Spacing="8">
-              <Button Content="扫描" Command="{Binding ScanJunkCommand}" />
-              <Button Classes="amber" Content="清理选中项" Command="{Binding CleanJunkCommand}" />
+              <Button Content="{l:T tools.junk.scan}" Command="{Binding ScanJunkCommand}" />
+              <Button Classes="amber" Content="{l:T tools.junk.clean}" Command="{Binding CleanJunkCommand}" />
             </StackPanel>
           </StackPanel>
         </Border>
 
         <Border Classes="card">
           <StackPanel Spacing="8">
-            <TextBlock Classes="h2" Text="下载文件" Margin="0" />
-            <TextBox Text="{Binding DownloadUrl}" PlaceholderText="下载地址（支持断点续传和多线程）" />
+            <TextBlock Classes="h2" Text="{l:T tools.download.title}" Margin="0" />
+            <TextBox Text="{Binding DownloadUrl}" PlaceholderText="{l:T tools.download.url_hint}" />
             <Grid ColumnDefinitions="*,Auto">
-              <TextBox Text="{Binding DownloadFolder}" PlaceholderText="保存到这个文件夹" />
-              <Button Grid.Column="1" Content="浏览…" Margin="8,0,0,0" Click="BrowseFolder_Click" />
+              <TextBox Text="{Binding DownloadFolder}" PlaceholderText="{l:T tools.download.folder_hint}" />
+              <Button Grid.Column="1" Content="{l:T common.browse}" Margin="8,0,0,0" Click="BrowseFolder_Click" />
             </Grid>
-            <TextBox Text="{Binding DownloadSha1}" PlaceholderText="SHA1（可选，填了就校验）" />
-            <Button Classes="amber" Content="开始下载" Command="{Binding DownloadFileCommand}" />
+            <TextBox Text="{Binding DownloadSha1}" PlaceholderText="{l:T tools.download.sha1_hint}" />
+            <Button Classes="amber" Content="{l:T tools.download.start}" Command="{Binding DownloadFileCommand}" />
           </StackPanel>
         </Border>
 
         <Border Classes="card">
           <StackPanel Spacing="8">
-            <TextBlock Classes="h2" Text="下载 Java" Margin="0" />
-            <TextBlock Classes="hint" Text="启动时会自动按版本要求下载，这里可以提前装好。文件来自 Mojang，放在游戏目录的 runtime 文件夹。" />
+            <TextBlock Classes="h2" Text="{l:T tools.java.title}" Margin="0" />
+            <TextBlock Classes="hint" Text="{l:T tools.java.hint}" />
             <StackPanel Orientation="Horizontal" Spacing="8">
               <ComboBox ItemsSource="{Binding JavaMajors}" SelectedItem="{Binding SelectedJavaMajor}" MinWidth="90" />
-              <Button Content="下载" Command="{Binding InstallJavaCommand}" />
+              <Button Content="{l:T download.title}" Command="{Binding InstallJavaCommand}" />
             </StackPanel>
           </StackPanel>
         </Border>
 
         <Border Classes="card">
           <StackPanel Spacing="8">
-            <TextBlock Classes="h2" Text="检查更新" Margin="0" />
-            <TextBlock Classes="hint" Text="只提示，不会自动下载或替换。" />
+            <TextBlock Classes="h2" Text="{l:T common.check_updates}" Margin="0" />
+            <TextBlock Classes="hint" Text="{l:T tools.update.hint}" />
             <TextBlock Text="{Binding UpdateStatus}" TextWrapping="Wrap" />
             <StackPanel Orientation="Horizontal" Spacing="8">
-              <Button Content="检查" Command="{Binding CheckUpdateCommand}" />
-              <Button Content="打开下载页" Command="{Binding OpenUpdateUrlCommand}" IsVisible="{Binding UpdateUrl, Converter={x:Static ObjectConverters.IsNotNull}}" />
+              <Button Content="{l:T tools.update.check}" Command="{Binding CheckUpdateCommand}" />
+              <Button Content="{l:T tools.update.open_page}" Command="{Binding OpenUpdateUrlCommand}" IsVisible="{Binding UpdateUrl, Converter={x:Static ObjectConverters.IsNotNull}}" />
             </StackPanel>
           </StackPanel>
         </Border>
@@ -72,7 +73,7 @@
           <TextBlock Text="{Binding Status}" TextTrimming="CharacterEllipsis" />
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
         </StackPanel>
-        <Button Grid.Column="1" Content="取消" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />
+        <Button Grid.Column="1" Content="{l:T common.cancel}" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />
       </Grid>
     </Border>
   </Grid>

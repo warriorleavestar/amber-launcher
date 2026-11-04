@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Amber.Core.Net;
@@ -27,10 +28,10 @@ public sealed class JavaRuntimeInstaller(Downloader downloader, string gameRoot)
     {
         using var all = JsonDocument.Parse(await downloader.GetStringAsync(ManifestUrl, ct));
         if (!all.RootElement.TryGetProperty(Platform, out var platform))
-            throw new PlatformNotSupportedException($"Mojang 没有为 {Platform} 提供 Java");
+            throw new PlatformNotSupportedException(L.F("core.java.install.unsupportedplatform", Platform));
 
         var (name, manifestUrl) = FindComponent(platform, component, majorVersion)
-                                  ?? throw new InvalidOperationException($"Mojang 没有提供 Java {majorVersion}");
+                                  ?? throw new InvalidOperationException(L.F("core.java.install.unavailableversion", majorVersion));
 
         using var manifest = JsonDocument.Parse(await downloader.GetStringAsync(manifestUrl, ct));
         var home = Path.Combine(gameRoot, "runtime", name, Platform, name);
@@ -52,7 +53,7 @@ public sealed class JavaRuntimeInstaller(Downloader downloader, string gameRoot)
         await downloader.DownloadAllAsync(items, progress, ct);
 
         var exe = Path.Combine(home, "bin", OperatingSystem.IsWindows() ? "java.exe" : "java");
-        if (!File.Exists(exe)) throw new FileNotFoundException("运行时下载完成，但没有找到 java", exe);
+        if (!File.Exists(exe)) throw new FileNotFoundException(L.T("core.java.install.missingexecutable"), exe);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(exe, File.GetUnixFileMode(exe) | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
         return exe;

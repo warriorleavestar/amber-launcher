@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core.Game;
 using Amber.Core.Net;
 
@@ -38,20 +39,20 @@ public sealed class JavaManager(Downloader downloader, GameDirectory dir)
             {
                 try
                 {
-                    Status?.Report($"正在下载 Java {major}……");
+                    Status?.Report(L.F("core.java.manager.downloading", major));
                     var runtime = new JavaRuntimeInstaller(downloader, dir.Root);
                     var path = await runtime.InstallAsync(component, major, new Progress<DownloadProgress>(p =>
-                        Status?.Report($"下载 Java {major}：{p.CompletedFiles}/{p.TotalFiles}")), ct);
+                        Status?.Report(L.F("core.java.manager.downloadprogress", major, p.CompletedFiles, p.TotalFiles))), ct);
                     await ScanAsync(true);
                     return path;
                 }
                 catch (Exception e) when (e is not OperationCanceledException && JavaFinder.Pick(installs, major) is not null)
                 {
-                    Status?.Report($"下载 Java {major} 失败，改用本机更高版本：{e.Message}");
+                    Status?.Report(L.F("core.java.manager.downloadfallback", major, e.Message));
                 }
             }
             return JavaFinder.Pick(installs, major)?.JavaPath
-                   ?? throw new InvalidOperationException($"没有找到 Java {major} 或更高版本，请先安装 Java {major}");
+                   ?? throw new InvalidOperationException(L.F("core.java.manager.notfound", major, major));
         }
         finally
         {

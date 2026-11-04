@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text;
@@ -22,7 +23,7 @@ public static class RelayNodes
     public static string Encode(string? name, IEnumerable<string> urls)
     {
         var list = urls.Select(u => u.Trim()).Where(IsValid).Distinct().ToList();
-        if (list.Count == 0) throw new ArgumentException("没有有效的节点地址");
+        if (list.Count == 0) throw new ArgumentException(L.T("core.mp.nodes.empty"));
         var json = new JsonObject { ["v"] = 1, ["peers"] = new JsonArray(list.Select(u => (JsonNode?)u).ToArray()) };
         if (!string.IsNullOrWhiteSpace(name)) json["name"] = name.Trim();
         return Prefix + Convert.ToBase64String(Encoding.UTF8.GetBytes(json.ToJsonString())).TrimEnd('=').Replace('+', '-').Replace('/', '_');
@@ -37,7 +38,7 @@ public static class RelayNodes
         var start = text.IndexOf(Prefix, StringComparison.OrdinalIgnoreCase);
         if (start < 0)
         {
-            urls = text.Split(['\n', '\r', ' ', ',', '，'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(IsValid).Distinct().ToList();
+            urls = text.Split(['\n', '\r', ' ', ',', '\uFF0C'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(IsValid).Distinct().ToList();
             return urls.Count > 0;
         }
         var body = new string(text[(start + Prefix.Length)..].TakeWhile(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_').ToArray());
@@ -60,15 +61,15 @@ public static class RelayNodes
     /// <summary>测节点延迟：TCP 类（tcp/ws/wss）测建立连接的时间；UDP 类测不了，返回 null 和说明。</summary>
     public static async Task<(double? Ms, string? Error)> ProbeAsync(string url, CancellationToken ct = default)
     {
-        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var u)) return (null, "地址格式不对");
-        if (u.Scheme is not ("tcp" or "ws" or "wss")) return (null, $"{u.Scheme.ToUpperInvariant()} 节点没法测延迟");
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var u)) return (null, L.T("core.mp.nodes.invalidaddress"));
+        if (u.Scheme is not ("tcp" or "ws" or "wss")) return (null, L.F("core.mp.nodes.unsupportedlatency", u.Scheme.ToUpperInvariant()));
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
             // 先解析域名，免得把 DNS 时间算进延迟。
             var addresses = await System.Net.Dns.GetHostAddressesAsync(u.Host, timeout.Token);
-            if (addresses.Length == 0) return (null, "域名解析不到地址");
+            if (addresses.Length == 0) return (null, L.T("core.mp.nodes.noaddresses"));
             using var client = new TcpClient(addresses[0].AddressFamily);
             var watch = Stopwatch.StartNew();
             await client.ConnectAsync(addresses[0], u.Port, timeout.Token);
@@ -76,11 +77,11 @@ public static class RelayNodes
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return (null, "连接超时");
+            return (null, L.T("core.mp.nodes.timeout"));
         }
         catch (SocketException e)
         {
-            return (null, e.SocketErrorCode == SocketError.HostNotFound ? "域名解析失败" : "连不上：" + e.Message);
+            return (null, e.SocketErrorCode == SocketError.HostNotFound ? L.T("core.mp.nodes.dnsfailed") : L.T("core.mp.nodes.connectfailed") + e.Message);
         }
     }
 }

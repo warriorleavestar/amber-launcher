@@ -1,18 +1,19 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:l="using:Amber.App.Localization"
              xmlns:vm="using:Amber.App.ViewModels"
              x:Class="Amber.App.Views.LogPage"
              x:DataType="vm:LogViewModel">
   <Grid RowDefinitions="Auto,Auto,*">
-    <TextBlock Classes="h1" Text="游戏日志" />
+    <TextBlock Classes="h1" Text="{l:T log.heading}" />
     <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12" Margin="0,0,0,10">
-      <CheckBox Content="只看警告和错误" IsChecked="{Binding OnlyProblems}" />
-      <CheckBox Content="跟随最新" IsChecked="{Binding FollowLatest}" />
-      <Button Content="复制全部" Command="{Binding CopyCommand}" />
+      <CheckBox Content="{l:T log.filter.problems}" IsChecked="{Binding OnlyProblems}" />
+      <CheckBox Content="{l:T log.follow_latest}" IsChecked="{Binding FollowLatest}" />
+      <Button Content="{l:T log.copy_all}" Command="{Binding CopyCommand}" />
     </StackPanel>
     <Border Grid.Row="2" Classes="card" Padding="8" Margin="0">
       <Panel>
-        <TextBlock Classes="hint" Text="启动游戏后，输出会显示在这里。" IsVisible="{Binding !Lines.Count}"
+        <TextBlock Classes="hint" Text="{l:T log.empty}" IsVisible="{Binding !Lines.Count}"
                    HorizontalAlignment="Center" VerticalAlignment="Center" />
         <ListBox x:Name="List" ItemsSource="{Binding Lines}" Background="Transparent" FontFamily="Cascadia Mono,Consolas,Microsoft YaHei UI" FontSize="12">
           <ListBox.ItemTemplate>

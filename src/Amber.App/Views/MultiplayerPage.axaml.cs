@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.App.ViewModels;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -37,8 +38,8 @@ public partial class MultiplayerPage : UserControl
         if (DataContext is not MultiplayerViewModel vm || TopLevel.GetTopLevel(this)?.StorageProvider is not { } storage) return;
         var file = await storage.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title = "导出联机诊断报告",
-            SuggestedFileName = $"Amber 联机诊断 {DateTime.Now:yyyyMMdd-HHmm}.txt",
+            Title = L.T("multiplayer.diagnostics.export_title"),
+            SuggestedFileName = L.F("multiplayer.diagnostics.file_name", DateTime.Now) + ".txt",
             DefaultExtension = "txt",
         });
         if (file?.TryGetLocalPath() is { } path) vm.ExportDiagnostics(path);
@@ -49,8 +50,8 @@ public partial class MultiplayerPage : UserControl
         if (DataContext is not MultiplayerViewModel vm || TopLevel.GetTopLevel(this)?.StorageProvider is not { } storage) return;
         var file = await storage.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title = "导出聊天记录",
-            SuggestedFileName = $"Amber 联机聊天 {DateTime.Now:yyyyMMdd-HHmm}.txt",
+            Title = L.T("multiplayer.chat.export_title"),
+            SuggestedFileName = L.F("multiplayer.chat.file_name", DateTime.Now) + ".txt",
             DefaultExtension = "txt",
         });
         if (file?.TryGetLocalPath() is { } path) vm.ExportChat(path);

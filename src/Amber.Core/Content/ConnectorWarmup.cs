@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using Amber.Core.Launch;
@@ -82,8 +83,11 @@ public static class ConnectorWarmup
                 tail.Enqueue(line);
                 if (tail.Count > 20) tail.Dequeue();
             }
-            if (line.Contains("_mapped_", StringComparison.Ordinal) && line.Contains("Found mod file", StringComparison.Ordinal))
-                progress?.Report($"Connector 已处理 {Interlocked.Increment(ref mapped)} 个模组……");
+            if (line.Contains("_mapped_", StringComparison.Ordinal) && line.Contains("Found mod file", StringComparison.Ordinal) && progress is not null)
+            {
+                var count = Interlocked.Increment(ref mapped);
+                progress.Report(L.P("core.content.warmup.progress", count, count));
+            }
             if (IsPastModDiscovery(line)) finished.TrySetResult(true);
         });
         try
@@ -93,15 +97,15 @@ public static class ConnectorWarmup
             var exited = process.WaitForExitAsync(limit.Token);
             var first = await Task.WhenAny(finished.Task, exited);
             if (first == finished.Task)
-                return new WarmupResult(true, $"处理完了，Connector 转换了 {mapped} 个模组，用时 {watch.Elapsed.TotalSeconds:F0} 秒");
+                return new WarmupResult(true, L.P("core.content.warmup.complete", mapped, mapped, watch.Elapsed.TotalSeconds));
             await exited;
             string last;
             lock (tail) last = string.Join(" / ", tail.TakeLast(3));
-            return new WarmupResult(false, "游戏在处理完之前就退出了：" + last);
+            return new WarmupResult(false, L.F("core.content.warmup.exited", last));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return new WarmupResult(false, $"{timeout.TotalMinutes:F0} 分钟内没有处理完");
+            return new WarmupResult(false, L.P("core.content.warmup.timeout", (long)Math.Round(timeout.TotalMinutes), timeout.TotalMinutes));
         }
         finally
         {

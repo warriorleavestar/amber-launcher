@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core.Net;
 
 namespace Amber.Core.Auth;
@@ -23,7 +24,7 @@ public sealed class AccountService(HttpClient http, AccountStore store, string d
     }
 
     public MicrosoftAuth CreateMicrosoftAuth() =>
-        new(http, MicrosoftClientId ?? throw new InvalidOperationException("没有可用的微软应用 Client ID，可以到「账号」页填写"));
+        new(http, MicrosoftClientId ?? throw new InvalidOperationException(L.T("core.auth.microsoft.missingclientid")));
 
     public ExternalAuth External { get; } = new(http);
 

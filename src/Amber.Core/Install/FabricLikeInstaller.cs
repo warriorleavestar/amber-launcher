@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -29,15 +30,15 @@ public sealed class FabricLikeInstaller(LoaderKind kind, string metaRoot, Loader
     public async Task<string> InstallAsync(LoaderVersion version, string? customId = null, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default)
     {
         var id = string.IsNullOrWhiteSpace(customId) ? version.DefaultId : customId.Trim();
-        progress?.Report(new($"安装原版 {version.McVersion}"));
-        await ctx.Vanilla.InstallAsync(version.McVersion, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, "下载原版文件", p)), ct);
+        progress?.Report(new(L.F("core.install.loader.installvanilla", version.McVersion)));
+        await ctx.Vanilla.InstallAsync(version.McVersion, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, L.T("core.install.loader.downloadvanilla"), p)), ct);
 
-        progress?.Report(new($"获取 {Kind} 配置"));
+        progress?.Report(new(L.F("core.install.fabric.fetchconfig", Kind)));
         var text = await ctx.Downloader.GetStringAsync($"{metaRoot}/versions/loader/{version.McVersion}/{version.Version}/profile/json", ct);
-        var json = JsonNode.Parse(text)?.AsObject() ?? throw new InvalidDataException($"{Kind} 配置解析失败");
+        var json = JsonNode.Parse(text)?.AsObject() ?? throw new InvalidDataException(L.F("core.install.fabric.invalidconfig", Kind));
         LoaderInstallers.WriteVersionJson(ctx.Dir, id, json);
 
-        await ctx.Vanilla.CompleteAsync(id, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, "下载加载器库", p)), ct);
+        await ctx.Vanilla.CompleteAsync(id, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, L.T("core.install.loader.downloadlibraries"), p)), ct);
         return id;
     }
 }

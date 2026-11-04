@@ -1,10 +1,11 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:l="using:Amber.App.Localization"
         xmlns:vm="using:Amber.App.ViewModels"
         xmlns:views="using:Amber.App.Views"
         x:Class="Amber.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
-        Title="Amber 启动器"
+        Title="{l:T main.title}"
         Icon="/Assets/amber.ico"
         Width="1080" Height="700" MinWidth="760" MinHeight="440"
         WindowStartupLocation="CenterScreen"
@@ -23,32 +24,35 @@
     <!-- 设置页 -->
     <DataTemplate DataType="vm:SettingsViewModel">
       <Grid RowDefinitions="Auto,*,Auto">
-        <TextBlock Classes="h1" Text="设置" />
+        <TextBlock Classes="h1" Text="{l:T instance.settings.title}" />
         <ScrollViewer Grid.Row="1">
           <StackPanel Margin="0,0,14,0">
             <Border Classes="card">
-              <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
-                <TextBlock Text="游戏目录" VerticalAlignment="Center" />
+              <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+                <TextBlock Text="{l:T settings.directory.label}" VerticalAlignment="Center" />
                 <TextBox Grid.Column="1" Text="{Binding GameDirectory}" />
-                <Button Grid.Column="2" Content="浏览…" Margin="8,0,0,0" Click="BrowseGameDir_Click" />
+                <Button Grid.Column="2" Content="{l:T common.browse}" Margin="8,0,0,0" Click="BrowseGameDir_Click" />
 
-                <TextBlock Grid.Row="1" Text="下载源" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <TextBlock Grid.Row="1" Text="{l:T settings.source.label}" VerticalAlignment="Center" Margin="0,12,0,0" />
                 <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding SourceOptions}" SelectedIndex="{Binding SourceIndex}"
                           HorizontalAlignment="Stretch" Margin="0,12,0,0" />
 
-                <TextBlock Grid.Row="2" Text="同时下载" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <TextBlock Grid.Row="2" Text="{l:T settings.download.concurrency}" VerticalAlignment="Center" Margin="0,12,0,0" />
                 <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Concurrency}" Width="90" HorizontalAlignment="Left" Margin="0,12,0,0" />
 
-                <TextBlock Grid.Row="4" Text="主题" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <TextBlock Grid.Row="5" Text="{l:T settings.language.label}" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <ComboBox Grid.Row="5" Grid.Column="1" ItemsSource="{Binding LanguageOptions}" SelectedIndex="{Binding SelectedLanguageIndex}" MinWidth="160" Margin="0,12,0,0" />
+
+                <TextBlock Grid.Row="4" Text="{l:T settings.theme.label}" VerticalAlignment="Center" Margin="0,12,0,0" />
                 <ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{Binding ThemeOptions}" SelectedIndex="{Binding SelectedThemeIndex}" MinWidth="160" Margin="0,12,0,0" />
 
-                <TextBlock Grid.Row="3" Text="版本隔离" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <TextBlock Grid.Row="3" Text="{l:T instance.settings.isolation}" VerticalAlignment="Center" Margin="0,12,0,0" />
                 <CheckBox Grid.Row="3" Grid.Column="1" IsChecked="{Binding IsolateVersions}" Margin="0,12,0,0"
-                          Content="每个版本使用独立的存档、模组和配置文件夹" />
+                          Content="{l:T settings.isolation.hint}" />
               </Grid>
             </Border>
             <Border Classes="card">
-              <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+              <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
                 <TextBlock Text="Java" VerticalAlignment="Center" />
                 <ComboBox Grid.Column="1" ItemsSource="{Binding JavaOptions}" SelectedItem="{Binding SelectedJava}"
                           HorizontalAlignment="Stretch">
@@ -58,52 +62,52 @@
                     </DataTemplate>
                   </ComboBox.ItemTemplate>
                 </ComboBox>
-                <Button Grid.Column="2" Content="重新扫描" Margin="8,0,0,0" Command="{Binding RefreshJavaCommand}" />
+                <Button Grid.Column="2" Content="{l:T settings.java.rescan}" Margin="8,0,0,0" Command="{Binding RefreshJavaCommand}" />
 
                 <CheckBox Grid.Row="1" Grid.Column="1" IsChecked="{Binding AutoJavaDownload}" Margin="0,8,0,0"
-                          Content="本机没有合适的 Java 时自动从 Mojang 下载" />
+                          Content="{l:T settings.java.auto_download}" />
 
-                <TextBlock Grid.Row="2" Text="窗口大小" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <TextBlock Grid.Row="2" Text="{l:T instance.settings.window_size}" VerticalAlignment="Center" Margin="0,12,0,0" />
                 <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
-                  <TextBox Text="{Binding WindowWidth}" Width="90" PlaceholderText="宽" />
+                  <TextBox Text="{Binding WindowWidth}" Width="90" PlaceholderText="{l:T instance.settings.width}" />
                   <TextBlock Text="×" VerticalAlignment="Center" />
-                  <TextBox Text="{Binding WindowHeight}" Width="90" PlaceholderText="高" />
-                  <CheckBox IsChecked="{Binding Fullscreen}" Content="全屏" />
+                  <TextBox Text="{Binding WindowHeight}" Width="90" PlaceholderText="{l:T instance.settings.height}" />
+                  <CheckBox IsChecked="{Binding Fullscreen}" Content="{l:T instance.settings.fullscreen}" />
                 </StackPanel>
 
-                <TextBlock Grid.Row="3" Text="JVM 参数" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <TextBlock Grid.Row="3" Text="{l:T instance.settings.jvm_args}" VerticalAlignment="Center" Margin="0,12,0,0" />
                 <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding JvmArgs}" Margin="0,12,0,0" />
-                <TextBlock Grid.Row="4" Text="游戏参数" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <TextBlock Grid.Row="4" Text="{l:T instance.settings.game_args}" VerticalAlignment="Center" Margin="0,12,0,0" />
                 <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding GameArgs}" Margin="0,12,0,0" />
-                <TextBlock Grid.Row="5" Text="启动前命令" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <TextBlock Grid.Row="5" Text="{l:T instance.settings.pre_launch}" VerticalAlignment="Center" Margin="0,12,0,0" />
                 <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding PreLaunch}" Margin="0,12,0,0" />
-                <TextBlock Grid.Row="6" Text="退出后命令" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <TextBlock Grid.Row="6" Text="{l:T instance.settings.post_exit}" VerticalAlignment="Center" Margin="0,12,0,0" />
                 <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding PostExit}" Margin="0,12,0,0" />
               </Grid>
             </Border>
             <Border Classes="card">
-              <Grid ColumnDefinitions="120,*" RowDefinitions="Auto,Auto,Auto,Auto">
-                <TextBlock Text="CurseForge Key" VerticalAlignment="Center" />
-                <TextBox Grid.Column="1" Text="{Binding CurseForgeKey}" PasswordChar="●" PlaceholderText="在 console.curseforge.com 申请。没有 Key 时只能用 Modrinth" />
-                <TextBlock Grid.Row="1" Text="CurseForge 接口" VerticalAlignment="Center" Margin="0,12,0,0" />
-                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding CurseForgeRoot}" Margin="0,12,0,0" PlaceholderText="留空用官方；也可以填你信任的第三方兼容接口" />
-                <TextBlock Grid.Row="2" Text="更新地址" VerticalAlignment="Center" Margin="0,12,0,0" />
-                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding UpdateFeed}" Margin="0,12,0,0" PlaceholderText="留空就不检查更新。只提示新版本，不会自动下载" />
-                <TextBlock Grid.Row="3" Grid.Column="1" Classes="hint" FontSize="12" Margin="0,6,0,0" Text="微软登录的 Client ID 在「账号」页填写。" />
+              <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
+                <TextBlock Text="{l:T settings.curseforge.key}" VerticalAlignment="Center" />
+                <TextBox Grid.Column="1" Text="{Binding CurseForgeKey}" PasswordChar="●" PlaceholderText="{l:T settings.curseforge.key_hint}" />
+                <TextBlock Grid.Row="1" Text="{l:T settings.curseforge.endpoint}" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding CurseForgeRoot}" Margin="0,12,0,0" PlaceholderText="{l:T settings.curseforge.endpoint_hint}" />
+                <TextBlock Grid.Row="2" Text="{l:T settings.update.feed}" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding UpdateFeed}" Margin="0,12,0,0" PlaceholderText="{l:T settings.update.feed_hint}" />
+                <TextBlock Grid.Row="3" Grid.Column="1" Classes="hint" FontSize="12" Margin="0,6,0,0" Text="{l:T settings.accounts.client_id_hint}" />
               </Grid>
             </Border>
             <Border Classes="card">
               <StackPanel Spacing="6">
-                <TextBlock Classes="h2" Text="隐私和联网" Margin="0" />
-                <TextBlock Classes="hint" Text="Amber 没有遥测、没有云控、没有强制更新，不生成设备识别码，地区只用来挑默认下载源。" />
-                <TextBlock Classes="hint" Text="只会访问这些地址，而且都是你操作时才访问：Mojang（版本、Java）、BMCLAPI（镜像、OptiFine）、Fabric / Quilt / Forge / NeoForge 的官方仓库、Modrinth、你配置了 Key 时的 CurseForge、你登录时的微软和皮肤站、你添加的服务器、你填写的更新地址。" />
-                <TextBlock Classes="hint" Text="{Binding SettingsPath, StringFormat='设置文件：{0}'}" />
+                <TextBlock Classes="h2" Text="{l:T settings.privacy.title}" Margin="0" />
+                <TextBlock Classes="hint" Text="{l:T settings.privacy.hint}" />
+                <TextBlock Classes="hint" Text="{l:T settings.privacy.endpoints}" />
+                <TextBlock Classes="hint" Text="{Binding SettingsPathLabel}" />
               </StackPanel>
             </Border>
           </StackPanel>
         </ScrollViewer>
         <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="12" Margin="0,4,0,0">
-          <Button Classes="amber" Content="保存设置" Command="{Binding SaveCommand}" Padding="28,10" />
+          <Button Classes="amber" Content="{l:T settings.save}" Command="{Binding SaveCommand}" Padding="28,10" />
           <TextBlock Text="{Binding Status}" VerticalAlignment="Center" />
         </StackPanel>
       </Grid>
@@ -118,7 +122,7 @@
       <Grid RowDefinitions="Auto,*,Auto">
         <StackPanel Margin="20,18,20,12" Spacing="2">
           <TextBlock Text="Amber" FontSize="26" FontWeight="Bold" Foreground="{DynamicResource AmberAccent}" />
-          <TextBlock Text="Minecraft 启动器" FontSize="12" Foreground="#B0A89E" />
+          <TextBlock Text="{l:T main.subtitle}" FontSize="12" Foreground="#B0A89E" />
         </StackPanel>
         <TextBlock Grid.Row="2" Text="{Binding VersionText}" FontSize="11" Foreground="#80786E" Margin="20,6,8,12"
                    TextWrapping="Wrap" />

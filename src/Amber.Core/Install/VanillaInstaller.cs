@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core;
 using System.Text.Json;
 using Amber.Core.Game;
@@ -21,7 +22,7 @@ public sealed class VanillaInstaller(Downloader downloader, GameDirectory dir)
     {
         var text = await downloader.GetStringAsync(ManifestUrl, ct);
         return JsonSerializer.Deserialize(text, Json.Options.Info<VersionManifest>())
-               ?? throw new InvalidDataException("版本清单解析失败");
+               ?? throw new InvalidDataException(L.T("core.install.vanilla.invalidmanifest"));
     }
 
     /// <summary>安装一个原版版本（已存在则只补全缺失文件）。</summary>
@@ -33,7 +34,7 @@ public sealed class VanillaInstaller(Downloader downloader, GameDirectory dir)
             progress?.Report(new(InstallStage.Manifest, default));
             var manifest = await GetManifestAsync(ct);
             var entry = manifest.Versions.FirstOrDefault(v => v.Id == versionId)
-                        ?? throw new ArgumentException($"版本清单里没有 {versionId}");
+                        ?? throw new ArgumentException(L.F("core.install.vanilla.missingversion", versionId));
 
             progress?.Report(new(InstallStage.VersionJson, default));
             await downloader.DownloadOneAsync(new DownloadItem(entry.Url, jsonPath, entry.Sha1), ct);
@@ -82,6 +83,6 @@ public sealed class VanillaInstaller(Downloader downloader, GameDirectory dir)
     {
         await using var stream = File.OpenRead(path);
         return await JsonSerializer.DeserializeAsync(stream, Json.Options.Info<AssetIndex>(), ct)
-               ?? throw new InvalidDataException($"资源索引解析失败：{path}");
+               ?? throw new InvalidDataException(L.F("core.install.vanilla.invalidassetindex", path));
     }
 }

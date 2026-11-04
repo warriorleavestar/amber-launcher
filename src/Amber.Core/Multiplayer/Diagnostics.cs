@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -45,12 +46,12 @@ public static partial class NetDiagnostics
     public static string Redact(string text, IEnumerable<string> secrets, bool includePublicIps)
     {
         // 先换整个码，再换单独出现的密钥。
-        text = RoomCodePattern().Replace(text, m => $"AMB-{m.Groups[1].Value}-<密钥>-{m.Groups[2].Value}");
-        text = DirectCodePattern().Replace(text, m => $"{m.Groups[1].Value}-<直连码已隐藏>");
-        text = SecretArgPattern().Replace(text, "--network-secret <房间密钥>");
+        text = RoomCodePattern().Replace(text, m => L.F("core.mp.diagnostics.redactedroom", m.Groups[1].Value, m.Groups[2].Value));
+        text = DirectCodePattern().Replace(text, m => L.F("core.mp.diagnostics.redacteddirect", m.Groups[1].Value));
+        text = SecretArgPattern().Replace(text, L.T("core.mp.diagnostics.secretarg"));
         // EasyTier 输出里打印配置时的写法（network_secret: "…" / network_secret = …）。
-        text = SecretConfigPattern().Replace(text, m => m.Groups[1].Value + "<房间密钥>");
-        foreach (var secret in secrets.Where(s => s.Length >= 6)) text = text.Replace(secret, "<房间密钥>", StringComparison.OrdinalIgnoreCase);
+        text = SecretConfigPattern().Replace(text, m => m.Groups[1].Value + L.T("core.mp.diagnostics.secret"));
+        foreach (var secret in secrets.Where(s => s.Length >= 6)) text = text.Replace(secret, L.T("core.mp.diagnostics.secret"), StringComparison.OrdinalIgnoreCase);
         if (!includePublicIps)
         {
             text = IPv4Pattern().Replace(text, m => IPAddress.TryParse(m.Value, out var a) && PortMapping.IsPublic(a) ? MaskAddress(m.Value) : m.Value);
@@ -93,19 +94,19 @@ public static partial class NetDiagnostics
     public static string BuildReport(string version, IEnumerable<DiagnosticEntry> log, IEnumerable<string>? resultTable, IEnumerable<string> secrets, bool includePublicIps)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("Amber 联机诊断报告");
-        builder.AppendLine($"Amber 版本：{version}");
-        builder.AppendLine($"系统：{Environment.OSVersion}，{(Environment.Is64BitOperatingSystem ? "64 位" : "32 位")}");
-        builder.AppendLine($"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss zzz}");
-        builder.AppendLine($"公网 IP：{(includePublicIps ? "未遮挡（用户选择包含）" : "已遮挡后半段")}；房间密钥和房间码已隐藏");
+        builder.AppendLine(L.T("core.mp.diagnostics.title"));
+        builder.AppendLine(L.F("core.mp.diagnostics.version", version));
+        builder.AppendLine(L.F("core.mp.diagnostics.system", Environment.OSVersion, Environment.Is64BitOperatingSystem ? L.T("core.mp.diagnostics.os64") : L.T("core.mp.diagnostics.os32")));
+        builder.AppendLine(L.F("core.mp.diagnostics.time", DateTime.Now));
+        builder.AppendLine(L.F("core.mp.diagnostics.privacy", includePublicIps ? L.T("core.mp.diagnostics.visibleips") : L.T("core.mp.diagnostics.maskedips")));
         builder.AppendLine();
         if (resultTable is not null)
         {
-            builder.AppendLine("== 全条件测试结果 ==");
+            builder.AppendLine(L.T("core.mp.diagnostics.results"));
             foreach (var line in resultTable) builder.AppendLine(line);
             builder.AppendLine();
         }
-        builder.AppendLine("== 详细日志 ==");
+        builder.AppendLine(L.T("core.mp.diagnostics.log"));
         foreach (var entry in log) builder.AppendLine(entry.ToString());
         return Redact(builder.ToString(), secrets, includePublicIps);
     }

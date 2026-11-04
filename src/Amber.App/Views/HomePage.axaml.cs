@@ -1,4 +1,5 @@
 using Amber.App.ViewModels;
+using Amber.Core.Localization;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
@@ -14,7 +15,7 @@ public partial class HomePage : UserControl
         if (DataContext is not HomeViewModel vm || TopLevel.GetTopLevel(this) is not { } top) return;
         var file = await top.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title = "导出错误报告",
+            Title = L.T("home.crash.export_title"),
             SuggestedFileName = $"amber-error-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
             DefaultExtension = "zip",
         });

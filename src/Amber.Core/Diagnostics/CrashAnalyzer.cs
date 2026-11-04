@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.IO.Compression;
 using System.Text.RegularExpressions;
 
@@ -10,8 +11,8 @@ public sealed record CrashFinding(string Title, string Advice, CrashSeverity Sev
 public sealed record CrashAnalysis(IReadOnlyList<CrashFinding> Findings, IReadOnlyList<string> SuspectMods, IReadOnlyList<string> SourceFiles)
 {
     public string Summary => Findings.Count == 0
-        ? "没有识别出已知原因，可以把日志导出后发给懂的人看。"
-        : string.Join("\n", Findings.Select(f => $"• {f.Title}：{f.Advice}"));
+        ? L.T("core.crash.summary.unknown")
+        : string.Join("\n", Findings.Select(f => L.F("core.crash.summary.finding", f.Title, f.Advice)));
 }
 
 /// <summary>
@@ -22,8 +23,9 @@ public static partial class CrashAnalyzer
 {
     private sealed record Rule(Regex Pattern, Func<Match, CrashFinding> Build);
 
-    private static Rule R(string pattern, string title, string advice, CrashSeverity severity = CrashSeverity.Likely) =>
-        new(new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase), m => new CrashFinding(title, advice, severity, m.Value));
+    /// <param name="key">翻译键的前缀：标题是 key.title，建议是 key.advice。匹配到时才取文字，换语言后马上生效。</param>
+    private static Rule R(string pattern, string key, CrashSeverity severity = CrashSeverity.Likely) =>
+        new(new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase), m => new CrashFinding(L.T(key + ".title"), L.T(key + ".advice"), severity, m.Value));
 
     private static Rule R(string pattern, Func<Match, CrashFinding> build) =>
         new(new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase), build);
@@ -31,62 +33,62 @@ public static partial class CrashAnalyzer
     private static readonly Rule[] Rules =
     [
         // 内存
-        R(@"java\.lang\.OutOfMemoryError", "内存不够用", "在实例设置里调大最大内存，或者减少模组和光影。"),
-        R(@"Could not reserve enough space for \d+\w* object heap", "Java 申请不到设置的内存", "把最大内存调小；如果用的是 32 位 Java，换成 64 位。"),
-        R(@"There is insufficient memory for the Java Runtime", "系统可用内存不足", "关掉其他程序或者把最大内存调小。"),
+        R(@"java\.lang\.OutOfMemoryError", "core.crash.memory.exhausted"),
+        R(@"Could not reserve enough space for \d+\w* object heap", "core.crash.memory.heapreservation"),
+        R(@"There is insufficient memory for the Java Runtime", "core.crash.memory.system"),
 
         // Java 版本
         R(@"has been compiled by a more recent version of the Java Runtime \(class file version (\d+)", m =>
-            new CrashFinding($"Java 版本太旧，需要 Java {int.Parse(m.Groups[1].Value) - 44} 或更高", "在实例设置里把 Java 改成自动，或选一个足够新的版本。", CrashSeverity.Likely, m.Value)),
-        R(@"AppClassLoader cannot be cast to (class )?java\.net\.URLClassLoader", "这个版本要用 Java 8", "旧版 Forge 和 LiteLoader 不支持 Java 9 以上，把实例的 Java 改成 Java 8。"),
-        R(@"InaccessibleObjectException|Unable to make .{1,200} accessible", "Java 版本太新", "这个版本的加载器不支持当前 Java。把实例的 Java 改成自动，会按游戏要求选择。"),
+            new CrashFinding(L.F("core.crash.java.tooold.title", int.Parse(m.Groups[1].Value) - 44), L.T("core.crash.java.tooold.advice"), CrashSeverity.Likely, m.Value)),
+        R(@"AppClassLoader cannot be cast to (class )?java\.net\.URLClassLoader", "core.crash.java.eightrequired"),
+        R(@"InaccessibleObjectException|Unable to make .{1,200} accessible", "core.crash.java.toonew"),
         R(@"Unsupported class file major version (\d+)", m =>
-            new CrashFinding($"Java 太新，加载器不认识版本号 {m.Groups[1].Value} 的类文件", "把实例的 Java 改成自动，或升级加载器。", CrashSeverity.Likely, m.Value)),
+            new CrashFinding(L.F("core.crash.java.unsupportedclass.title", m.Groups[1].Value), L.T("core.crash.java.unsupportedclass.advice"), CrashSeverity.Likely, m.Value)),
         R(@"The downloaded file (\S+) has an invalid checksum|files\.minecraftforge\.net/fmllibs", m =>
-            new CrashFinding("老 Forge 下载自带的库失败" + (m.Groups[1].Success ? $"（{m.Groups[1].Value}）" : ""), "这个老 Forge 的库下载地址早就没了。用 Amber 重新安装这个 Forge 版本，Amber 会提前把校验过的库放进实例的 lib 文件夹；别的启动器装的也建议用 Amber 重装。", CrashSeverity.Likely, m.Value)),
-        R(@"could not find java\.dll|Could not find Java SE Runtime Environment", "Java 找不到自己的文件", "多半是 Java 或游戏目录的路径里有中文，而系统“非 Unicode 程序的语言”不是中文。Amber 会自动改用英文名的联接启动；还不行的话，把游戏目录放到纯英文路径下，或者在实例设置里换一个装在英文路径的 Java。"),
-        R(@"Error occurred during initialization of VM\s+.{0,120}", "Java 虚拟机启动失败", "检查实例设置里的 JVM 参数，把可疑的参数删掉再试。"),
-        R(@"Unrecognized (VM|command-line) option", "JVM 参数不被这个 Java 支持", "检查实例设置里的 JVM 参数，删掉不支持的那项。"),
+            new CrashFinding(m.Groups[1].Success ? L.F("core.crash.forge.librarydownload.file", m.Groups[1].Value) : L.T("core.crash.forge.librarydownload.title"), L.T("core.crash.forge.librarydownload.advice"), CrashSeverity.Likely, m.Value)),
+        R(@"could not find java\.dll|Could not find Java SE Runtime Environment", "core.crash.java.missingfiles"),
+        R(@"Error occurred during initialization of VM\s+.{0,120}", "core.crash.java.vmstartup"),
+        R(@"Unrecognized (VM|command-line) option", "core.crash.java.unsupportedoption"),
 
         // 模组依赖与冲突
-        R(@"(Found|Duplicate) .{0,40}duplicate mods?|DuplicateModsFoundException|Mod .{1,80} is (present|loaded) .{0,40}multiple", "同一个模组装了不止一份", "在模组页找到重复的模组，只留一个版本。"),
-        R(@"Incompatible mods? found|net\.fabricmc\.loader\.impl\.FormattedException", "模组之间不兼容或缺少依赖", "看日志里 Fabric 列出的模组和版本要求，安装或更换对应模组。"),
+        R(@"(Found|Duplicate) .{0,40}duplicate mods?|DuplicateModsFoundException|Mod .{1,80} is (present|loaded) .{0,40}multiple", "core.crash.mods.duplicate"),
+        R(@"Incompatible mods? found|net\.fabricmc\.loader\.impl\.FormattedException", "core.crash.mods.incompatible"),
         R(@"requires (version )?.{1,80} of (mod )?'?([\w-]+)'?,? (but|which)", m =>
-            new CrashFinding($"缺少依赖或版本不对：{m.Groups[3].Value}", "安装模组要求的依赖版本。资源页安装模组时会自动带上必需依赖。", CrashSeverity.Likely, m.Value)),
+            new CrashFinding(L.F("core.crash.mods.dependencyversion.title", m.Groups[3].Value), L.T("core.crash.mods.dependencyversion.advice"), CrashSeverity.Likely, m.Value)),
         R(@"Missing or unsupported mandatory dependencies:?[\s\S]{0,300}", m =>
-            new CrashFinding("缺少必需的模组依赖", "看证据里列出的模组名，把它们装上或换成匹配的版本。", CrashSeverity.Likely, m.Value)),
+            new CrashFinding(L.T("core.crash.mods.mandatorydependencies.title"), L.T("core.crash.mods.mandatorydependencies.advice"), CrashSeverity.Likely, m.Value)),
         R(@"Mod (\S+) requires (\S+)", m =>
-            new CrashFinding($"{m.Groups[1].Value} 需要 {m.Groups[2].Value}", "安装它要求的依赖。", CrashSeverity.Likely, m.Value)),
+            new CrashFinding(L.F("core.crash.mods.requires.title", m.Groups[1].Value, m.Groups[2].Value), L.T("core.crash.mods.requires.advice"), CrashSeverity.Likely, m.Value)),
         R(@"(org\.sinytra\.connector|dev\.su5ed\.sinytra\.connector)[\s\S]{0,2000}?(Exception|Error)|Sinytra Connector.{0,60}(failed|error|incompatible)", m =>
-            new CrashFinding("Sinytra Connector 运行 Fabric 模组时出错", "不是每个 Fabric 模组都能经 Connector 在 Forge / NeoForge 上运行。先禁用最近加的 Fabric 模组试试；能找到这个模组的 Forge / NeoForge 版就换成那个。Connector 的兼容情况可以在它的项目页查到。", CrashSeverity.Likely, m.Value.Length > 300 ? m.Value[..300] : m.Value)),
+            new CrashFinding(L.T("core.crash.mods.connector.title"), L.T("core.crash.mods.connector.advice"), CrashSeverity.Likely, m.Value.Length > 300 ? m.Value[..300] : m.Value)),
         R(@"(Invalid|Failed to apply) mixin|MixinApplyError|InvalidMixinException|Mixin apply for mod (\S+) failed|Mixin transformation of .{1,120} failed", m =>
-            new CrashFinding(m.Groups[2].Success ? $"模组 {m.Groups[2].Value} 的 Mixin 注入失败" : "模组的 Mixin 注入失败", "通常是模组版本和游戏版本不匹配，或者两个模组冲突。看疑似模组，先更新或禁用它。", CrashSeverity.Likely, m.Value)),
+            new CrashFinding(m.Groups[2].Success ? L.F("core.crash.mods.mixin.namedtitle", m.Groups[2].Value) : L.T("core.crash.mods.mixin.title"), L.T("core.crash.mods.mixin.advice"), CrashSeverity.Likely, m.Value)),
         // 崩溃报告的系统信息里同时写着 OptiFine 和 Forge 版本：OptiFine 只适配某几个 Forge 版本，换 Forge 后最常见的就是 NoSuchMethodError。
         R(@"(NoSuchMethodError|NoSuchFieldError)[\s\S]{0,60000}OptiFine Version: (OptiFine_\S+)[\s\S]{0,20000}Forge: net\.minecraftforge:(\S+)", m =>
-            new CrashFinding($"{m.Groups[2].Value} 和 Forge {m.Groups[3].Value} 不兼容", "OptiFine 只支持特定的 Forge 版本（下载页选 OptiFine 时，版本旁边写着对应的 Forge）。换成那个 Forge 版本，或者去掉 OptiFine。", CrashSeverity.Likely, m.Groups[1].Value)),
-        R(@"NoSuchMethodError|NoSuchFieldError", "模组和游戏或其他模组版本不匹配", "更新模组，确认下载的是这个游戏版本和加载器用的文件。", CrashSeverity.Possible),
+            new CrashFinding(L.F("core.crash.mods.optifineforge.title", m.Groups[2].Value, m.Groups[3].Value), L.T("core.crash.mods.optifineforge.advice"), CrashSeverity.Likely, m.Groups[1].Value)),
+        R(@"NoSuchMethodError|NoSuchFieldError", "core.crash.mods.versionmismatch", CrashSeverity.Possible),
         R(@"ClassNotFoundException: (\S+)|NoClassDefFoundError: (\S+)", m =>
-            new CrashFinding($"找不到类 {(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)}", "可能缺少前置模组，或者文件不完整。", CrashSeverity.Possible, m.Value)),
-        R(@"optifine[\s\S]{0,400}(ClassCastException|NoSuchMethodError|TransformerException)", "OptiFine 和其他模组冲突", "OptiFine 和很多模组不兼容，先把它禁用试试。Fabric 上可以换成 Sodium + Iris。"),
+            new CrashFinding(L.F("core.crash.mods.missingclass.title", (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)), L.T("core.crash.mods.missingclass.advice"), CrashSeverity.Possible, m.Value)),
+        R(@"optifine[\s\S]{0,400}(ClassCastException|NoSuchMethodError|TransformerException)", "core.crash.mods.optifineconflict"),
 
         // 文件损坏
-        R(@"ZipException|zip file (is )?(closed|empty|corrupt)|error in opening zip file|Invalid (or corrupt )?(jar|zip)|invalid (LOC|CEN) header", "有文件损坏", "到实例页用“补全文件”重新校验，模组文件损坏就删掉重下。", CrashSeverity.Likely),
-        R(@"Checksum|Hash mismatch|SHA-?1 mismatch", "文件校验不通过", "重新补全这个版本的文件。", CrashSeverity.Possible),
+        R(@"ZipException|zip file (is )?(closed|empty|corrupt)|error in opening zip file|Invalid (or corrupt )?(jar|zip)|invalid (LOC|CEN) header", "core.crash.files.corrupt", CrashSeverity.Likely),
+        R(@"Checksum|Hash mismatch|SHA-?1 mismatch", "core.crash.files.checksum", CrashSeverity.Possible),
 
         // 显卡与驱动
-        R(@"Pixel format not accelerated|WGL_ARB_create_context|No OpenGL context|GLFW error 65542|Could not create context|WGL: The driver does not appear to support OpenGL", "显卡驱动不支持 OpenGL", "更新显卡驱动。笔记本把 Java 设为用独立显卡运行。"),
-        R(@"Couldn't set pixel format|Display.create|Failed to create window|GLFW error 6500\d", "创建游戏窗口失败", "更新显卡驱动，或者删掉实例里 options.txt 中异常的分辨率设置。", CrashSeverity.Possible),
-        R(@"EXCEPTION_ACCESS_VIOLATION[\s\S]{0,4000}(atio6axx|atioglxx|nvoglv|ig\d{1,2}icd|amdvlk|vulkan)", "显卡驱动崩溃", "更新或回退显卡驱动；关掉光影试试。"),
-        R(@"Problematic frame:\s*#\s*C\s+\[(atio6axx|atioglxx|nvoglv\w*|ig\d{1,2}icd\w*)", "崩溃发生在显卡驱动里", "更新或回退显卡驱动。"),
-        R(@"Shader .{1,120}(compile|link).{0,20}(error|fail)|Failed to compile shader", "光影着色器编译失败", "换一个光影包或关掉光影。", CrashSeverity.Possible),
+        R(@"Pixel format not accelerated|WGL_ARB_create_context|No OpenGL context|GLFW error 65542|Could not create context|WGL: The driver does not appear to support OpenGL", "core.crash.graphics.opengl"),
+        R(@"Couldn't set pixel format|Display.create|Failed to create window|GLFW error 6500\d", "core.crash.graphics.window", CrashSeverity.Possible),
+        R(@"EXCEPTION_ACCESS_VIOLATION[\s\S]{0,4000}(atio6axx|atioglxx|nvoglv|ig\d{1,2}icd|amdvlk|vulkan)", "core.crash.graphics.drivercrash"),
+        R(@"Problematic frame:\s*#\s*C\s+\[(atio6axx|atioglxx|nvoglv\w*|ig\d{1,2}icd\w*)", "core.crash.graphics.driverframe"),
+        R(@"Shader .{1,120}(compile|link).{0,20}(error|fail)|Failed to compile shader", "core.crash.graphics.shader", CrashSeverity.Possible),
 
         // 其他明确特征
-        R(@"UnsatisfiedLinkError", "本地库加载失败", "可能是 natives 不完整或 Java 位数不对。到工具箱清理 natives 后重新启动。"),
-        R(@"Manually triggered debug crash", "这是手动触发的调试崩溃", "按住 F3+C 会主动让游戏崩溃，不是故障。"),
-        R(@"Exception ticking world|Exception in world tick|Ticking entity|Ticking block entity", "存档里的实体或方块导致崩溃", "先备份存档。看疑似模组，或用模组提供的工具清除出问题的实体。", CrashSeverity.Possible),
-        R(@"Failed to load (config|configuration)|ParsingException.{0,80}\.(toml|json)|Failed loading config file", "配置文件损坏", "删掉 config 文件夹里报错的那个文件，模组会重新生成。"),
-        R(@"session.?(server)?.{0,40}(Invalid|Failed to verify)|Bad login|Invalid session", "登录会话无效", "到账号页重新登录。", CrashSeverity.Possible),
-        R(@"java\.net\.BindException|Address already in use", "网络端口被占用", "关掉占用端口的程序再试。", CrashSeverity.Possible),
+        R(@"UnsatisfiedLinkError", "core.crash.native.load"),
+        R(@"Manually triggered debug crash", "core.crash.debug.manual"),
+        R(@"Exception ticking world|Exception in world tick|Ticking entity|Ticking block entity", "core.crash.world.ticking", CrashSeverity.Possible),
+        R(@"Failed to load (config|configuration)|ParsingException.{0,80}\.(toml|json)|Failed loading config file", "core.crash.files.config"),
+        R(@"session.?(server)?.{0,40}(Invalid|Failed to verify)|Bad login|Invalid session", "core.crash.auth.session", CrashSeverity.Possible),
+        R(@"java\.net\.BindException|Address already in use", "core.crash.network.port", CrashSeverity.Possible),
     ];
 
     [GeneratedRegex(@"Suspected Mods?:\s*(.+)")]

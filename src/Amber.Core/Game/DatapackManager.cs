@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -41,9 +42,9 @@ public static class DatapackManager
     public static void SetEnabled(string worldPath, string fileName, bool enabled)
     {
         var levelDat = System.IO.Path.Combine(worldPath, "level.dat");
-        if (!File.Exists(levelDat)) throw new FileNotFoundException("这个世界没有 level.dat", levelDat);
+        if (!File.Exists(levelDat)) throw new FileNotFoundException(L.T("core.game.datapack.missinglevel"), levelDat);
         var root = Nbt.ReadFile(levelDat);
-        if (root.GetValueOrDefault("Data") is not Dictionary<string, object> data) throw new InvalidDataException("level.dat 里没有 Data");
+        if (root.GetValueOrDefault("Data") is not Dictionary<string, object> data) throw new InvalidDataException(L.T("core.game.datapack.missingdata"));
         if (data.GetValueOrDefault("DataPacks") is not Dictionary<string, object> packs)
         {
             packs = [];
@@ -69,12 +70,12 @@ public static class DatapackManager
         var target = System.IO.Path.Combine(dir, System.IO.Path.GetFileName(source.TrimEnd('\\', '/')));
         if (Directory.Exists(source))
         {
-            if (!File.Exists(System.IO.Path.Combine(source, "pack.mcmeta"))) throw new InvalidDataException("这个文件夹里没有 pack.mcmeta，不是数据包");
+            if (!File.Exists(System.IO.Path.Combine(source, "pack.mcmeta"))) throw new InvalidDataException(L.T("core.game.datapack.invalidfolder"));
             CopyDirectory(source, target);
         }
         else
         {
-            if (!IsDatapackZip(source)) throw new InvalidDataException($"{System.IO.Path.GetFileName(source)} 不是数据包（压缩包根目录要有 pack.mcmeta 和 data 文件夹）");
+            if (!IsDatapackZip(source)) throw new InvalidDataException(L.F("core.game.datapack.invalidarchive", System.IO.Path.GetFileName(source)));
             var name = System.IO.Path.GetFileName(source);
             if (!name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) target += ".zip";
             File.Copy(source, target, true);
@@ -127,7 +128,7 @@ public static class DatapackManager
             parent[key] = created;
             return created;
         }
-        throw new InvalidDataException($"level.dat 的 DataPacks.{key} 格式不对");
+        throw new InvalidDataException(L.F("core.game.datapack.invalidformat", key));
     }
 
     private static string? ReadDescription(string path, bool isFolder)

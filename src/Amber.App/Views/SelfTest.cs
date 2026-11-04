@@ -44,6 +44,14 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         return condition();
     }
 
+    /// <summary>当前页面现在的状态（填好的列表、房间）在四种语言、最小的两种窗口下有没有被切掉的东西。</summary>
+    private async Task LayoutHereAsync(string tag)
+    {
+        var problems = await new LayoutCheck(window, main, Path.Combine(reportDir, "layout")).CheckCurrentAsync(tag, Log);
+        Check($"界面尺寸（{tag}）：四种语言、小窗口下没有被切掉的内容", problems.Count == 0,
+            string.Join("；", problems.Take(5).Select(p => $"{p.Page}@{p.Size} {p.What}")));
+    }
+
     private async Task ShotAsync(string name)
     {
         await Task.Delay(400);
@@ -58,12 +66,34 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
     public async Task RunAsync()
     {
         Directory.CreateDirectory(reportDir);
+        // 下面的检查按简体中文的文字判断，不管这台电脑是什么系统语言都先切到简体中文。
+        Amber.Core.Localization.L.SetLanguage(Amber.Core.Localization.L.Source);
         try
         {
+            // 换语言前后各个下拉框的选中项和设置文件都不能变。
+            string Selections() => Dispatcher.UIThread.Invoke(() =>
+            {
+                var s = Page<SettingsViewModel>();
+                var i = Page<InstanceViewModel>();
+                return $"源 {s.SourceIndex} 主题 {s.SelectedThemeIndex} 语言 {s.SelectedLanguageIndex} 登录 {Page<AccountsViewModel>().LoginTab} " +
+                       $"类型 {Page<ContentViewModel>().TypeIndex} 筛选 {Page<DownloadViewModel>().Filter.Label.Length > 0} 隔离 {i.IsolateIndex} 内存 {i.MemoryModeIndex} 全屏 {i.FullscreenIndex} 导出 {i.ExportFormatIndex}";
+            });
             // 先检查每个页面在各种窗口大小下有没有被切掉的东西（截图放在报告目录的 layout 文件夹）。
             var layout = await new LayoutCheck(window, main, Path.Combine(reportDir, "layout")).RunAsync(Log);
             Check($"界面尺寸：{main.Pages.Count} 个页面 × {LayoutCheck.Sizes.Length} 种窗口大小没有被切掉的内容", layout.Count == 0,
                 layout.Count == 0 ? "" : string.Join("；", layout.Take(5).Select(p => $"{p.Page}@{p.Size} {p.What}")));
+            // 布局检查已经把每个页面都显示过（下拉框都绑定好了），再在四种语言之间切一圈。
+            var selectionsBefore = Selections();
+            var settingsBefore = File.Exists(Amber.App.Services.AppSettings.FilePath) ? File.ReadAllText(Amber.App.Services.AppSettings.FilePath) : "";
+            foreach (var (code, _) in Amber.Core.Localization.L.Languages.Reverse())
+            {
+                Amber.Core.Localization.L.SetLanguage(code);
+                await Task.Delay(300);
+            }
+            var selectionsAfter = Selections();
+            var settingsAfter = File.Exists(Amber.App.Services.AppSettings.FilePath) ? File.ReadAllText(Amber.App.Services.AppSettings.FilePath) : "";
+            Check("换语言：各下拉框的选中项不变，设置文件没被改写", selectionsBefore == selectionsAfter && settingsBefore == settingsAfter,
+                $"{selectionsBefore} → {selectionsAfter}{(settingsBefore == settingsAfter ? "" : "；设置文件变了")}");
             window.Width = 1080;
             window.Height = 700;
             await InstallLoaderAsync();
@@ -161,7 +191,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
 
         content.SourceIndex = 1;
         await WaitAsync(() => content.Status.Contains("失败") || content.Results.Count > 0, 20);
-        Check("没配 Key 时 CurseForge 给出明确提示", content.Status.Contains("API Key") || content.Results.Count > 0, content.Status);
+        Check("没配 Key 时 CurseForge 给出明确提示", content.Status.Contains("API 密钥") || content.Results.Count > 0, content.Status);
         content.SourceIndex = 0;
     }
 
@@ -278,6 +308,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await instance.BackupWorldCommand.ExecuteAsync(instance.Worlds.First());
         Check("备份世界", instance.Status.Contains("备份完成"), instance.Status);
         await ShotAsync("世界页");
+        await LayoutHereAsync("世界页");
         await DatapacksAsync(instance, world);
         instance.DeleteWorldCommand.Execute(instance.Worlds.First());
         Check("删除世界进回收站", !Directory.Exists(world), instance.Status);
@@ -315,6 +346,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             item.Enabled = true;
         }
         await ShotAsync("数据包");
+        await LayoutHereAsync("数据包");
 
         // “下载数据包…”跳到资源页，类型、版本、世界都选好。
         Check("点“下载数据包…”", Press(await FindAsync<Button>(b => b.Content as string == "下载数据包…")));
@@ -386,6 +418,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await host.CreateRoomCommand.ExecuteAsync(null);
         Check("联机：创建房间", host.IsHosting && host.RoomCodeText.StartsWith("AMB-", StringComparison.Ordinal), host.Status);
         await ShotAsync("联机房主");
+        await LayoutHereAsync("联机房主");
 
         var guest = host.CreateTestPeer();
         guest.Activate();
@@ -657,6 +690,18 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         download.SelectedLoader = download.LoaderChoices.First(c => c.Label == "Forge");
         await WaitAsync(() => download.LoaderVersions.Count > 0 || download.LoaderHint.Length > 0 && !download.LoaderHint.StartsWith("正在", StringComparison.Ordinal), 45);
         Check("下载页：1.5.2 能选 Forge 版本", download.LoaderVersions.Any(v => v.Version.StartsWith("1.5.2-", StringComparison.Ordinal)), $"{download.LoaderVersions.Count} 个 {download.LoaderHint}");
+        // 换语言时 Forge 的“推荐 / 最新”备注跟着换，但不能把用户填的名字改回默认。
+        Dispatcher.UIThread.Invoke(() => download.CustomName = "MyPack");
+        var noted = download.LoaderVersions.Count(v => v.Note is not null);
+        Amber.Core.Localization.L.SetLanguage("en");
+        await Task.Delay(800);
+        var englishNotes = download.LoaderVersions.Where(v => v.Note is not null).Select(v => v.Note).Distinct().ToList();
+        var nameKept = download.CustomName == "MyPack";
+        Amber.Core.Localization.L.SetLanguage(Amber.Core.Localization.L.Source);
+        await Task.Delay(500);
+        Check("下载页：换语言后 Forge 备注换成英文，自己填的名字不变",
+            nameKept && (noted == 0 || englishNotes.All(n => n is "Recommended" or "Latest")),
+            $"名字 {download.CustomName}，备注 {string.Join("/", englishNotes)}");
         download.CloseConfigureCommand.Execute(null);
 
         var instance = Page<InstanceViewModel>();
@@ -688,6 +733,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("模组兼容：游戏版本不对的模组被标出", flagged is { HasCompatProblem: true, CanFindMatching: true } && flagged.CompatText.Contains("1.20.4"), flagged?.CompatText ?? "");
         Check("模组兼容：汇总里有不匹配数", instance.CompatSummary.Contains("不匹配"), instance.CompatSummary);
         await ShotAsync("模组兼容");
+        await LayoutHereAsync("模组页");
         File.Delete(wrong);
         await FindMatchingAsync(instance, neo);
 

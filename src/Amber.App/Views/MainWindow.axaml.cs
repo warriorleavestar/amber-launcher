@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.App.Services;
 using Amber.App.ViewModels;
 using Avalonia;
@@ -29,7 +30,7 @@ public partial class MainWindow : Window
             Opened += async (_, _) =>
             {
                 var problems = await new LayoutCheck(this, (MainViewModel)DataContext!, layoutDir).RunAsync();
-                File.AppendAllText(Path.Combine(layoutDir, "layout.txt"), $"共 {problems.Count} 处" + Environment.NewLine);
+                File.AppendAllText(Path.Combine(layoutDir, "layout.txt"), $"total {problems.Count}" + Environment.NewLine);
                 Close();
             };
         // 开发用：AMBER_SELFTEST=报告目录，走一遍端到端自检。
@@ -119,7 +120,7 @@ public partial class MainWindow : Window
             {
                 await demo.RunSnapshotDemoAsync();
                 await Task.Delay(500);
-                await Dispatcher.UIThread.InvokeAsync(() => Save(Path.Combine(dir, $"{i + 1}-{vm.Pages[i].Title}-演示.png")));
+                await Dispatcher.UIThread.InvokeAsync(() => Save(Path.Combine(dir, $"{i + 1}-{vm.Pages[i].Title}-demo.png")));
             }
         }
         // AMBER_SNAPSHOT_LAUNCH=秒数：再用启动页真实启动一次游戏，等待后截日志页并结束游戏。
@@ -128,10 +129,10 @@ public partial class MainWindow : Window
             vm.CurrentPage = home;
             _ = home.LaunchCommand.ExecuteAsync(null);
             await Task.Delay(TimeSpan.FromSeconds(seconds));
-            await Dispatcher.UIThread.InvokeAsync(() => Save(Path.Combine(dir, "5-启动中.png")));
+            await Dispatcher.UIThread.InvokeAsync(() => Save(Path.Combine(dir, "5-launching.png")));
             vm.CurrentPage = vm.Pages[^1];
             await Task.Delay(1500);
-            await Dispatcher.UIThread.InvokeAsync(() => Save(Path.Combine(dir, "6-游戏日志.png")));
+            await Dispatcher.UIThread.InvokeAsync(() => Save(Path.Combine(dir, "6-game-log.png")));
             home.CancelCommand.Execute(null);
             await Task.Delay(1500);
         }
@@ -148,7 +149,7 @@ public partial class MainWindow : Window
     private async void BrowseGameDir_Click(object? sender, RoutedEventArgs e)
     {
         if ((sender as Control)?.DataContext is not SettingsViewModel vm) return;
-        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "选择游戏目录（.minecraft）" });
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = L.T("settings.directory.picker") });
         if (folders.Count > 0 && folders[0].TryGetLocalPath() is { } path) vm.GameDirectory = path;
     }
 }

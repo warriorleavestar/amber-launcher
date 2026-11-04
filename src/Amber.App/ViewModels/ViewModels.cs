@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Amber.Core.Localization;
 using Amber.App.Services;
 using Amber.Core.Launch;
 using Avalonia.Data.Converters;
@@ -12,6 +13,19 @@ namespace Amber.App.ViewModels;
 
 public abstract class PageViewModel : ObservableObject
 {
+    protected PageViewModel()
+    {
+        // 换语言时让这个页面的所有绑定重新取值（标题、下拉选项这些在 C# 里生成的文字跟着换）。
+        Amber.Core.Localization.L.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            OnLanguageChanged();
+            OnPropertyChanged((string?)null);
+        });
+    }
+
+    /// <summary>换语言后（界面线程上）：把存成文字的内容（汇总、提示）按新语言重新算一遍。</summary>
+    protected virtual void OnLanguageChanged() { }
+
     public abstract string Title { get; }
 
     /// <summary>导航图标的路径数据（24×24）。</summary>
@@ -72,7 +86,7 @@ public static class Ui
 public static class Converters
 {
     public static readonly IValueConverter DeleteLabel =
-        new FuncValueConverter<bool, string>(armed => armed ? "确认删除" : "删除版本");
+        new FuncValueConverter<bool, string>(armed => armed ? L.T("common.confirm_delete") : L.T("instance.version.delete"));
 
     /// <summary>有问题时用醒目的橙色，没问题时用普通的灰色提示色。</summary>
     public static readonly IValueConverter ProblemBrush =
@@ -86,7 +100,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial PageViewModel CurrentPage { get; set; }
 
-    public string VersionText { get; } = $"v{UpdateChecker.CurrentVersion} · 无云控 · 无遥测";
+    public string VersionText => L.F("main.version", UpdateChecker.CurrentVersion);
 
     partial void OnCurrentPageChanged(PageViewModel oldValue, PageViewModel newValue)
     {
@@ -97,6 +111,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     public MainViewModel(LauncherService service)
     {
+        L.Changed += () => Dispatcher.UIThread.Post(() => OnPropertyChanged(nameof(VersionText)));
         var log = new LogViewModel();
         var home = new HomeViewModel(service, log);
         var instance = new InstanceViewModel(service) { NavigateHome = null };
@@ -132,10 +147,11 @@ public sealed partial class SettingsViewModel : PageViewModel
 {
     private readonly LauncherService _service;
 
-    public override string Title => "设置";
+    public override string Title => L.T("instance.settings.title");
     public override string Icon => "M4 6h8v2H4zM16 6h4v2h-4zM12 4h4v6h-4zM4 16h4v2H4zM12 16h8v2h-8zM8 14h4v6H8z";
 
-    public string[] SourceOptions { get; } = ["自动（按时区选择）", "官方优先", "BMCLAPI 镜像优先"];
+    /// <summary>下拉框的选项列表本身不变，换语言时只换文字（不然选中的序号会被清成 -1、保存时丢设置）。</summary>
+    public Amber.App.Localization.OptionItem[] SourceOptions { get; } = Amber.App.Localization.OptionItem.Keys("settings.source.auto", "settings.source.official", "settings.source.mirror");
     private static readonly string[] SourceKeys = ["auto", "official", "mirror"];
 
     public ObservableCollection<JavaOption> JavaOptions { get; } = [];
@@ -159,10 +175,20 @@ public sealed partial class SettingsViewModel : PageViewModel
     [ObservableProperty] public partial string Status { get; set; } = "";
 
     public string SettingsPath => AppSettings.FilePath;
+    public string SettingsPathLabel => L.F("settings.file_path", SettingsPath);
 
     public SettingsViewModel(LauncherService service)
     {
         _service = service;
+        L.Changed += () => Dispatcher.UIThread.Post(() =>
+        {
+            var automatic = JavaOptions.FirstOrDefault(o => o.Path is null);
+            if (automatic is null) return;
+            var selected = SelectedJava == automatic;
+            var replacement = new JavaOption(L.T("settings.java.automatic"), null);
+            JavaOptions[JavaOptions.IndexOf(automatic)] = replacement;
+            if (selected) SelectedJava = replacement;
+        });
         var s = service.Settings;
         GameDirectory = s.GameDirectory;
         SourceIndex = Math.Max(0, Array.IndexOf(SourceKeys, s.DownloadSource));
@@ -180,11 +206,34 @@ public sealed partial class SettingsViewModel : PageViewModel
         CurseForgeRoot = s.CurseForgeApiRoot ?? "";
         UpdateFeed = s.UpdateFeedUrl ?? "";
         SelectedThemeIndex = Math.Max(0, Array.IndexOf(ThemeKeys, s.Theme));
+        // 启动时只把选单对上已经生效的语言，不再重新应用、不写设置文件。
+        _initializing = true;
+        SelectedLanguageIndex = Math.Max(0, Array.IndexOf(LanguageKeys, Amber.Core.Localization.L.Resolve(s.Language) ?? "system"));
+        _initializing = false;
+    }
+
+    private bool _initializing;
+
+    /// <summary>界面语言：第一项跟随系统，其余每种语言用自己的文字写名字（不管现在是什么语言都认得出来）。</summary>
+    public Amber.App.Localization.OptionItem[] LanguageOptions { get; } =
+        [Amber.App.Localization.OptionItem.Key("settings.language.system"), .. Amber.Core.Localization.L.Languages.Select(l => Amber.App.Localization.OptionItem.Fixed(l.Name))];
+    private static readonly string[] LanguageKeys = ["system", .. Amber.Core.Localization.L.Languages.Select(l => l.Code)];
+
+    [ObservableProperty] public partial int SelectedLanguageIndex { get; set; }
+
+    /// <summary>选了就立刻换（不用点保存），同时记进设置。</summary>
+    partial void OnSelectedLanguageIndexChanged(int value)
+    {
+        if (_initializing || value < 0 || value >= LanguageKeys.Length) return;
+        var code = LanguageKeys[Math.Clamp(value, 0, LanguageKeys.Length - 1)];
+        _service.Settings.Language = code == "system" ? null : code;
+        Amber.Core.Localization.L.SetLanguage(_service.Settings.Language);
+        try { _service.Settings.Save(); } catch (IOException) { }
     }
 
     protected override void OnFirstActivated() => _ = LoadJavaAsync(false);
 
-    public string[] ThemeOptions { get; } = ["跟随系统", "浅色", "深色"];
+    public Amber.App.Localization.OptionItem[] ThemeOptions { get; } = Amber.App.Localization.OptionItem.Keys("settings.theme.system", "settings.theme.light", "settings.theme.dark");
     private static readonly string[] ThemeKeys = ["system", "light", "dark"];
 
     [ObservableProperty] public partial int SelectedThemeIndex { get; set; }
@@ -197,7 +246,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         var current = _service.Settings.JavaPath;
         var found = await _service.Java.ScanAsync(refresh);
         JavaOptions.Clear();
-        JavaOptions.Add(new JavaOption("自动选择（按游戏版本要求）", null));
+        JavaOptions.Add(new JavaOption(L.T("settings.java.automatic"), null));
         foreach (var j in found) JavaOptions.Add(new JavaOption(j.ToString(), j.JavaPath));
         SelectedJava = JavaOptions.FirstOrDefault(o => o.Path == current) ?? JavaOptions[0];
     }
@@ -210,7 +259,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         var s = _service.Settings;
         var dirChanged = !string.Equals(s.GameDirectory, GameDirectory.Trim(), StringComparison.OrdinalIgnoreCase);
         s.GameDirectory = GameDirectory.Trim();
-        s.DownloadSource = SourceKeys[Math.Clamp(SourceIndex, 0, SourceKeys.Length - 1)];
+        if (SourceIndex >= 0) s.DownloadSource = SourceKeys[Math.Min(SourceIndex, SourceKeys.Length - 1)];
         s.DownloadConcurrency = int.TryParse(Concurrency, out var c) ? Math.Clamp(c, 1, 128) : 32;
         Concurrency = s.DownloadConcurrency.ToString();
         s.JavaPath = SelectedJava?.Path;
@@ -226,11 +275,11 @@ public sealed partial class SettingsViewModel : PageViewModel
         s.CurseForgeApiKey = Blank(CurseForgeKey);
         s.CurseForgeApiRoot = Blank(CurseForgeRoot);
         s.UpdateFeedUrl = Blank(UpdateFeed);
-        s.Theme = ThemeKeys[Math.Clamp(SelectedThemeIndex, 0, ThemeKeys.Length - 1)];
+        if (SelectedThemeIndex >= 0) s.Theme = ThemeKeys[Math.Min(SelectedThemeIndex, ThemeKeys.Length - 1)];
         App.ApplyTheme(s.Theme);
         s.Save();
         _service.Reload();
-        Status = dirChanged ? "已保存，已切换到新的游戏目录" : "已保存";
+        Status = dirChanged ? L.T("settings.saved_directory_changed") : L.T("common.saved");
         if (dirChanged) _ = LoadJavaAsync(true);
     }
 }
@@ -241,7 +290,7 @@ public sealed partial class LogViewModel : PageViewModel
 {
     private const int MaxLines = 5000;
 
-    public override string Title => "日志";
+    public override string Title => L.T("log.title");
     public override string Icon => "M4 5h16v2H4zM4 11h16v2H4zM4 17h11v2H4z";
 
     public ObservableCollection<LogEntry> Lines { get; } = [];

@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core.Net;
 
 namespace Amber.Core.Content;
@@ -30,7 +31,7 @@ public sealed class ContentInstaller(Downloader downloader, IReadOnlyDictionary<
             {
                 ct.ThrowIfCancellationRequested();
                 if (dep.Kind == DependencyKind.Incompatible && dep.ProjectId is { } bad && installedProjects?.Contains(bad) == true)
-                    problems.Add($"{file.DisplayName} 和实例里已有的模组 {bad} 不兼容");
+                    problems.Add(L.F("core.content.install.incompatible", file.DisplayName, bad));
                 if (dep.Kind != DependencyKind.Required) continue;
 
                 var provider = providers[dep.Source];
@@ -55,13 +56,13 @@ public sealed class ContentInstaller(Downloader downloader, IReadOnlyDictionary<
                 }
                 catch (HttpRequestException e)
                 {
-                    problems.Add($"{file.DisplayName} 的依赖 {dep.ProjectId ?? dep.FileId} 获取失败：{e.Message}");
+                    problems.Add(L.F("core.content.install.dependencyfailed", file.DisplayName, dep.ProjectId ?? dep.FileId, e.Message));
                     continue;
                 }
 
                 if (resolved is null)
                 {
-                    problems.Add($"{file.DisplayName} 需要的依赖 {dep.ProjectId} 没有适用于 {instance.McVersion} / {instance.Loader} 的版本");
+                    problems.Add(L.F("core.content.install.dependencyunavailable", file.DisplayName, dep.ProjectId, instance.McVersion, instance.Loader));
                     continue;
                 }
                 if (installedProjects?.Contains(resolved.ProjectId) == true || !seen.Add(resolved.ProjectId)) continue;
@@ -86,7 +87,7 @@ public sealed class ContentInstaller(Downloader downloader, IReadOnlyDictionary<
     public static string SafeFileName(string name)
     {
         var clean = Path.GetFileName(name.Replace('\\', '/'));
-        if (string.IsNullOrWhiteSpace(clean) || clean is "." or "..") throw new InvalidDataException($"不合法的文件名：{name}");
+        if (string.IsNullOrWhiteSpace(clean) || clean is "." or "..") throw new InvalidDataException(L.F("core.content.install.invalidfilename", name));
         return clean;
     }
 }

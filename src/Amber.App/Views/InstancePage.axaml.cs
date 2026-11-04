@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.App.ViewModels;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
@@ -12,36 +13,36 @@ public partial class InstancePage : UserControl
     private InstanceViewModel? Vm => DataContext as InstanceViewModel;
     private IStorageProvider? Storage => TopLevel.GetTopLevel(this)?.StorageProvider;
 
-    private async Task PickAndAddAsync(string title, string[] patterns, string? target)
+    private async Task PickAndAddAsync(string title, string filterName, string[] patterns, string? target)
     {
         if (Vm is not { } vm || Storage is not { } storage || target is null) return;
         var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = title,
             AllowMultiple = true,
-            FileTypeFilter = [new FilePickerFileType(title) { Patterns = patterns }],
+            FileTypeFilter = [new FilePickerFileType(filterName) { Patterns = patterns }],
         });
         var paths = files.Select(f => f.TryGetLocalPath()).OfType<string>().ToList();
         if (paths.Count > 0) vm.AddFiles(paths, target);
     }
 
     private async void AddMods_Click(object? sender, RoutedEventArgs e) =>
-        await PickAndAddAsync("选择模组文件", ["*.jar", "*.zip"], Vm?.ModsDir);
+        await PickAndAddAsync(L.T("instance.mods.picker"), L.T("instance.picker.mods_filter"), ["*.jar", "*.zip"], Vm?.ModsDir);
 
     private async void AddResourcePacks_Click(object? sender, RoutedEventArgs e) =>
-        await PickAndAddAsync("选择资源包", ["*.zip"], Vm?.ResourcePacksDir);
+        await PickAndAddAsync(L.T("instance.resourcepacks.picker"), L.T("instance.picker.resourcepacks_filter"), ["*.zip"], Vm?.ResourcePacksDir);
 
     private async void AddShaderPacks_Click(object? sender, RoutedEventArgs e) =>
-        await PickAndAddAsync("选择光影包", ["*.zip"], Vm?.ShaderPacksDir);
+        await PickAndAddAsync(L.T("instance.shaderpacks.picker"), L.T("instance.picker.shaderpacks_filter"), ["*.zip"], Vm?.ShaderPacksDir);
 
     private async void AddDatapacks_Click(object? sender, RoutedEventArgs e)
     {
         if (Vm is not { } vm || Storage is not { } storage) return;
         var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "选择数据包",
+            Title = L.T("instance.datapacks.picker"),
             AllowMultiple = true,
-            FileTypeFilter = [new FilePickerFileType("数据包") { Patterns = ["*.zip"] }],
+            FileTypeFilter = [new FilePickerFileType(L.T("instance.picker.datapacks_filter")) { Patterns = ["*.zip"] }],
         });
         var paths = files.Select(f => f.TryGetLocalPath()).OfType<string>().ToList();
         if (paths.Count > 0) vm.AddDatapacks(paths);
@@ -52,8 +53,8 @@ public partial class InstancePage : UserControl
         if (Vm is not { } vm || Storage is not { } storage) return;
         var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "选择存档压缩包",
-            FileTypeFilter = [new FilePickerFileType("压缩包") { Patterns = ["*.zip"] }],
+            Title = L.T("instance.worlds.picker"),
+            FileTypeFilter = [new FilePickerFileType(L.T("common.archive")) { Patterns = ["*.zip"] }],
         });
         if (files.Count > 0 && files[0].TryGetLocalPath() is { } path) vm.ImportWorld(path);
     }
@@ -63,7 +64,7 @@ public partial class InstancePage : UserControl
         if (Vm is not { } vm || Storage is not { } storage) return;
         var file = await storage.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title = "导出整合包",
+            Title = L.T("instance.export.pack_picker"),
             SuggestedFileName = $"{vm.ExportName}-{vm.ExportVersion}.{vm.ExportExtension}",
             DefaultExtension = vm.ExportExtension,
         });
@@ -76,7 +77,7 @@ public partial class InstancePage : UserControl
         var extension = OperatingSystem.IsWindows() ? "bat" : "sh";
         var file = await storage.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title = "导出启动脚本",
+            Title = L.T("instance.export.script_picker"),
             SuggestedFileName = $"{vm.SelectedId}.{extension}",
             DefaultExtension = extension,
         });

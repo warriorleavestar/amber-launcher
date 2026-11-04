@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -163,7 +164,7 @@ public sealed class TunnelServer : IAsyncDisposable
                 var handler = _route(service);
                 if (handler is null)
                 {
-                    _log?.Invoke($"[封装] 拒绝：这里不提供 {service}");
+                    _log?.Invoke(L.F("core.mp.transport.endpoint_service_unavailable", service));
                     Interlocked.Increment(ref Rejected);
                     return;
                 }
@@ -175,7 +176,7 @@ public sealed class TunnelServer : IAsyncDisposable
                 // 出错断开：不给对面发“正常结束”。
                 (stream as SecureStream)?.Abort();
                 Interlocked.Increment(ref Rejected);
-                if (e is CryptographicException or PlatformNotSupportedException) _log?.Invoke("[封装] 握手或认证失败，连接已断开：" + e.Message);
+                if (e is CryptographicException or PlatformNotSupportedException) _log?.Invoke(L.T("core.mp.transport.endpoint_handshake_failed") + e.Message);
             }
             finally
             {
@@ -283,7 +284,7 @@ public sealed class TunnelClient : IAsyncDisposable
                 (remote as SecureStream)?.Abort();
                 Pump.Abort(game);
                 Interlocked.Increment(ref Failures);
-                _log?.Invoke("[封装] 连不上对面：" + e.Message);
+                _log?.Invoke(L.T("core.mp.transport.endpoint_connect_failed") + e.Message);
             }
             finally
             {

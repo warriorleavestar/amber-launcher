@@ -8,7 +8,8 @@ namespace Amber.Core.Install;
 public enum LoaderKind { Fabric, Quilt, Forge, NeoForge, OptiFine }
 
 /// <summary>某个游戏版本可安装的一个加载器版本。</summary>
-public sealed record LoaderVersion(LoaderKind Kind, string McVersion, string Version, bool Stable = true, DateTimeOffset? Date = null, string? Note = null)
+/// <param name="Recommended">官方标成推荐的版本（Forge），自动选中时按它判断；Note 只是显示用的文字。</param>
+public sealed record LoaderVersion(LoaderKind Kind, string McVersion, string Version, bool Stable = true, DateTimeOffset? Date = null, string? Note = null, bool Recommended = false)
 {
     public string DefaultId => Kind switch
     {

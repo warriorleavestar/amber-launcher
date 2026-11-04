@@ -1,14 +1,16 @@
+using Amber.App.Localization;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Amber.App.Services;
 using Amber.Core.Auth;
+using Amber.Core.Localization;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 namespace Amber.App.ViewModels;
 
-public sealed partial class AccountItem(Account account) : ObservableObject
+public sealed partial class AccountItem(Account account) : LocalizedObservable
 {
     public Account Account { get; } = account;
     public string Name => Account.Name;
@@ -33,11 +35,12 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     private readonly LauncherService _service;
     private CancellationTokenSource? _loginCts;
 
-    public override string Title => "账号";
+    public override string Title => L.T("accounts.title");
     public override string Icon => "M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zm0 2c-4.4 0-8 2.2-8 5v2h16v-2c0-2.8-3.6-5-8-5z";
 
     public ObservableCollection<AccountItem> Accounts { get; } = [];
-    public string[] LoginKinds { get; } = ["离线", "微软", "外置"];
+    /// <summary>列表本身不变，换语言时只换文字（不然下拉框的选中序号会被清成 -1）。</summary>
+    public OptionItem[] LoginKinds { get; } = OptionItem.Keys("accounts.kind.offline", "accounts.kind.microsoft", "accounts.kind.external");
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsOfflineTab), nameof(IsMicrosoftTab), nameof(IsExternalTab))]
@@ -153,7 +156,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     {
         if (item is null) return;
         _service.Accounts.Store.Remove(item.Account);
-        Status = $"已移除 {item.Name}（只删本地记录，账号本身不受影响）";
+        Status = L.F("accounts.status.removed", item.Name);
         Changed();
     }
 
@@ -163,12 +166,12 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         var name = OfflineName.Trim();
         if (!IsValidOfflineName(name))
         {
-            Status = "离线玩家名只能用 3 到 16 位字母、数字和下划线";
+            Status = L.T("accounts.status.invalid_offline_name");
             return;
         }
         _service.Accounts.AddOffline(name);
         OfflineName = "";
-        Status = $"已添加离线账号 {name}";
+        Status = L.F("accounts.status.offline_added", name);
         Changed();
     }
 
@@ -181,7 +184,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         _service.Settings.MicrosoftClientId = string.IsNullOrWhiteSpace(ClientIdInput) ? null : ClientIdInput.Trim();
         _service.Settings.Save();
         OnPropertyChanged(nameof(MicrosoftMissingClientId));
-        Status = "已保存 Client ID";
+        Status = L.T("accounts.status.client_id_saved");
     }
 
     [RelayCommand]
@@ -190,7 +193,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         SaveClientId();
         if (_service.Accounts.MicrosoftClientId is null)
         {
-            Status = "没有可用的 Azure 应用 Client ID";
+            Status = L.T("accounts.status.client_id_missing");
             return;
         }
 
@@ -199,23 +202,23 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         try
         {
             var auth = _service.Accounts.CreateMicrosoftAuth();
-            Status = "正在向微软申请设备码……";
+            Status = L.T("accounts.status.requesting_device_code");
             var code = await auth.BeginDeviceCodeAsync(_loginCts.Token);
             DeviceCode = code.UserCode;
             DeviceUri = code.VerificationUri;
-            Status = "请在浏览器里输入上面的代码并登录，这里会自动继续";
+            Status = L.T("accounts.status.awaiting_device_login");
             var account = await auth.CompleteDeviceCodeAsync(code, new Progress<string>(s => Status = s), _loginCts.Token);
             _service.Accounts.Store.AddOrUpdate(account);
-            Status = $"已登录 {account.Name}";
+            Status = L.F("accounts.status.logged_in", account.Name);
             Changed();
         }
         catch (OperationCanceledException)
         {
-            Status = "已取消登录";
+            Status = L.T("accounts.status.login_cancelled");
         }
         catch (Exception e)
         {
-            Status = "登录失败：" + e.Message;
+            Status = L.F("accounts.status.login_failed", e.Message);
         }
         finally
         {
@@ -239,7 +242,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     {
         if (string.IsNullOrWhiteSpace(ServerUrl) || string.IsNullOrWhiteSpace(ExternalUser) || string.IsNullOrEmpty(ExternalPassword))
         {
-            Status = "请填写服务器地址、账号和密码";
+            Status = L.T("accounts.status.external_credentials_required");
             return;
         }
         _loginCts = new CancellationTokenSource();
@@ -248,7 +251,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         ExternalPassword = "";
         try
         {
-            Status = "正在连接皮肤站……";
+            Status = L.T("accounts.status.connecting_external");
             var auth = _service.Accounts.External;
             var api = await auth.ResolveApiRootAsync(ServerUrl, _loginCts.Token);
             var result = await auth.LoginAsync(api, ExternalUser.Trim(), password, _loginCts.Token);
@@ -258,18 +261,18 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
                 foreach (var p in result.Profiles) ExternalProfiles.Add(p);
                 SelectedProfile = ExternalProfiles[0];
                 PendingExternal = result.Account;
-                Status = "这个账号有多个角色，请选择一个";
+                Status = L.T("accounts.status.choose_profile");
                 return;
             }
             FinishExternal(result.Account);
         }
         catch (OperationCanceledException)
         {
-            Status = "已取消登录";
+            Status = L.T("accounts.status.login_cancelled");
         }
         catch (Exception e)
         {
-            Status = "登录失败：" + e.Message;
+            Status = L.F("accounts.status.login_failed", e.Message);
         }
         finally
         {
@@ -290,7 +293,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            Status = "选择角色失败：" + e.Message;
+            Status = L.F("accounts.status.profile_selection_failed", e.Message);
         }
         finally
         {
@@ -301,7 +304,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     private void FinishExternal(Account account)
     {
         _service.Accounts.Store.AddOrUpdate(account);
-        Status = $"已登录 {account.Name}（{account.ServerName}）";
+        Status = L.F("accounts.status.external_logged_in", account.Name, account.ServerName);
         Changed();
     }
 

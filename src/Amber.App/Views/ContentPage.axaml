@@ -1,29 +1,30 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:l="using:Amber.App.Localization"
              xmlns:vm="using:Amber.App.ViewModels"
              x:Class="Amber.App.Views.ContentPage"
              x:DataType="vm:ContentViewModel">
   <Grid RowDefinitions="Auto,Auto,*,Auto">
     <Grid ColumnDefinitions="*,Auto">
-      <TextBlock Classes="h1" Text="资源" />
-      <Button Grid.Column="1" Content="导入整合包文件…" Click="ImportPack_Click" VerticalAlignment="Top" />
+      <TextBlock Classes="h1" Text="{l:T content.title}" />
+      <Button Grid.Column="1" Content="{l:T content.modpack.import}" Click="ImportPack_Click" VerticalAlignment="Top" />
     </Grid>
 
     <StackPanel Grid.Row="1" Spacing="8" Margin="0,0,0,10">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto">
         <ComboBox ItemsSource="{Binding TypeNames}" SelectedIndex="{Binding TypeIndex}" MinWidth="96" />
         <ComboBox Grid.Column="1" ItemsSource="{Binding SourceNames}" SelectedIndex="{Binding SourceIndex}" MinWidth="120" Margin="8,0,0,0" />
-        <TextBox Grid.Column="2" Text="{Binding Query}" PlaceholderText="搜索…" Margin="8,0" KeyDown="Query_KeyDown" />
-        <Button Grid.Column="3" Classes="amber" Content="搜索" Command="{Binding SearchCommand}" Padding="20,6" />
+        <TextBox Grid.Column="2" Text="{Binding Query}" PlaceholderText="{l:T common.search_placeholder}" Margin="8,0" KeyDown="Query_KeyDown" />
+        <Button Grid.Column="3" Classes="amber" Content="{l:T common.search}" Command="{Binding SearchCommand}" Padding="20,6" />
       </Grid>
-      <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding !IsModpack}">
-        <TextBlock Text="安装到" VerticalAlignment="Center" />
+      <WrapPanel ItemSpacing="10" LineSpacing="4" IsVisible="{Binding !IsModpack}">
+        <TextBlock Text="{l:T content.install.target}" VerticalAlignment="Center" />
         <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding TargetInstance}" MinWidth="260" />
-        <CheckBox Content="只看适用于这个版本的内容" IsChecked="{Binding FilterByInstance}" />
-      </StackPanel>
+        <CheckBox Content="{l:T content.search.filter_by_instance}" IsChecked="{Binding FilterByInstance}" />
+      </WrapPanel>
       <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding IsDatapack}">
-        <TextBlock Text="装进世界" VerticalAlignment="Center" />
-        <ComboBox ItemsSource="{Binding Worlds}" SelectedItem="{Binding TargetWorld}" MinWidth="260" PlaceholderText="这个版本还没有存档">
+        <TextBlock Text="{l:T content.install.world}" VerticalAlignment="Center" />
+        <ComboBox ItemsSource="{Binding Worlds}" SelectedItem="{Binding TargetWorld}" MinWidth="260" PlaceholderText="{l:T content.world.empty}">
           <ComboBox.ItemTemplate>
             <DataTemplate DataType="vm:WorldChoice"><TextBlock Text="{Binding Label}" /></DataTemplate>
           </ComboBox.ItemTemplate>
@@ -34,7 +35,7 @@
     <Grid Grid.Row="2" ColumnDefinitions="*,Auto">
       <Border Classes="card" Padding="6">
         <Grid RowDefinitions="*,Auto">
-          <TextBlock Classes="hint" Text="搜索结果会显示在这里" HorizontalAlignment="Center" VerticalAlignment="Center"
+          <TextBlock Classes="hint" Text="{l:T content.search.empty_hint}" HorizontalAlignment="Center" VerticalAlignment="Center"
                      IsVisible="{Binding !Results.Count}" />
           <ListBox ItemsSource="{Binding Results}" SelectedItem="{Binding Selected}" Background="Transparent">
             <ListBox.ItemTemplate>
@@ -53,8 +54,8 @@
             </ListBox.ItemTemplate>
           </ListBox>
           <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8" Margin="0,6,0,2" IsVisible="{Binding !!Results.Count}">
-            <Button Content="上一页" Command="{Binding PreviousPageCommand}" />
-            <Button Content="下一页" Command="{Binding NextPageCommand}" />
+            <Button Content="{l:T common.previous_page}" Command="{Binding PreviousPageCommand}" />
+            <Button Content="{l:T common.next_page}" Command="{Binding NextPageCommand}" />
           </StackPanel>
         </Grid>
       </Border>
@@ -63,9 +64,9 @@
         <Grid RowDefinitions="Auto,Auto,*,Auto">
           <StackPanel Spacing="4">
             <TextBlock Classes="h2" Text="{Binding Selected.Title}" Margin="0" TextWrapping="Wrap" />
-            <Button Content="打开项目主页" Command="{Binding OpenPageCommand}" Padding="8,3" FontSize="12" />
+            <Button Content="{l:T content.project.open_page}" Command="{Binding OpenPageCommand}" Padding="8,3" FontSize="12" />
           </StackPanel>
-          <CheckBox Grid.Row="1" Content="显示测试版" IsChecked="{Binding ShowUnstable}" Margin="0,6" />
+          <CheckBox Grid.Row="1" Content="{l:T common.show_unstable}" IsChecked="{Binding ShowUnstable}" Margin="0,6" />
           <ListBox Grid.Row="2" ItemsSource="{Binding Files}" SelectedItem="{Binding SelectedFile}" Background="Transparent">
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:FileItem">
@@ -78,10 +79,10 @@
           </ListBox>
           <StackPanel Grid.Row="3" Spacing="8" Margin="0,8,0,0">
             <StackPanel Spacing="4" IsVisible="{Binding IsModpack}">
-              <TextBlock Text="新版本的名字" />
+              <TextBlock Text="{l:T content.modpack.instance_name}" />
               <TextBox Text="{Binding NewInstanceName}" />
             </StackPanel>
-            <Button Classes="amber" Content="安装这个版本" Command="{Binding InstallCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+            <Button Classes="amber" Content="{l:T content.install.selected}" Command="{Binding InstallCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
           </StackPanel>
         </Grid>
       </Border>
@@ -93,7 +94,7 @@
           <TextBlock Text="{Binding Status}" TextTrimming="CharacterEllipsis" />
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
         </StackPanel>
-        <Button Grid.Column="1" Content="取消" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />
+        <Button Grid.Column="1" Content="{l:T common.cancel}" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />
       </Grid>
     </Border>
   </Grid>
