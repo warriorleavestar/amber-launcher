@@ -66,6 +66,13 @@ public static class Socks5
         }
         // 连的是判断过的那个 IPv4（::ffff:a.b.c.d、6to4、NAT64 这类 IPv6 写法按里面的 IPv4 判断，也按它去连，
         // 不然实际走的是另一条 IPv6 路线，判断和连接对不上）。
+        // 判断地址之前先看一次出口还能不能转发：公网 IP 太旧被拒的不会被说成“目标不允许”。
+        if (stillReady is not null && !stillReady())
+        {
+            log?.Invoke(L.T("core.mp.socks.public_ip_unconfirmed"));
+            await ReplyAsync(client, 3, ct);
+            return;
+        }
         var targets = addresses.Where(allow).Select(ExitPolicy.Normalize).Distinct().ToArray();
         if (targets.Length == 0 && stillReady is not null && !stillReady())
         {

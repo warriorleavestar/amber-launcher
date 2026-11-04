@@ -83,11 +83,8 @@ public class TransportFollowupTests
         await Task.Delay(100);
         cts.Cancel();
         await pump.WaitAsync(TimeSpan.FromSeconds(5));
-        await Assert.ThrowsAnyAsync<Exception>(async () =>
-        {
-            var n = await peer.ReadAsync(new byte[4]).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
-            if (n == 0) throw new EndOfStreamException("正常结束");
-        });
+        // 超时会抛 TimeoutException，不算通过；正常结束会返回 0，也不算通过。
+        await Assert.ThrowsAsync<EndOfStreamException>(async () => await peer.ReadAsync(new byte[4]).AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.False(peer.ClosedCleanly);
         foreach (var c in new[] { ca, cb, lca, lcb }) c.Dispose();
         GC.KeepAlive(lb);
@@ -140,11 +137,8 @@ public class TransportFollowupTests
         await peer.WriteAsync("data"u8.ToArray());
         await peer.FlushAsync();
         await pump.WaitAsync(TimeSpan.FromSeconds(5));
-        await Assert.ThrowsAnyAsync<Exception>(async () =>
-        {
-            var n = await peer.ReadAsync(new byte[4]).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
-            if (n == 0) throw new EndOfStreamException("正常结束");
-        });
+        // 超时会抛 TimeoutException，不算通过；正常结束会返回 0，也不算通过。
+        await Assert.ThrowsAsync<EndOfStreamException>(async () => await peer.ReadAsync(new byte[4]).AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.False(peer.ClosedCleanly);
         ca.Dispose();
         cb.Dispose();
@@ -236,5 +230,99 @@ public class TransportFollowupTests
     {
         Assert.True(ExitPolicy.InNetwork(IPAddress.Parse("10.1.2.3"), IPAddress.Parse("10.1.2.3"), 999));
         Assert.True(ExitPolicy.InNetwork(IPAddress.Parse("10.1.2.3"), IPAddress.Parse("99.0.0.0"), -5));
+    }
+
+    // 对照：本机那头正常关闭时，封装通道照常发“正常结束”，对面看到的是正常关闭（不是重置）。
+    [Fact]
+    public async Task CleanLocalCloseStillClosesCleanly()
+    {
+        var profile = TransportProfile.For(TransportMode.High);
+        var (ta, tb, ca, cb) = await PairAsync();
+        var (la, lb, lca, lcb) = await PairAsync();
+        var (iSend, iReceive, rSend, rReceive) = Keys();
+        var tunnel = new SecureStream(ta, iSend, iReceive, profile);
+        await using var peer = new SecureStream(tb, rSend, rReceive, profile);
+        var pump = Pump.RunAsync(tunnel, la);
+        await lb.WriteAsync("hello"u8.ToArray());
+        lcb.Client.Shutdown(SocketShutdown.Send);   // 游戏那头正常关闭
+        var buffer = new byte[5];
+        Assert.True(await SecureStream.ReadExactAsync(peer, buffer, default).WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal("hello"u8.ToArray(), buffer);
+        Assert.Equal(0, await peer.ReadAsync(new byte[4]).AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(peer.ClosedCleanly);
+        await pump.WaitAsync(TimeSpan.FromSeconds(5));
+        foreach (var c in new[] { ca, cb, lca, lcb }) c.Dispose();
+    }
+
+    // 正常结束之后的收尾期间外面才取消：仍然是正常关闭，对面不会当成截断。
+    [Fact]
+    public async Task CancelDuringDrainAfterCleanCloseStaysClean()
+    {
+        var profile = TransportProfile.For(TransportMode.High);
+        var (ta, tb, ca, cb) = await PairAsync();
+        var (iSend, iReceive, rSend, rReceive) = Keys();
+        // 封装通道底下的连接：取消读时拖 500 ms 才返回，让收尾期间有时间被外面取消。
+        var tunnel = new SecureStream(new SlowCancelStream(ta), iSend, iReceive, profile);
+        await using var peer = new SecureStream(tb, rSend, rReceive, profile);
+        using var cts = new CancellationTokenSource();
+        var pump = Pump.RunAsync(tunnel, new EndsAtOnceStream(), cts.Token);
+        await Task.Delay(150);
+        cts.Cancel();
+        await pump.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, await peer.ReadAsync(new byte[4]).AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(peer.ClosedCleanly);
+        ca.Dispose();
+        cb.Dispose();
+    }
+
+    /// <summary>游戏那头：一读就是结尾（正常关闭）。</summary>
+    private sealed class EndsAtOnceStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanWrite => true;
+        public override bool CanSeek => false;
+        public override long Length => 0;
+        public override long Position { get => 0; set { } }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => 0;
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) => ValueTask.FromResult(0);
+        public override void Write(byte[] buffer, int offset, int count) { }
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) => ValueTask.CompletedTask;
+        public override long Seek(long offset, SeekOrigin origin) => 0;
+        public override void SetLength(long value) { }
+    }
+
+    /// <summary>包一层：读被取消时等 500 ms 再报取消；写照常。</summary>
+    private sealed class SlowCancelStream(Stream inner) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanWrite => true;
+        public override bool CanSeek => false;
+        public override long Length => 0;
+        public override long Position { get => 0; set { } }
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken ct) => inner.FlushAsync(ct);
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            try
+            {
+                return await inner.ReadAsync(buffer, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                await Task.Delay(500, CancellationToken.None);
+                throw;
+            }
+        }
+        public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) => inner.WriteAsync(buffer, ct);
+        public override long Seek(long offset, SeekOrigin origin) => 0;
+        public override void SetLength(long value) { }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
+        }
     }
 }

@@ -33,6 +33,8 @@ public static class Pump
         // 任何一个方向出错结束（本机连接读写出错、封装通道被截断）：封装通道按出错处理，不发“正常结束”。
         // 只有从本机那头正常读到结尾时才算正常结束。
         if (first.Result.Error) secure?.Abort();
+        // 先记下是不是外面取消的：之后 2 秒的收尾期间外面才取消（正常结束之后），不算。
+        var cancelledFromOutside = ct.IsCancellationRequested;
         linked.Cancel();
         try { await Task.WhenAll(up, down).WaitAsync(TimeSpan.FromSeconds(2)); } catch (TimeoutException) { }
         // 另一个方向收尾时才出错（比如本机连接在取消前一刻被重置）也一样。只看从本机读的那个方向：
@@ -40,7 +42,7 @@ public static class Pump
         var fromLocal = secure is null ? null : ReferenceEquals(secure, a) ? down : up;
         if (fromLocal is { IsCompletedSuccessfully: true, Result.Error: true }) secure!.Abort();
         // 是外面取消（联机结束、程序退出）让转发停下的：数据流并没有正常结束，对面不能当成“正常关闭”。
-        if (ct.IsCancellationRequested) secure?.Abort();
+        if (cancelledFromOutside) secure?.Abort();
         // 不管哪边先结束，只要封装通道没收到认证过的结束记录，就把本机那头重置，而不是正常关闭。
         if (secure is { ClosedCleanly: false }) abortLocal?.Invoke();
         await a.DisposeAsync();

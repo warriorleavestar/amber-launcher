@@ -131,13 +131,14 @@ public sealed partial class ExitPolicy : IDisposable
             // 检查“期间网络没变”和设成可用放在同一把锁里：网络变化（也拿这把锁）不会插在两步中间。
             lock (_lock)
             {
-                if (ok && generation == _generation)
+                // 正在重新收集网卡时（新的本机网段还没换上）不设成可用。
+                if (ok && generation == _generation && _collecting == 0)
                 {
                     _failure = null;
                     Interlocked.Exchange(ref _lastSuccessTicks, System.Diagnostics.Stopwatch.GetTimestamp());
                     _ready = true;
                 }
-                else if (!ok)
+                else if (!ok && generation == _generation)
                 {
                     _ready = false;
                     _failure = L.T("core.mp.exit.public_ip_unavailable");
@@ -208,20 +209,37 @@ public sealed partial class ExitPolicy : IDisposable
         {
             _ready = false;
             _generation++;
+            _collecting++;
         }
-        RefreshLocal();
-        // 收集网卡期间开始、按旧网段算的查询也作废。
+        var (addresses, networks) = CollectLocal();
+        // 换上新的本机网段，和作废收集期间开始的查询放在同一把锁里。
         lock (_lock)
         {
+            _localAddresses = addresses;
+            _localNetworks = networks;
             _ready = false;
             _generation++;
+            _collecting--;
+            _failure = null;
         }
-        _failure = null;
         Volatile.Read(ref _wake).TrySetResult();
     }
 
+    /// <summary>正在重新收集网卡的次数（可能有几个地址变化同时在收集）。</summary>
+    private int _collecting;
+
     /// <summary>本机所有网卡（包括停用的、虚拟的）的单播地址和所在网段。</summary>
     public void RefreshLocal()
+    {
+        var (addresses, networks) = CollectLocal();
+        lock (_lock)
+        {
+            _localAddresses = addresses;
+            _localNetworks = networks;
+        }
+    }
+
+    private (HashSet<IPAddress> Addresses, List<(IPAddress, int)> Networks) CollectLocal()
     {
         var addresses = new HashSet<IPAddress>();
         var networks = new List<(IPAddress, int)>();
@@ -249,8 +267,7 @@ public sealed partial class ExitPolicy : IDisposable
         catch (NetworkInformationException) { }
         // 路由表里除默认路由以外的每条路由的目标网段（包括 VPN 推下来的路由）：这些地址不走普通的上网出口。
         if (OperatingSystem.IsWindows()) networks.AddRange(NonDefaultRoutes());
-        _localAddresses = addresses;
-        _localNetworks = networks;
+        return (addresses, networks);
     }
 
     /// <summary>加上从外面看到的本机公网地址（STUN、路由器端口映射报告的外部地址）。</summary>
