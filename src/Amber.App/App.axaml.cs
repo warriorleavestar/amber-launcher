@@ -37,7 +37,7 @@ public sealed class App : Application
             var service = new LauncherService(settings);
             var viewModel = new MainViewModel(service);
             StartupTrace.Mark("viewmodels");
-            desktop.MainWindow = new MainWindow { DataContext = viewModel };
+            desktop.MainWindow = new MainWindow(settings) { DataContext = viewModel };
             StartupTrace.Mark("window");
             desktop.Exit += (_, _) => service.Dispose();
         }

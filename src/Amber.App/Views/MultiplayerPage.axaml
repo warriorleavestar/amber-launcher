@@ -67,7 +67,7 @@
             <SelectableTextBlock Text="{Binding NetworkCheckText}" TextWrapping="Wrap" FontSize="12" IsVisible="{Binding NetworkCheckText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             <Grid ColumnDefinitions="*,14,*">
               <StackPanel Spacing="6">
-                <TextBlock Text="我来开房间（用上面选好的游戏端口）" FontWeight="SemiBold" />
+                <TextBlock Text="我来开房间（用上面选好的游戏端口）" FontWeight="SemiBold" TextWrapping="Wrap" />
                 <Button Classes="amber" Content="创建直连房间" Command="{Binding CreateDirectRoomCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
               </StackPanel>
               <StackPanel Grid.Column="2" Spacing="6">
