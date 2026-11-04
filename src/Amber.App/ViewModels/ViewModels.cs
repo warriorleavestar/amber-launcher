@@ -73,6 +73,10 @@ public static class Converters
 {
     public static readonly IValueConverter DeleteLabel =
         new FuncValueConverter<bool, string>(armed => armed ? "确认删除" : "删除版本");
+
+    /// <summary>有问题时用醒目的橙色，没问题时用普通的灰色提示色。</summary>
+    public static readonly IValueConverter ProblemBrush =
+        new FuncValueConverter<bool, IBrush>(problem => problem ? new SolidColorBrush(Color.FromRgb(0xE0, 0x70, 0x3A)) : new SolidColorBrush(Color.FromRgb(0x8C, 0x86, 0x7E)));
 }
 
 public sealed partial class MainViewModel : ObservableObject

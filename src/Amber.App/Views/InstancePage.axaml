@@ -75,7 +75,7 @@
         </TabItem>
 
         <TabItem Header="模组" FontSize="14">
-          <Grid RowDefinitions="Auto,*">
+          <Grid RowDefinitions="Auto,Auto,*">
             <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,6">
               <TextBlock Classes="hint" Text="{Binding ModSummary}" VerticalAlignment="Center" />
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
@@ -85,8 +85,16 @@
                 <Button Content="全部更新" Command="{Binding UpdateAllModsCommand}" />
               </StackPanel>
             </Grid>
-            <TextBlock Grid.Row="1" Classes="hint" Text="还没有模组。去「资源」页搜索安装，或者点“添加文件”。" IsVisible="{Binding !Mods.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-            <ListBox Grid.Row="1" ItemsSource="{Binding Mods}" Background="Transparent">
+            <StackPanel Grid.Row="1" Spacing="4" Margin="0,0,0,6" IsVisible="{Binding CompatSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+              <TextBlock Text="{Binding CompatSummary}" FontSize="12" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding NeedsConnector}">
+                <TextBlock Classes="hint" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"
+                           Text="有 Fabric 模组：装上开源的 Sinytra Connector 后，很多 Fabric 模组能在 Forge / NeoForge 上运行（不是全部）。" />
+                <Button Content="安装 Sinytra Connector" Command="{Binding InstallConnectorCommand}" />
+              </StackPanel>
+            </StackPanel>
+            <TextBlock Grid.Row="2" Classes="hint" Text="还没有模组。去「资源」页搜索安装，或者点“添加文件”。" IsVisible="{Binding !Mods.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <ListBox Grid.Row="2" ItemsSource="{Binding Mods}" Background="Transparent">
               <ListBox.ItemTemplate>
                 <DataTemplate DataType="vm:ModItem">
                   <Grid ColumnDefinitions="Auto,40,*,Auto" Margin="2">
@@ -98,9 +106,13 @@
                       <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                       <TextBlock Text="{Binding Meta}" Classes="hint" FontSize="11" TextTrimming="CharacterEllipsis" />
                       <TextBlock Text="{Binding UpdateText}" IsVisible="{Binding HasUpdate}" FontSize="11" Foreground="{DynamicResource AmberAccent}" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding CompatText}" IsVisible="{Binding CompatText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" FontSize="11" TextWrapping="Wrap"
+                                 Foreground="{Binding HasCompatProblem, Converter={x:Static vm:Converters.ProblemBrush}}" />
                     </StackPanel>
                     <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                       <Button Content="更新" IsVisible="{Binding HasUpdate}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).UpdateModCommand}" CommandParameter="{Binding}" />
+                      <Button Content="找对应版本" IsVisible="{Binding CanFindMatching}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).FindMatchingCommand}" CommandParameter="{Binding}"
+                              ToolTip.Tip="在 Modrinth 上找这个模组适合本实例游戏版本和加载器的版本，换掉现在这个" />
                       <Button Content="删除" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteModCommand}" CommandParameter="{Binding}" />
                     </StackPanel>
                   </Grid>

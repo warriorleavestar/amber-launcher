@@ -70,6 +70,49 @@ public static class AsciiPaths
         return full;
     }
 
+    /// <summary>
+    /// 1.6 以前的 Minecraft 和老 FML 不认 --gameDir，固定用 %APPDATA%\.minecraft 做“家目录”（日志、lib、coremods 都写在那）。
+    /// 给这个实例建 本地数据\Amber\legacyhome\哈希\.minecraft → 实例目录的联接，启动时只给这个游戏进程把 APPDATA 指过去，
+    /// 用户真正的 .minecraft 就不会被写。返回要设成 APPDATA 的目录；建不了时返回 null。
+    /// </summary>
+    public static string? LegacyHome(string workDir, Action<string>? log = null)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        var full = Path.GetFullPath(workDir).TrimEnd(Path.DirectorySeparatorChar);
+        var name = "h" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(full.ToLowerInvariant())))[..10];
+        var parent = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Amber", "legacyhome", name);
+        if (!Representable(parent)) parent = Path.Combine(Environment.GetEnvironmentVariable("PUBLIC") ?? @"C:\Users\Public", "AmberLegacyHome", name);
+        var link = Path.Combine(parent, ".minecraft");
+        try
+        {
+            Directory.CreateDirectory(parent);
+            var info = new DirectoryInfo(link);
+            if (info.Exists && info.LinkTarget is { } target && Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar).Equals(full, StringComparison.OrdinalIgnoreCase))
+                return parent;
+            if (info.Exists)
+            {
+                // 旧联接指向别处（实例搬家了）：只删联接本身，不碰里面的东西；是真文件夹就不动。
+                if (info.LinkTarget is null) return null;
+                info.Delete();
+            }
+            if (CreateJunction(link, full)) return parent;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            log?.Invoke("[Amber] 建不了旧版本用的家目录联接：" + e.Message);
+        }
+        return null;
+    }
+
+    private static bool CreateJunction(string link, string target)
+    {
+        var psi = new ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in new[] { "/d", "/c", "mklink", "/J", link, target }) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        p.WaitForExit(10000);
+        return Directory.Exists(link);
+    }
+
     /// <summary>放联接的地方：先 Amber 的本地数据目录，再公共目录，最后目标所在盘的根目录。要求本身是纯英文。</summary>
     private static IEnumerable<string> LinkParents(string target)
     {

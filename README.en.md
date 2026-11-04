@@ -30,7 +30,8 @@ Amber needs 64-bit Windows 10 or later. You don't need to set up Java either: Am
 ### Versions and loaders
 
 - Install releases and snapshots
-- One-click Fabric, Quilt, Forge (1.6 and later), NeoForge and OptiFine
+- One-click Fabric, Quilt, Forge (including 1.5.2 and older), NeoForge and OptiFine
+- Old Forge gets its FML libraries pre-verified in the instance, and old versions never write into your own .minecraft
 - Optional separate saves, mods and config folders for each version
 
 ### Accounts
@@ -44,6 +45,8 @@ Amber needs 64-bit Windows 10 or later. You don't need to set up Java either: Am
 - Search and install mods, resource packs, shaders, data packs and modpacks from Modrinth and CurseForge, with required dependencies
 - Import mrpack, CurseForge, MultiMC / Prism Launcher instances, HMCL and MCBBS modpacks; export mrpack and CurseForge
 - Manage the mods in each instance and the data packs in each world (enable, disable, delete)
+- Mod compatibility check: reads each mod's declared loader, game version and dependencies, flags mismatches and finds the matching version in one click
+- Fabric mods on Forge / NeoForge via the open-source Sinytra Connector and Forgified Fabric API, installed automatically (not every Fabric mod works); Quilt instances use Fabric mods directly
 
 ### Game management and crash analysis
 
@@ -141,8 +144,8 @@ Switch the download source on the Settings page and try the official source or t
 **Does it run on macOS or Linux?**
 Only Windows builds are available for now.
 
-**What isn't supported yet?**
-Forge 1.5.2 and earlier.
+**What can't it do?**
+Run Forge mods on Fabric / Quilt: there is no reliable compatibility layer, and Amber says so plainly.
 
 ## License
 

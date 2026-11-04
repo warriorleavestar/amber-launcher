@@ -54,6 +54,9 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     private CancellationTokenSource? _workCts;
     private int _total;
 
+    /// <summary>当前选中的项目是经 Sinytra Connector 装的 Fabric 模组。</summary>
+    private bool _viaConnector;
+
     public override string Title => "资源";
     public override string Icon => "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z";
 
@@ -275,11 +278,32 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             };
             var files = await Provider.GetFilesAsync(selected.Project.Id, instance?.McVersion, loader, cts.Token);
             if (cts.IsCancellationRequested) return;
+            _viaConnector = false;
+            string? loaderNote = null;
+            if (files.Count == 0 && CurrentType == ContentType.Mod && instance is { Loader: "forge" or "neoforge" } && SourceIndex == 0)
+            {
+                // 只有 Fabric 版：可以经 Sinytra Connector 用。
+                var fabric = await Provider.GetFilesAsync(selected.Project.Id, instance.McVersion, "fabric", cts.Token);
+                if (cts.IsCancellationRequested) return;
+                if (fabric.Count > 0)
+                {
+                    files = fabric;
+                    _viaConnector = true;
+                    loaderNote = $"这个模组只有 Fabric 版。安装时会一起装上 Sinytra Connector 和 Forgified Fabric API，让它在 {instance.Loader} 上运行（不是每个 Fabric 模组都能用）";
+                }
+            }
+            else if (files.Count == 0 && CurrentType == ContentType.Mod && instance is { Loader: "fabric" or "quilt" })
+            {
+                var forge = await Provider.GetFilesAsync(selected.Project.Id, instance.McVersion, null, cts.Token);
+                if (forge.Count > 0 && forge.All(f => f.Loaders.All(l => l is "forge" or "neoforge")))
+                    loaderNote = "这个模组只有 Forge / NeoForge 版：Fabric / Quilt 上没有可靠的办法运行 Forge 模组";
+            }
             foreach (var f in files.Where(f => f.IsRelease || ShowUnstable)) Files.Add(new FileItem(f));
             SelectedFile = Files.FirstOrDefault();
             if (IsModpack) NewInstanceName = SafeName(selected.Title);
             if (Files.Count == 0 && files.Count > 0) Status = "这个项目只有测试版，勾选“显示测试版”后可选";
-            else if (files.Count == 0) Status = instance is null ? "这个项目没有可下载的版本" : $"没有适用于 {instance.McVersion} {instance.Loader} 的版本";
+            else if (files.Count == 0) Status = loaderNote ?? (instance is null ? "这个项目没有可下载的版本" : $"没有适用于 {instance.McVersion} {instance.Loader} 的版本");
+            else if (loaderNote is not null) Status = loaderNote;
         }
         catch (OperationCanceledException) { }
         catch (Exception e)
@@ -330,7 +354,16 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             if (CurrentType == ContentType.Mod)
             {
                 Status = "正在解析依赖……";
-                plan = await _service.ContentInstaller.ResolveAsync(file, instance, null, _workCts.Token);
+                if (_viaConnector)
+                {
+                    var hasConnector = Directory.Exists(instance.ModsDir)
+                                       && ConnectorInstaller.IsInstalled(Directory.EnumerateFiles(instance.ModsDir, "*.jar").Select(ModCompat.Read));
+                    plan = await ConnectorInstaller.PlanFabricModAsync(file, instance, _service.Modrinth, _service.ContentInstaller, null, hasConnector, _workCts.Token);
+                }
+                else
+                {
+                    plan = await _service.ContentInstaller.ResolveAsync(file, instance, null, _workCts.Token);
+                }
                 // 目标文件夹里已经有同名文件的依赖不用再下，下载器会校验并跳过。
             }
             await _service.ContentInstaller.InstallAsync(plan, target, new Progress<DownloadProgress>(p =>

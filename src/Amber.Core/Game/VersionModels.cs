@@ -25,6 +25,12 @@ public sealed class VersionJson
     [JsonPropertyName("javaVersion")] public JavaVersionRequirement? JavaVersion { get; set; }
     [JsonPropertyName("logging")] public Dictionary<string, LoggingInfo>? Logging { get; set; }
     [JsonPropertyName("releaseTime")] public string? ReleaseTime { get; set; }
+
+    /// <summary>Amber 装的 1.5.2 及更早的 Forge（改 jar 的方式），记下版本号，用来识别加载器。</summary>
+    [JsonPropertyName("amberForge")] public string? AmberForge { get; set; }
+
+    /// <summary>这些老 Forge 启动前要放进游戏目录 lib/ 的 FML 库。</summary>
+    [JsonPropertyName("amberLegacyLibs")] public List<Amber.Core.Install.FmlLibrary>? AmberLegacyLibs { get; set; }
 }
 
 public sealed class VersionArguments

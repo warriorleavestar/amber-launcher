@@ -37,6 +37,9 @@ public sealed class GameLauncher(GameDirectory dir)
 {
     public RuleEvaluator BaseRules { get; init; } = RuleEvaluator.Current;
 
+    /// <summary>改用英文名联接启动时，联接背后真正的游戏目录。旧版本的家目录联接要直接指向真目录，不能联接套联接。</summary>
+    internal string? RealRoot { get; init; }
+
     /// <summary>生成完整命令行（不含 java 本身），可用于导出启动脚本。</summary>
     public List<string> BuildArguments(LaunchOptions options)
     {
@@ -169,7 +172,7 @@ public sealed class GameLauncher(GameDirectory dir)
                 WorkingDirectory = options.WorkingDirectory is { } w ? Map(w) : null,
                 ExtraJvmArgs = options.ExtraJvmArgs.Select(Map).ToList(),
             };
-            return new GameLauncher(new GameDirectory(root)) { BaseRules = BaseRules }.LaunchCore(mapped, onOutput);
+            return new GameLauncher(new GameDirectory(root)) { BaseRules = BaseRules, RealRoot = dir.Root }.LaunchCore(mapped, onOutput);
         }
         return LaunchCore(options, onOutput);
     }
@@ -181,6 +184,7 @@ public sealed class GameLauncher(GameDirectory dir)
         var workDir = options.WorkingDirectory ?? dir.Root;
         Directory.CreateDirectory(workDir);
         PrepareLegacyAssets(version, workDir);
+        if (version.AmberLegacyLibs is { Count: > 0 } fml) Amber.Core.Install.LegacyForge.EnsureLibraries(dir.Root, workDir, fml, onOutput);
 
         var psi = new ProcessStartInfo(options.JavaPath)
         {
@@ -194,6 +198,13 @@ public sealed class GameLauncher(GameDirectory dir)
             CreateNoWindow = true,
         };
         foreach (var arg in BuildArguments(options)) psi.ArgumentList.Add(arg);
+        // 1.6 以前的版本（和 Amber 装的老 Forge）把 %APPDATA%\.minecraft 当家目录，改成指向这个实例。
+        var realWorkDir = RealRoot is { } real ? AsciiPaths.Remap(workDir, dir.Root, real) : workDir;
+        if (IsPreLaunchwrapperHome(version) && AsciiPaths.LegacyHome(realWorkDir, onOutput) is { } home)
+        {
+            psi.Environment["APPDATA"] = home;
+            onOutput?.Invoke($"[Amber] 旧版本：这次游戏的 APPDATA 指向 {home}（其中 .minecraft 就是实例目录），不会写到你自己的 .minecraft");
+        }
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动 Java 进程");
         if (onOutput is not null)
@@ -205,6 +216,11 @@ public sealed class GameLauncher(GameDirectory dir)
         }
         return process;
     }
+
+    /// <summary>1.6.1（2013-06-25）以前发布的版本，或者 Amber 装的老 Forge。</summary>
+    internal static bool IsPreLaunchwrapperHome(VersionJson version) =>
+        version.AmberForge is not null
+        || DateTimeOffset.TryParse(version.ReleaseTime, out var released) && released < new DateTimeOffset(2013, 6, 25, 0, 0, 0, TimeSpan.Zero);
 
     private void ExtractNatives(string versionId, VersionJson version)
     {

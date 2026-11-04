@@ -28,7 +28,8 @@
 ### 版本与加载器
 
 - 安装正式版和快照版
-- 一键安装 Fabric、Quilt、Forge（1.6 及以上）、NeoForge、OptiFine
+- 一键安装 Fabric、Quilt、Forge（包括 1.5.2 及更早的老版本）、NeoForge、OptiFine
+- 老 Forge 需要的 FML 库会提前校验好放进实例，旧版本的游戏不会写进你自己的 .minecraft
 - 每个版本可以有独立的存档、模组和配置文件夹
 
 ### 账号
@@ -42,6 +43,8 @@
 - 在 Modrinth 和 CurseForge 上搜索、安装模组、资源包、光影、数据包和整合包，自动带上必需的依赖
 - 导入 mrpack、CurseForge、MultiMC / Prism Launcher 实例、HMCL 和 MCBBS 整合包；导出 mrpack 和 CurseForge 格式
 - 管理实例里的模组，以及每个世界的数据包（启用、禁用、删除）
+- 模组兼容检查：读每个模组声明的加载器、游戏版本和前置，标出装错的，一键找对应版本
+- Fabric 模组上 Forge / NeoForge：可以自动装开源的 Sinytra Connector 和 Forgified Fabric API（不是每个 Fabric 模组都能用）；Quilt 实例直接用 Fabric 模组
 
 ### 游戏管理与崩溃分析
 
@@ -139,8 +142,8 @@ CurseForge 的接口需要 API Key，见上面的[配置](#配置)。Modrinth �
 **支持 macOS 和 Linux 吗？**
 目前只提供 Windows 版本。
 
-**有哪些暂不支持的功能？**
-Forge 1.5.2 及更早的版本。
+**有哪些做不到的？**
+在 Fabric / Quilt 上运行 Forge 模组：目前没有可靠的兼容层，Amber 会直接说明。
 
 ## 许可证
 

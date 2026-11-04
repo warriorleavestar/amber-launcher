@@ -57,6 +57,8 @@ public sealed record GameInstance(string Id, string McVersion, string? Loader, s
                     break;
             }
         }
+        // 1.5.2 及更早的 Forge 是改 jar 装的，库里看不出来，版本 JSON 里有记录。
+        if (loader is null && resolved.AmberForge is { } oldForge) (loader, loaderVersion) = ("forge", oldForge);
         // NeoForge 的版本号写在启动参数里。
         if (loader == "neoforge" && resolved.Arguments?.Game is { } game)
         {

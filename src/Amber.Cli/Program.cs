@@ -147,11 +147,16 @@ try
             var isolate = argList.Remove("--isolate");
             var provider = providers[Enum.Parse<ContentSource>(argList[1], true)];
             var instance = Instance(argList[3], isolate);
-            var loaderFilter = type == ContentType.Mod ? instance.Loader : null;
+            // --via-connector：给 Forge / NeoForge 实例装 Fabric 模组，连同 Sinytra Connector 和 Forgified Fabric API。
+            var viaConnector = argList.Remove("--via-connector");
+            var loaderFilter = type == ContentType.Mod ? (viaConnector ? "fabric" : instance.Loader) : null;
             var files = await provider.GetFilesAsync(argList[2], instance.McVersion, loaderFilter, cts.Token);
             var file = files.FirstOrDefault(f => f.IsRelease) ?? files.FirstOrDefault()
-                       ?? throw new InvalidOperationException($"没有适用于 {instance.McVersion} / {instance.Loader} 的版本");
-            var plan = await contentInstaller.ResolveAsync(file, instance, null, cts.Token);
+                       ?? throw new InvalidOperationException($"没有适用于 {instance.McVersion} / {loaderFilter} 的版本");
+            var hasConnector = ConnectorInstaller.IsInstalled(Directory.Exists(instance.ModsDir) ? Directory.EnumerateFiles(instance.ModsDir, "*.jar").Select(ModCompat.Read) : []);
+            var plan = viaConnector
+                ? await ConnectorInstaller.PlanFabricModAsync(file, instance, modrinth, contentInstaller, null, hasConnector, cts.Token)
+                : await contentInstaller.ResolveAsync(file, instance, null, cts.Token);
             foreach (var p in plan.Problems) Console.WriteLine("问题：" + p);
             foreach (var f in plan.Files) Console.WriteLine("安装 " + f.FileName);
             await contentInstaller.InstallAsync(plan, instance.DirectoryFor(type), null, cts.Token);

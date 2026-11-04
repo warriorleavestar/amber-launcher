@@ -97,6 +97,8 @@ public sealed class GameDirectory(string root)
             JavaVersion = child.JavaVersion ?? parent.JavaVersion,
             Logging = child.Logging ?? parent.Logging,
             ReleaseTime = child.ReleaseTime ?? parent.ReleaseTime,
+            AmberForge = child.AmberForge ?? parent.AmberForge,
+            AmberLegacyLibs = child.AmberLegacyLibs ?? parent.AmberLegacyLibs,
         };
     }
 

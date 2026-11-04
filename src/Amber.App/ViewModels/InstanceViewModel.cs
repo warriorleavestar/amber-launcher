@@ -33,6 +33,19 @@ public sealed partial class ModItem(LocalMod mod) : ObservableObject
     [ObservableProperty]
     public partial Bitmap? Icon { get; set; }
 
+    /// <summary>和实例的匹配情况（加载器、游戏版本、前置）。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CompatText), nameof(HasCompatProblem), nameof(CanFindMatching))]
+    public partial CompatResult? Compat { get; set; }
+
+    public ModRequirements? Requirements { get; set; }
+    public string CompatText => Compat is null || Compat.Level == CompatLevel.Ok && Compat.Text == "匹配" ? "" : Compat.Text;
+    public bool HasCompatProblem => Compat?.IsProblem == true;
+
+    /// <summary>启用状态改了，实例页要重新检查前置。</summary>
+    public Action? EnabledChanged { get; set; }
+    public bool CanFindMatching => Compat?.Level is CompatLevel.WrongLoader or CompatLevel.WrongVersion;
+
     partial void OnEnabledChanged(bool value)
     {
         if (value == Mod.Enabled) return;
@@ -41,6 +54,7 @@ public sealed partial class ModItem(LocalMod mod) : ObservableObject
             var path = ModManager.SetEnabled(Mod, value);
             Mod = Mod with { Path = path, FileName = Path.GetFileName(path), Enabled = value };
             OnPropertyChanged(nameof(Meta));
+            EnabledChanged?.Invoke();
         }
         catch (IOException)
         {
@@ -443,6 +457,8 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     public ObservableCollection<ModItem> Mods { get; } = [];
 
     [ObservableProperty] public partial string ModSummary { get; set; } = "";
+    [ObservableProperty] public partial bool NeedsConnector { get; set; }
+    [ObservableProperty] public partial string CompatSummary { get; set; } = "";
 
     private void LoadMods() => _ = LoadModsAsync();
 
@@ -451,13 +467,66 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c) return;
         Mods.Clear();
         var list = await Task.Run(() => new ModManager(c.ModsDir).List());
+        var requirements = await Task.Run(() => list.ToDictionary(m => m.Path, m => ModCompat.Read(m.Path)));
         foreach (var mod in list)
         {
-            var item = new ModItem(mod);
+            var item = new ModItem(mod) { Requirements = requirements[mod.Path], EnabledChanged = RecheckCompat };
             Mods.Add(item);
             if (mod.Icon is { } icon) _ = DecodeIconAsync(item, icon);
         }
         ModSummary = $"{list.Count} 个模组，启用 {list.Count(m => m.Enabled)} 个";
+        RecheckCompat();
+    }
+
+    /// <summary>按当前启用的模组重新算一遍每个模组的匹配情况（启用、禁用、删除之后也要重算）。</summary>
+    private void RecheckCompat()
+    {
+        if (Current is not { } c) return;
+        var enabled = Mods.Where(m => m.Enabled).ToList();
+        var ids = new HashSet<string>(enabled.SelectMany(m => m.Requirements?.Ids ?? []), StringComparer.OrdinalIgnoreCase);
+        // Forgified Fabric API 提供 fabric-api。
+        if (ids.Contains("fabric_api") || enabled.Any(m => m.Mod.FileName.Contains("forgified-fabric-api", StringComparison.OrdinalIgnoreCase))) ids.Add("fabric-api");
+        var connector = ConnectorInstaller.IsInstalled(enabled.Select(m => m.Requirements));
+        foreach (var m in Mods) m.Compat = m.Enabled ? ModCompat.Check(m.Requirements, c.Loader, c.McVersion, ids, connector) : null;
+        var problems = Mods.Count(m => m.HasCompatProblem);
+        NeedsConnector = !connector && Mods.Any(m => m.Compat?.Level == CompatLevel.NeedsConnector);
+        CompatSummary = problems == 0 ? (Mods.Count > 0 ? "全部匹配这个实例" : "") : $"{problems} 个模组和这个实例不匹配，看下面标出的原因";
+    }
+
+    [RelayCommand]
+    private async Task InstallConnectorAsync()
+    {
+        if (Current is not { } c) return;
+        await RunWorkAsync(async ct =>
+        {
+            Status = "正在查找适合的 Sinytra Connector……";
+            var plan = await ConnectorInstaller.PlanAsync(c, _service.Modrinth, _service.ContentInstaller, null, ct)
+                       ?? throw new InvalidOperationException($"Modrinth 上没有适合 {c.McVersion} {c.Loader} 的 Sinytra Connector");
+            await _service.ContentInstaller.InstallAsync(plan, c.ModsDir, null, ct);
+            Status = $"已装 {string.Join("、", plan.Files.Select(f => f.DisplayName))}。注意：不是每个 Fabric 模组都能经 Connector 运行。";
+        });
+        await LoadModsAsync();
+    }
+
+    [RelayCommand]
+    private async Task FindMatchingAsync(ModItem? item)
+    {
+        if (Current is not { } c || item is null) return;
+        await RunWorkAsync(async ct =>
+        {
+            Status = $"正在找 {item.Name} 适合这个实例的版本……";
+            var file = await ConnectorInstaller.FindMatchingVersionAsync(item.Mod.Path, c, _service.Modrinth, ct);
+            if (file is null)
+            {
+                Status = $"Modrinth 上没找到 {item.Name} 适合 {c.McVersion} {c.Loader ?? "原版"} 的版本" +
+                         (c.Loader is "fabric" or "quilt" && item.Requirements?.Loaders.Contains("fabric") != true ? "（Fabric / Quilt 上没有可靠的办法运行 Forge 模组）" : "");
+                return;
+            }
+            await _service.ContentInstaller.InstallAsync(new InstallPlan([file], []), c.ModsDir, null, ct);
+            Recycle(item.Mod.Path);
+            Status = $"已把 {item.Name} 换成 {file.FileName}";
+        });
+        await LoadModsAsync();
     }
 
     private static async Task DecodeIconAsync(ModItem item, byte[] bytes)
@@ -488,6 +557,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             Recycle(item.Mod.Path);
             Mods.Remove(item);
             ModSummary = $"{Mods.Count} 个模组，启用 {Mods.Count(m => m.Enabled)} 个";
+            RecheckCompat();
             Status = $"已把 {item.Name} 放进回收站";
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)

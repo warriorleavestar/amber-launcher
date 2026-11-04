@@ -14,7 +14,9 @@ public sealed class ModrinthProvider(HttpClient http, string apiRoot = "https://
         var facets = new List<string[]> { new[] { $"project_type:{ProjectType(q.Type)}" } };
         if (!string.IsNullOrEmpty(q.GameVersion)) facets.Add([$"versions:{q.GameVersion}"]);
         // 资源包和光影的 loader 分类和模组不是一回事，只对模组和整合包过滤。
-        if (!string.IsNullOrEmpty(q.Loader) && q.Type is ContentType.Mod or ContentType.Modpack) facets.Add([$"categories:{q.Loader}"]);
+        // Quilt 能直接用 Fabric 模组，两种都搜（同一个数组里是“或”）。
+        if (!string.IsNullOrEmpty(q.Loader) && q.Type is ContentType.Mod or ContentType.Modpack)
+            facets.Add(q.Loader == "quilt" ? ["categories:quilt", "categories:fabric"] : [$"categories:{q.Loader}"]);
 
         var url = $"{apiRoot}/search?query={Uri.EscapeDataString(q.Text)}&limit={q.Limit}&offset={q.Offset}&index=relevance" +
                   $"&facets={Uri.EscapeDataString(JsonSerializer.Serialize(facets))}";
@@ -51,7 +53,7 @@ public sealed class ModrinthProvider(HttpClient http, string apiRoot = "https://
     {
         var url = $"{apiRoot}/project/{projectId}/version?include_changelog=false";
         if (!string.IsNullOrEmpty(gameVersion)) url += "&game_versions=" + Uri.EscapeDataString(JsonSerializer.Serialize(new[] { gameVersion }));
-        if (!string.IsNullOrEmpty(loader)) url += "&loaders=" + Uri.EscapeDataString(JsonSerializer.Serialize(new[] { loader }));
+        if (!string.IsNullOrEmpty(loader)) url += "&loaders=" + Uri.EscapeDataString(JsonSerializer.Serialize(loader == "quilt" ? new[] { "quilt", "fabric" } : new[] { loader }));
         using var doc = JsonDocument.Parse(await http.GetStringAsync(url, ct));
         return doc.RootElement.EnumerateArray().Select(ParseVersion).OfType<ContentFile>().OrderByDescending(f => f.Date).ToList();
     }

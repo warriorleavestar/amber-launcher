@@ -42,6 +42,8 @@ public static partial class CrashAnalyzer
         R(@"InaccessibleObjectException|Unable to make .{1,200} accessible", "Java 版本太新", "这个版本的加载器不支持当前 Java。把实例的 Java 改成自动，会按游戏要求选择。"),
         R(@"Unsupported class file major version (\d+)", m =>
             new CrashFinding($"Java 太新，加载器不认识版本号 {m.Groups[1].Value} 的类文件", "把实例的 Java 改成自动，或升级加载器。", CrashSeverity.Likely, m.Value)),
+        R(@"The downloaded file (\S+) has an invalid checksum|files\.minecraftforge\.net/fmllibs", m =>
+            new CrashFinding("老 Forge 下载自带的库失败" + (m.Groups[1].Success ? $"（{m.Groups[1].Value}）" : ""), "这个老 Forge 的库下载地址早就没了。用 Amber 重新安装这个 Forge 版本，Amber 会提前把校验过的库放进实例的 lib 文件夹；别的启动器装的也建议用 Amber 重装。", CrashSeverity.Likely, m.Value)),
         R(@"could not find java\.dll|Could not find Java SE Runtime Environment", "Java 找不到自己的文件", "多半是 Java 或游戏目录的路径里有中文，而系统“非 Unicode 程序的语言”不是中文。Amber 会自动改用英文名的联接启动；还不行的话，把游戏目录放到纯英文路径下，或者在实例设置里换一个装在英文路径的 Java。"),
         R(@"Error occurred during initialization of VM\s+.{0,120}", "Java 虚拟机启动失败", "检查实例设置里的 JVM 参数，把可疑的参数删掉再试。"),
         R(@"Unrecognized (VM|command-line) option", "JVM 参数不被这个 Java 支持", "检查实例设置里的 JVM 参数，删掉不支持的那项。"),
@@ -55,6 +57,8 @@ public static partial class CrashAnalyzer
             new CrashFinding("缺少必需的模组依赖", "看证据里列出的模组名，把它们装上或换成匹配的版本。", CrashSeverity.Likely, m.Value)),
         R(@"Mod (\S+) requires (\S+)", m =>
             new CrashFinding($"{m.Groups[1].Value} 需要 {m.Groups[2].Value}", "安装它要求的依赖。", CrashSeverity.Likely, m.Value)),
+        R(@"(org\.sinytra\.connector|dev\.su5ed\.sinytra\.connector)[\s\S]{0,2000}?(Exception|Error)|Sinytra Connector.{0,60}(failed|error|incompatible)", m =>
+            new CrashFinding("Sinytra Connector 运行 Fabric 模组时出错", "不是每个 Fabric 模组都能经 Connector 在 Forge / NeoForge 上运行。先禁用最近加的 Fabric 模组试试；能找到这个模组的 Forge / NeoForge 版就换成那个。Connector 的兼容情况可以在它的项目页查到。", CrashSeverity.Likely, m.Value.Length > 300 ? m.Value[..300] : m.Value)),
         R(@"(Invalid|Failed to apply) mixin|MixinApplyError|InvalidMixinException|Mixin apply for mod (\S+) failed|Mixin transformation of .{1,120} failed", m =>
             new CrashFinding(m.Groups[2].Success ? $"模组 {m.Groups[2].Value} 的 Mixin 注入失败" : "模组的 Mixin 注入失败", "通常是模组版本和游戏版本不匹配，或者两个模组冲突。看疑似模组，先更新或禁用它。", CrashSeverity.Likely, m.Value)),
         // 崩溃报告的系统信息里同时写着 OptiFine 和 Forge 版本：OptiFine 只适配某几个 Forge 版本，换 Forge 后最常见的就是 NoSuchMethodError。

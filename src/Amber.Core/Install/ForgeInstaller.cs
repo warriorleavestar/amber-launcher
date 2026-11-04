@@ -24,6 +24,12 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
     {
         var id = string.IsNullOrWhiteSpace(customId) ? version.DefaultId : customId.Trim();
         var dir = Ctx.Dir;
+        if (Kind == LoaderKind.Forge && LegacyForge.IsJarModEra(version.McVersion))
+        {
+            await LegacyForge.InstallAsync(Ctx, version, id, progress, ct);
+            await Ctx.Vanilla.CompleteAsync(id, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, "补全文件", p)), ct);
+            return id;
+        }
 
         progress?.Report(new($"安装原版 {version.McVersion}"));
         await Ctx.Vanilla.InstallAsync(version.McVersion, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, "下载原版文件", p)), ct);

@@ -66,6 +66,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             await LaunchAsync();
             await CrashAsync();
             await ServersAndWorldsAsync();
+            await OldForgeAndCompatAsync();
             await ToolsAsync();
             await MultiplayerAsync();
             await DirectRoomAsync();
@@ -542,6 +543,68 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
     }
 
     private static string AppSettingsDataDir() => Amber.App.Services.AppSettings.DataDir;
+
+    private static void FakeJar(string path, string entry, string text)
+    {
+        File.Delete(path);
+        using var zip = ZipFile.Open(path, ZipArchiveMode.Create);
+        using var w = new StreamWriter(zip.CreateEntry(entry).Open());
+        w.Write(text);
+    }
+
+    /// <summary>老 Forge 在下载页能选；模组页标出经 Connector 运行的 Fabric 模组、版本不对和加载器不对的模组。</summary>
+    private async Task OldForgeAndCompatAsync()
+    {
+        var download = Page<DownloadViewModel>();
+        main.CurrentPage = download;
+        await WaitAsync(() => download.Items.Count > 0, 30);
+        download.ConfigureCommand.Execute(download.Items.FirstOrDefault(i => i.Id == "1.5.2"));
+        download.SelectedLoader = download.LoaderChoices.First(c => c.Label == "Forge");
+        await WaitAsync(() => download.LoaderVersions.Count > 0 || download.LoaderHint.Length > 0 && !download.LoaderHint.StartsWith("正在", StringComparison.Ordinal), 45);
+        Check("下载页：1.5.2 能选 Forge 版本", download.LoaderVersions.Any(v => v.Version.StartsWith("1.5.2-", StringComparison.Ordinal)), $"{download.LoaderVersions.Count} 个 {download.LoaderHint}");
+        download.CloseConfigureCommand.Execute(null);
+
+        var instance = Page<InstanceViewModel>();
+        main.CurrentPage = instance;
+        const string neo = "neoforge-21.1.265";
+        if (!instance.Instances.Contains(neo))
+        {
+            Log("SKIP 模组兼容：测试目录里没有 " + neo);
+            return;
+        }
+        instance.SelectedId = neo;
+        instance.TabIndex = 1;
+        await WaitAsync(() => instance.Mods.Count > 0 && instance.Mods.All(m => m.Compat is not null || !m.Enabled), 15);
+        var fabricMod = instance.Mods.FirstOrDefault(m => m.Mod.FileName.StartsWith("morechathistory", StringComparison.Ordinal));
+        Check("模组兼容：Fabric 模组标为经 Connector 运行", fabricMod?.CompatText.Contains("Connector") == true, fabricMod?.CompatText ?? "没有这个模组");
+        Check("模组兼容：装了 Connector 就不再提示安装", !instance.NeedsConnector, instance.CompatSummary);
+
+        var wrong = Path.Combine(instance.ModsDir!, "amber-selftest-wrongversion.jar");
+        FakeJar(wrong, "META-INF/neoforge.mods.toml", "[[mods]]\nmodId=\"selftestold\"\n[[dependencies.selftestold]]\nmodId=\"minecraft\"\ntype=\"required\"\nversionRange=\"[1.20.4,1.20.5)\"\n");
+        instance.SelectedId = null;
+        instance.SelectedId = neo;
+        instance.TabIndex = 1;
+        await WaitAsync(() => instance.Mods.Any(m => m.Mod.FileName == "amber-selftest-wrongversion.jar" && m.Compat is not null), 15);
+        var flagged = instance.Mods.FirstOrDefault(m => m.Mod.FileName == "amber-selftest-wrongversion.jar");
+        Check("模组兼容：游戏版本不对的模组被标出", flagged is { HasCompatProblem: true, CanFindMatching: true } && flagged.CompatText.Contains("1.20.4"), flagged?.CompatText ?? "");
+        Check("模组兼容：汇总里有不匹配数", instance.CompatSummary.Contains("不匹配"), instance.CompatSummary);
+        await ShotAsync("模组兼容");
+        File.Delete(wrong);
+
+        instance.SelectedId = FabricName;
+        instance.TabIndex = 1;
+        var forgeOnFabric = Path.Combine(instance.ModsDir!, "amber-selftest-neoforge-only.jar");
+        FakeJar(forgeOnFabric, "META-INF/neoforge.mods.toml", "[[mods]]\nmodId=\"selftestneo\"\n");
+        instance.SelectedId = null;
+        instance.SelectedId = FabricName;
+        instance.TabIndex = 1;
+        await WaitAsync(() => instance.Mods.Any(m => m.Mod.FileName == "amber-selftest-neoforge-only.jar" && m.Compat is not null), 15);
+        var neoOnFabric = instance.Mods.FirstOrDefault(m => m.Mod.FileName == "amber-selftest-neoforge-only.jar");
+        Check("模组兼容：Fabric 上的 NeoForge 模组说明没有兼容层", neoOnFabric?.CompatText.Contains("没有可靠的办法") == true, neoOnFabric?.CompatText ?? "");
+        File.Delete(forgeOnFabric);
+        instance.SelectedId = null;
+        instance.SelectedId = FabricName;
+    }
 
     private async Task ToolsAsync()
     {
