@@ -173,6 +173,31 @@ public class ElevatedGuardTests : IDisposable
         Assert.Contains("127.0.0.1", File.ReadAllText(Path.Combine(_dir, "log.txt")));
     }
 
+    private static string ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        return new StreamReader(stream).ReadToEnd();
+    }
+
+    [Fact]
+    public async Task RestartFileSwitchesArgumentsWithoutNewGuard()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var (guard, stop, exited) = StartGuard(Environment.ProcessId);
+        var log = Path.Combine(_dir, "log.txt");
+        for (var i = 0; i < 50 && !File.Exists(log); i++) await Task.Delay(100);
+        File.WriteAllText(stop + ".restart", """["-n","60","127.0.0.2"]""");
+        for (var i = 0; i < 100 && File.Exists(stop + ".restart"); i++) await Task.Delay(100);
+        Assert.False(File.Exists(stop + ".restart"));
+        await Task.Delay(1500);
+        Assert.Contains("127.0.0.2", ReadShared(log));
+        Assert.Contains("restarted", ReadShared(log + ".guard"));
+        Assert.False(guard.HasExited);
+        File.WriteAllText(stop, "stop");
+        Assert.True(guard.WaitForExit(15000));
+        Assert.True(File.Exists(exited));
+    }
+
     [Fact]
     public async Task ParentExitEndsCore()
     {
@@ -300,4 +325,25 @@ public class EasyTierExtractTests
             Directory.Delete(root, true);
         }
     }
+}
+
+public class AsciiPathTests
+{
+    [Theory]
+    [InlineData(@"D:\Games\.minecraft", 1252, true)]
+    [InlineData(@"D:\Claude\自制启动器\测试游戏目录", 936, true)]
+    [InlineData(@"D:\Claude\自制启动器\测试游戏目录", 1252, false)]
+    [InlineData(@"C:\Users\Zoë\.minecraft", 1252, true)]
+    [InlineData(@"C:\Users\Zoë\.minecraft", 936, false)]
+    [InlineData(@"D:\任何\路径", 65001, true)]
+    public void Representable(string path, int codePage, bool expected) =>
+        Assert.Equal(expected, Amber.Core.Launch.AsciiPaths.Representable(path, codePage));
+
+    [Theory]
+    [InlineData(@"D:\中文\mc\libraries\a.jar", @"D:\中文\mc", @"C:\L\a1", @"C:\L\a1\libraries\a.jar")]
+    [InlineData(@"D:\中文\mc", @"D:\中文\mc", @"C:\L\a1", @"C:\L\a1")]
+    [InlineData(@"D:\中文\mc2\x", @"D:\中文\mc", @"C:\L\a1", @"D:\中文\mc2\x")]
+    [InlineData(@"-Djava.library.path=D:\中文\mc\natives", @"D:\中文\mc", @"C:\L\a1", @"-Djava.library.path=D:\中文\mc\natives")]
+    public void Remap(string path, string from, string to, string expected) =>
+        Assert.Equal(expected, Amber.Core.Launch.AsciiPaths.Remap(path, from, to));
 }

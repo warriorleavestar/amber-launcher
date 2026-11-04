@@ -53,6 +53,35 @@
           </Border>
         </Grid>
 
+        <!-- 直连房间：不用联机节点 -->
+        <Border Classes="card" Margin="0" IsVisible="{Binding IsIdle}">
+          <StackPanel Spacing="8">
+            <TextBlock Classes="h2" Text="直连（不用联机节点）" Margin="0" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
+                       Text="双方互发一次码，Amber 依次尝试 IPv6 直连、路由器映射端口、IPv4 打洞，能直连就不经过任何服务器。都不通时，如果下面添加了联机节点，会改用节点。先点“检测我的网络”看看好不好连。" />
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <Button Content="检测我的网络" Command="{Binding CheckNetworkCommand}" IsEnabled="{Binding !IsCheckingNetwork}" />
+              <CheckBox Content="打不通时用联机节点" IsChecked="{Binding DirectUseNodes}" />
+              <CheckBox Content="调试模式" IsChecked="{Binding DebugMode}" ToolTip.Tip="显示详细日志（包括 EasyTier 自己的日志），可以导出诊断报告" />
+            </StackPanel>
+            <SelectableTextBlock Text="{Binding NetworkCheckText}" TextWrapping="Wrap" FontSize="12" IsVisible="{Binding NetworkCheckText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <Grid ColumnDefinitions="*,14,*">
+              <StackPanel Spacing="6">
+                <TextBlock Text="我来开房间（用上面选好的游戏端口）" FontWeight="SemiBold" />
+                <Button Classes="amber" Content="创建直连房间" Command="{Binding CreateDirectRoomCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+              </StackPanel>
+              <StackPanel Grid.Column="2" Spacing="6">
+                <TextBlock Text="加入朋友的直连房间" FontWeight="SemiBold" />
+                <TextBox Text="{Binding DirectInviteInput}" PlaceholderText="粘贴邀请码（AMBDIRECT1-…）" />
+                <Button Classes="amber" Content="加入" Command="{Binding JoinDirectCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+              </StackPanel>
+            </Grid>
+            <Expander Header="STUN 服务器（只用来查你的外部地址，不经过游戏数据）">
+              <TextBox Text="{Binding StunText}" PlaceholderText="host:port，用逗号分隔；清空就不查" />
+            </Expander>
+          </StackPanel>
+        </Border>
+
         <Border Classes="card" Margin="0" IsVisible="{Binding IsIdle}">
           <StackPanel Spacing="4">
             <CheckBox Content="完整局域网模式（需要管理员权限）" IsChecked="{Binding FullLanMode}" />
@@ -100,6 +129,59 @@
               <Button Content="加到服务器列表" Command="{Binding AddToServersCommand}" />
               <Button Classes="amber" Content="启动并进入" Command="{Binding LaunchAndJoinCommand}" />
             </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- 直连房间：码、路径、全条件测试 -->
+        <Border Classes="card" Margin="0" IsVisible="{Binding IsDirect}">
+          <StackPanel Spacing="8">
+            <TextBlock Classes="h2" Text="直连" Margin="0" />
+            <TextBlock Text="{Binding PathText, StringFormat='当前路径：{0}'}" FontWeight="SemiBold" TextWrapping="Wrap" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding DirectHint}" />
+            <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding MyDirectCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+              <TextBox Text="{Binding MyDirectCode}" IsReadOnly="True" FontFamily="Consolas,monospace" FontSize="11" TextWrapping="Wrap" MaxHeight="70" />
+              <Button Grid.Column="1" Content="复制" Command="{Binding CopyDirectCodeCommand}" Margin="6,0,0,0" VerticalAlignment="Top" />
+            </Grid>
+            <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsDirectHost}">
+              <TextBox Text="{Binding DirectReplyInput}" PlaceholderText="粘贴朋友发回的回复码（AMBREPLY1-…）" />
+              <Button Grid.Column="1" Content="连接" Command="{Binding AddDirectReplyCommand}" Margin="6,0,0,0" />
+            </Grid>
+            <StackPanel Spacing="6" IsVisible="{Binding IsDirectHost}">
+              <TextBlock Text="全条件测试" FontWeight="SemiBold" Margin="0,6,0,0" />
+              <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
+                         Text="朋友加入后，一键按顺序测每种组合（IPv6、映射端口、打洞、喷洒、中转、节点；默认模式和完整局域网；出口开关），记下是否连通、用时、延迟、吞吐和失败原因。双方自动同步切换，每步有超时。" />
+              <CheckBox Content="包含完整局域网和出口（开始时双方各确认一次管理员权限，拒绝就跳过）" IsChecked="{Binding MatrixFullLan}" />
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button Classes="amber" Content="开始全条件测试" Command="{Binding RunMatrixCommand}" IsEnabled="{Binding !MatrixRunning}" />
+                <Button Content="停止" Command="{Binding CancelMatrixCommand}" IsVisible="{Binding MatrixRunning}" />
+              </StackPanel>
+            </StackPanel>
+            <ItemsControl ItemsSource="{Binding MatrixLines}" IsVisible="{Binding !!MatrixLines.Count}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate><SelectableTextBlock Text="{Binding}" FontFamily="Consolas,monospace" FontSize="11" TextWrapping="Wrap" /></DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+        <!-- 调试日志 -->
+        <Border Classes="card" Margin="0" IsVisible="{Binding DebugMode}">
+          <StackPanel Spacing="6">
+            <Grid ColumnDefinitions="*,Auto,Auto">
+              <TextBlock Classes="h2" Text="调试日志" Margin="0" VerticalAlignment="Center" />
+              <CheckBox Grid.Column="1" Content="报告里包含完整公网 IP" IsChecked="{Binding IncludePublicIps}" Margin="0,0,8,0" />
+              <Button Grid.Column="2" Content="导出诊断报告…" Click="ExportDiagnostics_Click" />
+            </Grid>
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="日志只在内存里。导出的报告会去掉房间密钥和各种码，默认遮住公网 IP 的后半段，可以放心发给帮你排查的人。" />
+            <Border Background="{DynamicResource PageBackground}" CornerRadius="6" Padding="8" Height="260">
+              <ScrollViewer Name="DebugScroll">
+                <ItemsControl ItemsSource="{Binding DebugLines}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate><SelectableTextBlock Text="{Binding}" FontFamily="Consolas,monospace" FontSize="11" TextWrapping="Wrap" /></DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </Border>
           </StackPanel>
         </Border>
 

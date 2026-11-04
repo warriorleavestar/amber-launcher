@@ -18,7 +18,7 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
     private readonly string _exitedFile;
     private readonly string _logFile;
 
-    public EasyTierOptions Options { get; }
+    public EasyTierOptions Options { get; private set; }
 
     private EasyTierElevatedSession(EasyTierOptions options, string cliPath, string workDir)
     {
@@ -96,6 +96,23 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
 
     private static string Quote(string s) => "\"" + s.Replace("\"", "\\\"") + "\"";
 
+    /// <summary>
+    /// 换参数重启 easytier-core（换出口、换路径、测试矩阵用），不用再弹权限确认：
+    /// 写一个重启文件，守护脚本看到后结束旧进程、按新参数启动，再删掉这个文件。
+    /// </summary>
+    public void Restart(EasyTierOptions options)
+    {
+        // 测试矩阵里也会切回默认模式（不建网卡），守护脚本照样能跑。
+        var restart = _stopFile + ".restart";
+        var temp = restart + ".tmp";
+        File.WriteAllText(temp, JsonSerializer.Serialize(EasyTierArgs.Build(options)));
+        File.Move(temp, restart, true);
+        Options = options;
+    }
+
+    /// <summary>守护脚本还没处理完重启请求。</summary>
+    public bool RestartPending => File.Exists(_stopFile + ".restart");
+
     /// <summary>写停止标记，守护脚本会在一秒内结束 easytier-core。</summary>
     public void Dispose()
     {
@@ -114,21 +131,34 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
     internal const string GuardScript = """
         param([string]$Core, [string]$ArgsFile, [int]$ParentId, [string]$StopFile, [string]$ExitedFile, [string]$LogFile)
         $ErrorActionPreference = "Stop"
-        try {
-            $list = Get-Content -Raw -Encoding UTF8 $ArgsFile | ConvertFrom-Json
+        $RestartFile = $StopFile + ".restart"
+        function Start-Core([string]$argsPath) {
+            $list = Get-Content -Raw -Encoding UTF8 $argsPath | ConvertFrom-Json
             $quoted = $list | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }
-            $p = Start-Process -FilePath $Core -ArgumentList ($quoted -join ' ') -NoNewWindow -PassThru -RedirectStandardOutput $LogFile -RedirectStandardError ($LogFile + ".err")
-            while (-not $p.HasExited) {
-                Start-Sleep -Seconds 1
+            return Start-Process -FilePath $Core -ArgumentList ($quoted -join ' ') -NoNewWindow -PassThru -RedirectStandardOutput $LogFile -RedirectStandardError ($LogFile + ".err")
+        }
+        try {
+            $p = Start-Core $ArgsFile
+            while ($true) {
+                Start-Sleep -Milliseconds 500
                 $parent = Get-Process -Id $ParentId -ErrorAction SilentlyContinue
                 if (-not $parent -or (Test-Path $StopFile)) {
                     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
                     $p.WaitForExit(5000) | Out-Null
                     break
                 }
+                if (Test-Path $RestartFile) {
+                    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+                    $p.WaitForExit(5000) | Out-Null
+                    $p = Start-Core $RestartFile
+                    Remove-Item $RestartFile -Force
+                    Add-Content -Path ($LogFile + ".guard") -Value ("restarted " + (Get-Date -Format o))
+                } elseif ($p.HasExited) {
+                    break
+                }
             }
         } catch {
-            Add-Content -Path $LogFile -Value ("guard error: " + $_)
+            Add-Content -Path ($LogFile + ".guard") -Value ("guard error: " + $_)
         } finally {
             Set-Content -Path $ExitedFile -Value "exited"
         }

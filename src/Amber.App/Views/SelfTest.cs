@@ -68,6 +68,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             await ServersAndWorldsAsync();
             await ToolsAsync();
             await MultiplayerAsync();
+            await DirectRoomAsync();
             await ExportImportAsync();
             Log("DONE");
         }
@@ -447,6 +448,97 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("联机：结束后 easytier-core 都关掉了", left == 0, $"剩 {left} 个");
         host.TestListeners = null;
         host.TestPeers = null;
+    }
+
+    /// <summary>
+    /// 直连房间（本机模拟：只用 127.0.0.1）：房主生成邀请码，加入方贴上后经直连桥连上，游戏端口和聊天都要通；
+    /// 再跑一遍模拟的全条件测试，导出诊断报告并确认里面没有房间密钥。
+    /// </summary>
+    private async Task DirectRoomAsync()
+    {
+        var host = Page<MultiplayerViewModel>();
+        if (!host.IsComponentReady)
+        {
+            Log("SKIP 直连：联机组件没有下载");
+            return;
+        }
+        main.CurrentPage = host;
+        var server = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        server.Start();
+        var gamePort = ((System.Net.IPEndPoint)server.LocalEndpoint).Port;
+        using var stopServer = new CancellationTokenSource();
+        _ = Task.Run(async () =>
+        {
+            while (!stopServer.IsCancellationRequested)
+            {
+                using var client = await server.AcceptTcpClientAsync(stopServer.Token);
+                var stream = client.GetStream();
+                var line = await new StreamReader(stream).ReadLineAsync(stopServer.Token);
+                await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes("pong:" + line + "\n"), stopServer.Token);
+            }
+        });
+
+        host.DirectSimulate = true;
+        host.DirectUseNodes = false;
+        host.DebugMode = true;
+        host.ManualPort = gamePort.ToString();
+        await host.CreateDirectRoomCommand.ExecuteAsync(null);
+        Check("直连：创建房间并生成邀请码", host.IsDirect && host.MyDirectCode.StartsWith("AMBDIRECT1-", StringComparison.Ordinal), host.Status);
+        await ShotAsync("直连房主");
+
+        var guest = host.CreateTestPeer();
+        guest.Activate();
+        guest.DirectSimulate = true;
+        guest.DirectUseNodes = false;
+        guest.DirectInviteInput = host.MyDirectCode;
+        await guest.JoinDirectCommand.ExecuteAsync(null);
+        Check("直连：加入并打洞", guest.IsDirect && guest.IsJoined, guest.Status);
+        Check("直连：加入方生成回复码", guest.MyDirectCode.StartsWith("AMBREPLY1-", StringComparison.Ordinal));
+
+        string? reply = null;
+        for (var attempt = 0; attempt < 20 && reply is null; attempt++)
+        {
+            try
+            {
+                using var client = new System.Net.Sockets.TcpClient();
+                var parts = guest.JoinAddress.Split(':');
+                await client.ConnectAsync(parts[0], int.Parse(parts[1]));
+                var stream = client.GetStream();
+                await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes("direct\n"));
+                reply = await new StreamReader(stream).ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException)
+            {
+                await Task.Delay(1500);
+            }
+        }
+        Check("直连：经直连桥连到房主的游戏端口", reply == "pong:direct", reply ?? "没有回应");
+        await WaitAsync(() => guest.PathText.StartsWith("直连", StringComparison.Ordinal), 10);
+        Check("直连：显示当前路径", guest.PathText.StartsWith("直连", StringComparison.Ordinal), guest.PathText);
+        Check("直连：聊天连上", await WaitAsync(() => host.ChatReady && guest.ChatReady, 40), guest.ChatStatus);
+
+        main.CurrentPage = host;
+        await host.RunMatrixCommand.ExecuteAsync(null);
+        Check("直连：全条件测试（模拟）跑完", host.MatrixLines.Count >= 2 && host.MatrixLines.Skip(1).All(l => l.Contains("（模拟）")), string.Join(" / ", host.MatrixLines));
+        Check("直连：模拟的局域网路径通过", host.MatrixLines.Any(l => l.Contains("同一局域网") && l.Contains("通过")), host.Status);
+        await ShotAsync("直连全条件测试");
+
+        var report = Path.Combine(reportDir, "direct-report.txt");
+        host.ExportDiagnostics(report);
+        var text = File.ReadAllText(report);
+        var secret = host.RoomCodeText.Split('-')[2];
+        Check("直连：诊断报告去掉了房间密钥", File.Exists(report) && !text.Contains(secret) && text.Contains("全条件测试结果"), $"{text.Length} 字");
+
+        guest.StopCommand.Execute(null);
+        host.StopCommand.Execute(null);
+        host.DebugMode = false;
+        host.DirectSimulate = false;
+        stopServer.Cancel();
+        server.Stop();
+        await Task.Delay(3000);
+        var left = System.Diagnostics.Process.GetProcessesByName("easytier-core")
+            .Count(p => { try { return p.MainModule?.FileName?.StartsWith(AppSettingsDataDir(), StringComparison.OrdinalIgnoreCase) == true; } catch { return false; } });
+        Check("直连：结束后 easytier-core 都关掉了", left == 0, $"剩 {left} 个");
     }
 
     private static string AppSettingsDataDir() => Amber.App.Services.AppSettings.DataDir;

@@ -29,6 +29,9 @@ Console.OutputEncoding = System.Text.Encoding.UTF8;
 //   CurseForge：环境变量 AMBER_CF_KEY 提供 Key，AMBER_CF_ROOT 可以换接口地址
 //   launch <版本> <玩家名> [--mem 4096] [--isolate] [--dry-run]
 //   lan-setup                                下载并校验联机组件 EasyTier
+//   lan-nat [--stun host:port]... [--map]    查网络类型（STUN、IPv6、路由器端口映射）
+//   lan-direct-host <游戏端口> [--sim] [--debug] [--node url]... [--reply-file 文件] [--seconds N]
+//   lan-direct-join <邀请码> [--sim] [--debug] [--node url]... [--seconds N]   直连房间，不用联机节点
 //   lan-host <本机游戏端口> [--peer url]... [--listen url]... [--seconds N]   开房间，打印房间码
 //   lan-join <房间码> [--peer url]... [--listen url]... [--seconds N]         加入房间，打印本机转发地址
 //   （--peer 不写时用 EasyTier 社区公共节点；联机组件放在 %APPDATA%\Amber\easytier）
@@ -209,6 +212,77 @@ try
             var et = new EasyTierInstaller(downloader, AmberDataDir());
             await et.EnsureAsync(null, cts.Token);
             Console.WriteLine($"EasyTier {EasyTierRelease.Version} 就绪：{et.CorePath}");
+            break;
+        }
+        case "lan-direct-host" or "lan-direct-join":
+        {
+            // 直连房间（不用联机节点）。--sim 本机模拟（只用 127.0.0.1），--debug 打印详细日志，
+            // --node 打不通时退回的节点，--reply-file 房主从这个文件读加入方的回复码。
+            var isHost = argList[0] == "lan-direct-host";
+            var sim = argList.Remove("--sim");
+            var debug = argList.Remove("--debug");
+            var nodes = TakeAll(argList, "--node");
+            var stunList = TakeAll(argList, "--stun");
+            var replyFile = TakeOption(argList, "--reply-file");
+            var seconds = int.Parse(TakeOption(argList, "--seconds") ?? "0");
+            var et = new EasyTierInstaller(downloader, AmberDataDir());
+            if (!et.IsInstalled) throw new InvalidOperationException("先运行 lan-setup");
+            RoomCode room;
+            DirectCode? invite = null;
+            if (isHost) room = RoomCode.Create(int.Parse(argList[1]));
+            else
+            {
+                if (!DirectCode.TryParse(argList[1], out invite, out var error)) throw new ArgumentException(error ?? "邀请码不对");
+                room = invite.Room;
+            }
+            var log = new DiagnosticLog();
+            log.Added += e => { if (debug || e.Category is not "EasyTier") Console.WriteLine("  log| " + NetDiagnostics.Redact(e.ToString(), [room.Secret], true)); };
+            var options = new DirectOptions(stunList.Count > 0 ? stunList : Stun.DefaultServers, !sim, nodes, false, false, debug, sim);
+            await using var direct = new DirectSession(et, Path.Combine(AmberDataDir(), "easytier"), room, isHost, options, log);
+            var code = await direct.PrepareAsync(cts.Token);
+            if (isHost)
+            {
+                Console.WriteLine("INVITE " + code.Encode());
+            }
+            else
+            {
+                Console.WriteLine("REPLY " + code.Encode());
+                await direct.JoinAsync(invite!, cts.Token);
+                Console.WriteLine($"LOCAL 127.0.0.1:{direct.LocalGamePort}");
+            }
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+            if (seconds > 0) stop.CancelAfter(TimeSpan.FromSeconds(seconds));
+            var replied = false;
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(2000, stop.Token);
+                    if (isHost && !replied && replyFile is not null && File.Exists(replyFile) && DirectCode.TryParse(File.ReadAllText(replyFile), out var reply, out _))
+                    {
+                        replied = true;
+                        _ = direct.AddReplyAsync(reply, stop.Token);
+                    }
+                    var peers = direct.EasyTier is { } s ? await s.PeersAsync(stop.Token) : [];
+                    Console.WriteLine("PATH " + direct.DescribePath(peers));
+                }
+            }
+            catch (OperationCanceledException) when (!cts.IsCancellationRequested)
+            {
+                Console.WriteLine("时间到，结束");
+            }
+            break;
+        }
+        case "lan-nat":
+        {
+            // 查网络类型：STUN 外部地址、NAT 类型、IPv6、路由器端口映射（--map 时才试，结束时删掉）。
+            var servers = TakeAll(argList, "--stun");
+            var tryMap = argList.Remove("--map");
+            using var socket = DirectBridge.CreateSocket();
+            var gathered = await DirectGatherer.GatherAsync(socket, servers.Count > 0 ? servers : Stun.DefaultServers, tryMap, Console.WriteLine, cts.Token);
+            Console.WriteLine($"NAT {gathered.Nat}：{DirectText.Nat(gathered.Nat)}");
+            foreach (var c in gathered.Candidates) Console.WriteLine("CANDIDATE " + c);
+            if (gathered.Mapping?.Remove is { } remove) await remove();
             break;
         }
         case "lan-host" or "lan-join":

@@ -42,6 +42,7 @@ public static partial class CrashAnalyzer
         R(@"InaccessibleObjectException|Unable to make .{1,200} accessible", "Java 版本太新", "这个版本的加载器不支持当前 Java。把实例的 Java 改成自动，会按游戏要求选择。"),
         R(@"Unsupported class file major version (\d+)", m =>
             new CrashFinding($"Java 太新，加载器不认识版本号 {m.Groups[1].Value} 的类文件", "把实例的 Java 改成自动，或升级加载器。", CrashSeverity.Likely, m.Value)),
+        R(@"could not find java\.dll|Could not find Java SE Runtime Environment", "Java 找不到自己的文件", "多半是 Java 或游戏目录的路径里有中文，而系统“非 Unicode 程序的语言”不是中文。Amber 会自动改用英文名的联接启动；还不行的话，把游戏目录放到纯英文路径下，或者在实例设置里换一个装在英文路径的 Java。"),
         R(@"Error occurred during initialization of VM\s+.{0,120}", "Java 虚拟机启动失败", "检查实例设置里的 JVM 参数，把可疑的参数删掉再试。"),
         R(@"Unrecognized (VM|command-line) option", "JVM 参数不被这个 Java 支持", "检查实例设置里的 JVM 参数，删掉不支持的那项。"),
 

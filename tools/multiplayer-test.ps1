@@ -9,6 +9,7 @@ param(
     [string]$Cli = "",
     [switch]$SkipPublic,
     [string]$PublicNode = "",
+    [switch]$SkipDirect,
     [int]$LocalTimeout = 60,
     [int]$PublicTimeout = 120
 )
@@ -155,6 +156,26 @@ function Run-Case([string]$label, [string[]]$hostPeers, [string[]]$guestPeers, [
     Save-Output $g
 }
 
+function Run-DirectCase([string]$label, [string[]]$extra, [int]$timeout) {
+    Write-Log "===== $label ====="
+    $h = Start-Cli "$label-房主" (@("lan-direct-host", "$gamePort", "--seconds", "600") + $extra)
+    $invite = Wait-Line $h "INVITE " 60
+    if (-not $invite) { Add-Result "$label 生成邀请码" $false "没有输出邀请码"; Save-Output $h; Stop-Pair @($h); return }
+    Add-Result "$label 生成邀请码" $true ($invite.Substring(0, 12) + "…")
+    $g = Start-Cli "$label-加入方" (@("lan-direct-join", $invite, "--seconds", "600") + $extra)
+    $local = Wait-Line $g "LOCAL " 120
+    if (-not $local) { Add-Result "$label 打洞并启动" $false "没有输出本机地址"; Save-Output $h; Save-Output $g; Stop-Pair @($h, $g); return }
+    Add-Result "$label 打洞并启动" $true "转发地址 $local"
+    $r = Test-Through $local $timeout
+    Add-Result "$label 经直连桥连到房主的游戏端口" $r.Ok $r.Detail
+    Start-Sleep -Seconds 3
+    $path = Get-Content $g.Out -Encoding UTF8 | Where-Object { $_.StartsWith("PATH ") } | Select-Object -Last 1
+    Write-Log "加入方路径：$path"
+    Stop-Pair @($h, $g)
+    Save-Output $h
+    Save-Output $g
+}
+
 try {
     Write-Log "Amber 联机自测，日志：$log"
     Write-Log "Amber.Cli：$Cli"
@@ -164,6 +185,10 @@ try {
 
     $relay = Get-FreePort
     Run-Case "本机" @("--peer", "none") @("--peer", "tcp://127.0.0.1:$relay") @("--listen", "tcp://127.0.0.1:$relay") $LocalTimeout
+
+    if (-not $SkipDirect) {
+        Run-DirectCase "直连（本机模拟）" @("--sim") $LocalTimeout
+    }
 
     if (-not $SkipPublic -and $PublicNode) {
         Run-Case "公共节点" @("--peer", $PublicNode) @("--peer", $PublicNode) @() $PublicTimeout

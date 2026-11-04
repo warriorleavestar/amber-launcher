@@ -150,8 +150,31 @@ public sealed class GameLauncher(GameDirectory dir)
         return features;
     }
 
-    /// <summary>准备 natives 与旧版资源后启动游戏。</summary>
+    /// <summary>准备 natives 与旧版资源后启动游戏。路径含系统语言表示不了的字符时改用英文名的联接启动。</summary>
     public Process Launch(LaunchOptions options, Action<string>? onOutput = null)
+    {
+        var root = AsciiPaths.AliasIfNeeded(dir.Root, onOutput);
+        var javaHome = Path.GetDirectoryName(Path.GetDirectoryName(options.JavaPath));
+        var javaAlias = javaHome is not null && !options.JavaPath.StartsWith(dir.Root, StringComparison.OrdinalIgnoreCase) ? AsciiPaths.AliasIfNeeded(javaHome, onOutput) : null;
+        if (root != dir.Root || javaAlias is not null && javaAlias != javaHome)
+        {
+            string Map(string path)
+            {
+                path = AsciiPaths.Remap(path, dir.Root, root);
+                return javaAlias is not null && javaHome is not null ? AsciiPaths.Remap(path, javaHome, javaAlias) : path;
+            }
+            var mapped = options with
+            {
+                JavaPath = Map(options.JavaPath),
+                WorkingDirectory = options.WorkingDirectory is { } w ? Map(w) : null,
+                ExtraJvmArgs = options.ExtraJvmArgs.Select(Map).ToList(),
+            };
+            return new GameLauncher(new GameDirectory(root)) { BaseRules = BaseRules }.LaunchCore(mapped, onOutput);
+        }
+        return LaunchCore(options, onOutput);
+    }
+
+    private Process LaunchCore(LaunchOptions options, Action<string>? onOutput)
     {
         var version = dir.ResolveVersion(options.VersionId);
         ExtractNatives(options.VersionId, version);

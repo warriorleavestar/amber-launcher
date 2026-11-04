@@ -109,7 +109,16 @@ public sealed partial class MultiplayerViewModel : PageViewModel
 
     public bool UsingExit => ExitNodeIp.Length > 0;
     public bool CanUseExit => _session?.Options.Tun == true;
-    public string ExitBanner => UsingExit ? $"你的全部网络流量正经 {ExitNodeIp} 的电脑出去。点“停止”恢复正常上网。" : "";
+    public string ExitBanner
+    {
+        get
+        {
+            if (!UsingExit) return "";
+            var exit = Peers.FirstOrDefault(p => p.Peer.Ip == ExitNodeIp);
+            var route = exit is null ? "" : exit.Peer.Cost.Contains("p2p", StringComparison.OrdinalIgnoreCase) ? "（直连）" : "（经其他成员或节点中转，会慢一些）";
+            return $"你的全部网络流量正经 {ExitNodeIp} 的电脑出去{route}。点“停止”恢复正常上网。";
+        }
+    }
     public ObservableCollection<PeerItem> ExitCandidates { get; } = [];
 
     // ---- 聊天 ----
@@ -159,6 +168,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _service = service;
         service.GameOutput += OnGameOutput;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
+        InitDirect();
     }
 
     protected override void OnFirstActivated()
@@ -540,6 +550,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             if (_localChatPort is { } port) _ = ConnectChatAsync("127.0.0.1", port);
             else _ = ConnectChatAsync(EasyTierArgs.HostIp, RoomChat.Port);
         }
+        // 端口一时被占（比如刚结束的房间还没放开）时，下次刷新再试。
+        if (IsHosting && _hub is null && _room is { } room) StartHub(room);
         if (IsHosting && _chat is null && _hub is not null) _ = ConnectChatAsync("127.0.0.1", RoomChat.Port);
     }
 
@@ -553,6 +565,12 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     {
         if (_session is not { } old || !old.Options.Tun) return false;
         var options = old.Options with { ExitNode = exitIp };
+        // 已经提权的守护脚本直接换参数重启，不再弹权限确认。
+        if (old is EasyTierElevatedSession { HasExited: false } elevated)
+        {
+            elevated.Restart(options);
+            return true;
+        }
         old.Dispose();
         try
         {
@@ -604,6 +622,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         try
         {
             var peers = await session.PeersAsync();
+            TickDirect(peers);
+            if (UsingExit) OnPropertyChanged(nameof(ExitBanner));
             if (_session != session) return;
             Peers.Clear();
             foreach (var p in peers.Where(p => p.Ip.StartsWith(EasyTierArgs.Subnet, StringComparison.Ordinal)).OrderBy(p => p.Ip)) Peers.Add(new PeerItem(p));
@@ -689,7 +709,9 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _timer = null;
         _sessionCts?.Cancel();
         _sessionCts = null;
-        _session?.Dispose();
+        // 直连房间的 EasyTier 归直连会话管，由它一起关掉。
+        if (_direct is not null) _ = StopDirectAsync();
+        else _session?.Dispose();
         _session = null;
         _service.ActiveMultiplayer = null;
         Peers.Clear();
@@ -705,10 +727,12 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         ChatStatus = "";
         ChatLines.Clear();
         Badge = 0;
+        // 先关房主的聊天服务（马上释放端口，紧接着开新房间也能用），再关自己的连接。
+        var hubClosing = hub?.DisposeAsync().AsTask() ?? Task.CompletedTask;
         _ = Task.Run(async () =>
         {
+            await hubClosing;
             if (chat is not null) await chat.DisposeAsync();
-            if (hub is not null) await hub.DisposeAsync();
         });
         Mode = "";
         RoomCodeText = "";

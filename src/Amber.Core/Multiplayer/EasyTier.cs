@@ -97,7 +97,9 @@ public sealed record EasyTierOptions(
     bool Tun = false,
     int? LocalChatPort = null,
     bool AllowExit = false,
-    string? ExitNode = null);
+    string? ExitNode = null,
+    IReadOnlyList<string>? ExtraArgs = null,
+    IReadOnlyList<(int Local, int Remote)>? ExtraForwards = null);
 
 public static class EasyTierArgs
 {
@@ -142,12 +144,17 @@ public static class EasyTierArgs
         else args.Add("--no-listener");
         // EasyTier 默认把出站连接绑到物理网卡上，连本机回环地址会报 10049；节点在本机时（自测、或者节点和游戏在同一台电脑）关掉绑定。
         if (o.Peers.Concat(o.Listeners ?? []).Any(IsLoopback)) args.AddRange(["--bind-device", "false"]);
+        if (o.ExtraArgs is { } extra) args.AddRange(extra);
         if (!o.IsHost && !o.Tun)
         {
             var local = o.LocalForwardPort ?? throw new ArgumentException("加入方需要本机转发端口");
             args.AddRange(["--port-forward", $"tcp://127.0.0.1:{local}/{HostIp}:{o.Room.Port}"]);
             // 房间聊天：本机另一个端口转发到房主的聊天服务。
             if (o.LocalChatPort is { } chat) args.AddRange(["--port-forward", $"tcp://127.0.0.1:{chat}/{HostIp}:{RoomChat.Port}"]);
+        }
+        if (!o.IsHost)
+        {
+            foreach (var (local, remote) in o.ExtraForwards ?? []) args.AddRange(["--port-forward", $"tcp://127.0.0.1:{local}/{HostIp}:{remote}"]);
         }
         return args;
     }
