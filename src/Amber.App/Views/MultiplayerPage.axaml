@@ -57,7 +57,7 @@
           <StackPanel Spacing="4">
             <CheckBox Content="完整局域网模式（需要管理员权限）" IsChecked="{Binding FullLanMode}" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
-                       Text="一般不用开。默认模式只转发游戏端口，不需要管理员权限。开启后会建一块名为“Amber LAN”的虚拟网卡，每个人有一个虚拟 IP，局域网里的其他游戏和程序也能互通；创建或加入房间时 Windows 会弹出权限确认，结束联机或关闭 Amber 时虚拟网卡随之关闭。双方都要开启这个模式。" />
+                       Text="一般不用开。默认模式只转发游戏端口，不需要管理员权限。开启后会建一块名为“Amber LAN”的虚拟网卡，每个人有一个虚拟 IP，局域网里的其他游戏和程序也能互通，游戏发的局域网广播也会转发给房间里的人；创建或加入房间时 Windows 会弹出权限确认，结束联机或关闭 Amber 时虚拟网卡随之关闭。双方都要开启这个模式。" />
             <CheckBox Content="允许成员通过我的电脑上网（出口节点）" IsChecked="{Binding AllowExitNode}" IsEnabled="{Binding FullLanMode}" Margin="0,6,0,0" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowExitNode}" Foreground="#E0703A"
                        Text="注意：开启后，房间里选了你做出口的人，他们的全部网络流量会从你的电脑和网络出去，在外人看来就是你的 IP 在访问，你要为这些流量负责；也会占用你的带宽。只对信任的人开启。" />

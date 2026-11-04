@@ -35,7 +35,8 @@ public sealed class EasyTierInstaller(Downloader downloader, string dataDir)
     public string InstallDir => Path.Combine(dataDir, "easytier", EasyTierRelease.Version);
     public string CorePath => Path.Combine(InstallDir, "easytier-core.exe");
     public string CliPath => Path.Combine(InstallDir, "easytier-cli.exe");
-    public bool IsInstalled => File.Exists(CorePath) && File.Exists(CliPath);
+    /// <summary>WinDivert64.sys 是完整局域网模式转发游戏局域网广播要用的驱动文件，缺了也重新解压。</summary>
+    public bool IsInstalled => File.Exists(CorePath) && File.Exists(CliPath) && (!OperatingSystem.IsWindows() || File.Exists(Path.Combine(InstallDir, "WinDivert64.sys")));
 
     public async Task EnsureAsync(IProgress<DownloadProgress>? progress = null, CancellationToken ct = default)
     {
@@ -74,8 +75,8 @@ public sealed class EasyTierInstaller(Downloader downloader, string dataDir)
                 if (entry.FullName.EndsWith('/')) continue;
                 var name = Path.GetFileName(entry.FullName);
                 if (name.Length == 0 || name.Contains("..")) continue;
-                // 只要命令行程序和它们用的库；网页控制台和 WinDivert 驱动文件用不到。
-                if (name is not ("easytier-core.exe" or "easytier-cli.exe") && !name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) continue;
+                // 只要命令行程序、它们用的库和 WinDivert 驱动文件（完整局域网模式转发广播用）；网页控制台用不到。
+                if (name is not ("easytier-core.exe" or "easytier-cli.exe" or "WinDivert64.sys") && !name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) continue;
                 entry.ExtractToFile(Path.Combine(temp, name), true);
             }
         }
@@ -124,7 +125,8 @@ public static class EasyTierArgs
         };
         // 默认不建虚拟网卡；完整局域网模式才建（要管理员权限和 wintun）。
         if (!o.Tun) args.Add("--no-tun");
-        else args.AddRange(["--dev-name", "Amber LAN"]);
+        // 完整局域网模式下转发本机游戏发出的 UDP 广播，很多游戏靠广播找局域网房间（EasyTier 的这个功能只在 Windows 上、要管理员权限，正好这个模式已经有）。
+        else args.AddRange(["--dev-name", "Amber LAN", "--enable-udp-broadcast-relay"]);
         // 出口节点：两边都要用户明确打开。允许别人经自己上网的一方加 --enable-exit-node；
         // 要经别人上网的一方把所有流量导进虚拟网卡，所以必须是完整局域网模式。
         if (o.AllowExit) args.Add("--enable-exit-node");

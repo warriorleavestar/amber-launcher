@@ -123,6 +123,8 @@ public class MultiplayerTests
         Assert.DoesNotContain("--no-tun", guest);
         Assert.DoesNotContain("--port-forward", guest);
         Assert.Equal("Amber LAN", guest[guest.IndexOf("--dev-name") + 1]);
+        Assert.Contains("--enable-udp-broadcast-relay", guest);
+        Assert.DoesNotContain("--enable-udp-broadcast-relay", EasyTierArgs.Build(new EasyTierOptions(room, false, [], 1, 2)));
     }
 }
 
@@ -272,5 +274,30 @@ public class ExitNodeArgsTests
     public void UsingExitNeedsTunAndRoomMember(string exit, bool tun)
     {
         Assert.Throws<ArgumentException>(() => EasyTierArgs.Build(new EasyTierOptions(Room, false, [], 1, 2, Tun: tun, ExitNode: exit)));
+    }
+}
+
+public class EasyTierExtractTests
+{
+    [Fact]
+    public void KeepsCoreCliDllsAndWinDivert()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "amber-et-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var zip = Path.Combine(root, "et.zip");
+            using (var archive = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create))
+                foreach (var name in new[] { "easytier-core.exe", "easytier-cli.exe", "wintun.dll", "Packet.dll", "WinDivert64.sys", "easytier-web.exe", "easytier-web-embed.exe" })
+                    using (var w = new StreamWriter(archive.CreateEntry("easytier-windows-x86_64/" + name).Open())) w.Write(name);
+            var target = Path.Combine(root, "out");
+            EasyTierInstaller.Extract(zip, target);
+            Assert.Equal(["easytier-cli.exe", "easytier-core.exe", "Packet.dll", "WinDivert64.sys", "wintun.dll"],
+                Directory.EnumerateFiles(target).Select(Path.GetFileName).Order(StringComparer.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
     }
 }

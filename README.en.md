@@ -57,7 +57,7 @@ Amber needs 64-bit Windows 10 or later. You don't need to set up Java either: Am
 - Play together without being on the same LAN: the host opens the world to LAN, creates a room and shares the room code; friends paste the code to join
 - Built on the open-source networking tool [EasyTier](https://github.com/EasyTier/EasyTier), downloaded from its GitHub releases and verified on first use; the default mode needs no admin rights and installs no driver
 - Room chat: peer-to-peer, no server in between, with messages additionally encrypted with the room secret
-- Optional full-LAN mode: everyone gets a virtual IP so other LAN games and apps work too (needs admin rights); members can also route their internet traffic through one member's PC (exit node, opt-in on both sides)
+- Optional full-LAN mode: everyone gets a virtual IP and games' LAN broadcasts are forwarded, so other LAN games and apps work too (needs admin rights); members can also route their internet traffic through one member's PC (exit node, opt-in on both sides)
 - You add the relay nodes yourself: the [node folder](node/README.md) has one-step scripts for Linux, Docker and Windows, and a share code to send to friends
 
 ### Downloads
