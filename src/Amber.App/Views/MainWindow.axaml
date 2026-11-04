@@ -28,7 +28,7 @@
         <ScrollViewer Grid.Row="1">
           <StackPanel Margin="0,0,14,0">
             <Border Classes="card">
-              <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+              <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
                 <TextBlock Text="{l:T settings.directory.label}" VerticalAlignment="Center" />
                 <TextBox Grid.Column="1" Text="{Binding GameDirectory}" />
                 <Button Grid.Column="2" Content="{l:T common.browse}" Margin="8,0,0,0" Click="BrowseGameDir_Click" />
@@ -52,7 +52,7 @@
               </Grid>
             </Border>
             <Border Classes="card">
-              <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+              <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
                 <TextBlock Text="Java" VerticalAlignment="Center" />
                 <ComboBox Grid.Column="1" ItemsSource="{Binding JavaOptions}" SelectedItem="{Binding SelectedJava}"
                           HorizontalAlignment="Stretch">
@@ -86,7 +86,7 @@
               </Grid>
             </Border>
             <Border Classes="card">
-              <Grid ColumnDefinitions="120,*" RowDefinitions="Auto,Auto,Auto,Auto">
+              <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
                 <TextBlock Text="CurseForge Key" VerticalAlignment="Center" />
                 <TextBox Grid.Column="1" Text="{Binding CurseForgeKey}" PasswordChar="●" PlaceholderText="{l:T settings.curseforge.key_hint}" />
                 <TextBlock Grid.Row="1" Text="{l:T settings.curseforge.endpoint}" VerticalAlignment="Center" Margin="0,12,0,0" />

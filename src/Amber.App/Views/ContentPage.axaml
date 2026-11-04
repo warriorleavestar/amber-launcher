@@ -17,11 +17,11 @@
         <TextBox Grid.Column="2" Text="{Binding Query}" PlaceholderText="{l:T common.search_placeholder}" Margin="8,0" KeyDown="Query_KeyDown" />
         <Button Grid.Column="3" Classes="amber" Content="{l:T common.search}" Command="{Binding SearchCommand}" Padding="20,6" />
       </Grid>
-      <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding !IsModpack}">
+      <WrapPanel ItemSpacing="10" LineSpacing="4" IsVisible="{Binding !IsModpack}">
         <TextBlock Text="{l:T content.install.target}" VerticalAlignment="Center" />
         <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding TargetInstance}" MinWidth="260" />
         <CheckBox Content="{l:T content.search.filter_by_instance}" IsChecked="{Binding FilterByInstance}" />
-      </StackPanel>
+      </WrapPanel>
       <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding IsDatapack}">
         <TextBlock Text="{l:T content.install.world}" VerticalAlignment="Center" />
         <ComboBox ItemsSource="{Binding Worlds}" SelectedItem="{Binding TargetWorld}" MinWidth="260" PlaceholderText="{l:T content.world.empty}">

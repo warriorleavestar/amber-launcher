@@ -20,6 +20,11 @@
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Margin" Value="0,0,0,10" />
     </Style>
+    <!-- 表单：左边一列是标签，宽度按内容，太长就换行（英文、日文的标签比中文长） -->
+    <Style Selector="Grid.form > TextBlock">
+      <Setter Property="MaxWidth" Value="190" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
     <Style Selector="TextBlock.hint">
       <Setter Property="Opacity" Value="0.65" />
       <Setter Property="TextWrapping" Value="Wrap" />

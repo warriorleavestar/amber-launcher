@@ -60,11 +60,11 @@
             <TextBlock Classes="h2" Text="{l:T multiplayer.direct.heading}" Margin="0" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
                        Text="{l:T multiplayer.direct.hint}" />
-            <StackPanel Orientation="Horizontal" Spacing="6">
+            <WrapPanel ItemSpacing="6" LineSpacing="4">
               <Button Content="{l:T multiplayer.network.check}" Command="{Binding CheckNetworkCommand}" IsEnabled="{Binding !IsCheckingNetwork}" />
               <CheckBox Content="{l:T multiplayer.direct.use_nodes}" IsChecked="{Binding DirectUseNodes}" />
               <CheckBox Content="{l:T multiplayer.diagnostics.debug_mode}" IsChecked="{Binding DebugMode}" ToolTip.Tip="{l:T multiplayer.diagnostics.debug_tooltip}" />
-            </StackPanel>
+            </WrapPanel>
             <SelectableTextBlock Text="{Binding NetworkCheckText}" TextWrapping="Wrap" FontSize="12" IsVisible="{Binding NetworkCheckText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             <Grid ColumnDefinitions="*,14,*">
               <StackPanel Spacing="6">
@@ -77,7 +77,10 @@
                 <Button Classes="amber" Content="{l:T common.join}" Command="{Binding JoinDirectCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
               </StackPanel>
             </Grid>
-            <Expander Header="{l:T multiplayer.direct.stun_heading}">
+            <Expander>
+              <Expander.Header>
+                <TextBlock Text="{l:T multiplayer.direct.stun_heading}" TextWrapping="Wrap" />
+              </Expander.Header>
               <TextBox Text="{Binding StunText}" PlaceholderText="{l:T multiplayer.direct.stun_placeholder}" />
             </Expander>
           </StackPanel>

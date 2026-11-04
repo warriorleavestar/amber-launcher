@@ -10,13 +10,14 @@
     <StackPanel Grid.Row="1" Spacing="6" Margin="0,0,0,8">
       <Grid ColumnDefinitions="*,Auto">
         <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedId}" HorizontalAlignment="Stretch" PlaceholderText="{l:T instance.version.empty}" />
-        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="8,0,0,0">
-          <Button Content="{l:T common.open_folder}" Command="{Binding OpenFolderCommand}" />
-          <Button Content="{l:T instance.files.complete}" Command="{Binding CompleteFilesCommand}" />
-          <Button Content="{l:T instance.export.script}" Click="ExportScript_Click" />
-          <Button Content="{Binding DeleteArmed, Converter={x:Static vm:Converters.DeleteLabel}}" Command="{Binding DeleteVersionCommand}" />
-        </StackPanel>
       </Grid>
+      <!-- 按钮放下一行、放不下自动折行（其他语言的按钮文字更长） -->
+      <WrapPanel ItemSpacing="6" LineSpacing="6">
+        <Button Content="{l:T common.open_folder}" Command="{Binding OpenFolderCommand}" />
+        <Button Content="{l:T instance.files.complete}" Command="{Binding CompleteFilesCommand}" />
+        <Button Content="{l:T instance.export.script}" Click="ExportScript_Click" />
+        <Button Content="{Binding DeleteArmed, Converter={x:Static vm:Converters.DeleteLabel}}" Command="{Binding DeleteVersionCommand}" />
+      </WrapPanel>
       <TextBlock Classes="hint" FontSize="12" Text="{Binding InfoText}" TextTrimming="CharacterEllipsis" />
     </StackPanel>
 
@@ -24,7 +25,7 @@
       <TabControl SelectedIndex="{Binding TabIndex}" Padding="0,8,0,0">
         <TabItem Header="{l:T instance.settings.title}" FontSize="14">
           <ScrollViewer>
-            <Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,0,14,0">
+            <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,0,14,0">
               <Grid.Styles>
                 <Style Selector="TextBlock.label"><Setter Property="VerticalAlignment" Value="Center" /><Setter Property="Margin" Value="0,8,0,0" /></Style>
               </Grid.Styles>
@@ -39,11 +40,11 @@
               </ComboBox>
 
               <TextBlock Grid.Row="2" Classes="label" Text="{l:T instance.settings.memory}" />
-              <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+              <WrapPanel Grid.Row="2" Grid.Column="1" ItemSpacing="8" LineSpacing="4" Margin="0,8,0,0">
                 <ComboBox ItemsSource="{Binding MemoryModes}" SelectedIndex="{Binding MemoryModeIndex}" MinWidth="160" />
                 <TextBox Text="{Binding MemoryText}" Width="100" PlaceholderText="MB" />
                 <TextBlock Classes="hint" Text="{l:T instance.settings.manual_hint}" VerticalAlignment="Center" />
-              </StackPanel>
+              </WrapPanel>
 
               <TextBlock Grid.Row="3" Classes="label" Text="{l:T instance.settings.jvm_args}" />
               <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding JvmArgs}" Margin="0,8,0,0" PlaceholderText="{l:T instance.settings.jvm_hint}" />

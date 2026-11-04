@@ -41,6 +41,12 @@ internal sealed class LayoutCheck(MainWindow window, MainViewModel main, string 
         var problems = new List<Problem>();
         if (window.Content is not Control root) return problems;
         var original = main.CurrentPage;
+        var originalLanguage = Amber.Core.Localization.L.Language;
+        // 每种语言都排一遍：英文、日文的字更长，最容易被切。
+        foreach (var (language, _) in Amber.Core.Localization.L.Languages)
+        {
+        Amber.Core.Localization.L.SetLanguage(language);
+        await Task.Delay(300);
         foreach (var page in main.Pages)
         {
             main.CurrentPage = page;
@@ -57,7 +63,7 @@ internal sealed class LayoutCheck(MainWindow window, MainViewModel main, string 
                 {
                     window.UpdateLayout();
                     var size = root.Bounds.Size;
-                    var list = Find(root, size).Select(p => new Problem(page.Title, name, p)).ToList();
+                    var list = Find(root, size).Select(p => new Problem($"{page.Title}[{language}]", name, p)).ToList();
                     // 比这台电脑屏幕还大的尺寸 Windows 不让设，这种尺寸跳过（不算问题）。
                     if (Math.Abs(size.Width - w) > 1 || Math.Abs(size.Height - h) > 1)
                     {
@@ -68,13 +74,15 @@ internal sealed class LayoutCheck(MainWindow window, MainViewModel main, string 
                     var scale = name switch { "最小窗口" => 1.0, "1280x720@150%" => 1.5, "2560x1440@175%" => 2.0, _ => 1.0 };
                     using var bitmap = new RenderTargetBitmap(new PixelSize((int)(w * scale), (int)(h * scale)), new Vector(96 * scale, 96 * scale));
                     bitmap.Render(root);
-                    bitmap.Save(Path.Combine(reportDir, $"{page.Title}-{name.Replace('%', 'p')}.png"));
+                    bitmap.Save(Path.Combine(reportDir, $"{language}-{main.Pages.IndexOf(page) + 1}-{name.Replace('%', 'p')}.png"));
                     return list;
                 });
                 problems.AddRange(found);
                 foreach (var p in found.Take(5)) log?.Invoke($"  {p.Page} @ {p.Size}: {p.What}");
             }
         }
+        }
+        Amber.Core.Localization.L.SetLanguage(originalLanguage);
         main.CurrentPage = original;
         window.MinWidth = MainWindow.PreferredMinWidth;
         window.MinHeight = MainWindow.PreferredMinHeight;

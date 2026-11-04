@@ -10,7 +10,7 @@
     <ScrollViewer Grid.Row="1">
       <StackPanel>
         <Border Classes="card">
-          <Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto,Auto,Auto">
+          <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
             <TextBlock Text="{l:T home.version.label}" VerticalAlignment="Center" />
             <ComboBox Grid.Column="1" ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}"
                       HorizontalAlignment="Stretch" PlaceholderText="{l:T home.version.empty}" />

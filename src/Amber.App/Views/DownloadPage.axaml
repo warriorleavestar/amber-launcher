@@ -25,7 +25,7 @@
                 <TextBlock Text="{Binding Id}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                 <TextBlock Grid.Column="1" Text="{Binding TypeText}" Classes="hint" VerticalAlignment="Center" />
                 <TextBlock Grid.Column="2" Text="{Binding Date}" Classes="hint" VerticalAlignment="Center" />
-                <Button Grid.Column="3" Width="96" HorizontalContentAlignment="Center"
+                <Button Grid.Column="3" MinWidth="96" HorizontalContentAlignment="Center"
                         Content="{l:T common.install_more}"
                         Command="{Binding $parent[ListBox].((vm:DownloadViewModel)DataContext).ConfigureCommand}"
                         CommandParameter="{Binding}" />

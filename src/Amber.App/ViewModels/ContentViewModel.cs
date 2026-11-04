@@ -23,12 +23,21 @@ public sealed partial class ProjectItem(ContentProject project) : ObservableObje
     [ObservableProperty]
     public partial Bitmap? Icon { get; set; }
 
-    private static string FormatCount(long n) => n switch
-    {
-        >= 100_000_000 => L.F("content.count.hundred_million", n / 100_000_000.0),
-        >= 10_000 => L.F("content.count.ten_thousand", n / 10_000.0),
-        _ => n.ToString(),
-    };
+    /// <summary>下载数：中文和日文按“万 / 亿”，英文按 K / M / B。</summary>
+    private static string FormatCount(long n) => L.Language == "en"
+        ? n switch
+        {
+            >= 1_000_000_000 => $"{n / 1_000_000_000.0:0.#}B",
+            >= 1_000_000 => $"{n / 1_000_000.0:0.#}M",
+            >= 1_000 => $"{n / 1_000.0:0.#}K",
+            _ => n.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }
+        : n switch
+        {
+            >= 100_000_000 => L.F("content.count.hundred_million", n / 100_000_000.0),
+            >= 10_000 => L.F("content.count.ten_thousand", n / 10_000.0),
+            _ => n.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
 }
 
 public sealed record FileItem(ContentFile File)
