@@ -148,6 +148,9 @@ public sealed class LauncherService : IDisposable
     /// <summary>进行中的联机会话，退出时一起结束。</summary>
     public IDisposable? ActiveMultiplayer { get; set; }
 
+    /// <summary>联机页开着“仅游戏”转发时，启动游戏要用的转发（否则为 null）。</summary>
+    public Amber.Core.Multiplayer.Transport.GameProxy? ActiveGameProxy { get; set; }
+
     public void Dispose()
     {
         ActiveMultiplayer?.Dispose();

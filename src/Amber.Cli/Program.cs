@@ -217,6 +217,15 @@ try
             Console.WriteLine($"PENDING-AFTER {left.Count}");
             break;
         }
+        case "transport-bench":
+        {
+            // 各封装模式在本机回环上的开销：握手时间、64 字节往返、单向吞吐。不经过 EasyTier，只量封装本身。
+            foreach (var (mode, disguise) in new[] { (Amber.Core.Multiplayer.Transport.TransportMode.General, false), (Amber.Core.Multiplayer.Transport.TransportMode.Minecraft, false),
+                         (Amber.Core.Multiplayer.Transport.TransportMode.High, false), (Amber.Core.Multiplayer.Transport.TransportMode.High, true),
+                         (Amber.Core.Multiplayer.Transport.TransportMode.Extreme, false), (Amber.Core.Multiplayer.Transport.TransportMode.Extreme, true) })
+                Console.WriteLine(await TransportBench.RunAsync(mode, disguise, cts.Token));
+            break;
+        }
         case "account-check":
         {
             // 检查选中的微软账号能不能正常进服务器，只打印不涉密的结果。--force-refresh：在内存里强制走一次刷新令牌（不写回文件）。
@@ -678,5 +687,78 @@ internal sealed class EchoServer : IDisposable
     {
         _cts.Cancel();
         _listener.Stop();
+    }
+}
+
+
+internal static class TransportBench
+{
+    public static async Task<string> RunAsync(Amber.Core.Multiplayer.Transport.TransportMode mode, bool disguise, CancellationToken ct)
+    {
+        var room = RoomCode.Create(25565);
+        var handshakes = new List<double>();
+        Stream? client = null, server = null;
+        var tcps = new List<System.Net.Sockets.TcpClient>();
+        for (var i = 0; i < 20; i++)
+        {
+            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            listener.Start();
+            var a = new System.Net.Sockets.TcpClient { NoDelay = true };
+            var acceptTask = listener.AcceptTcpClientAsync(ct);
+            await a.ConnectAsync(System.Net.IPAddress.Loopback, ((System.Net.IPEndPoint)listener.LocalEndpoint).Port, ct);
+            var b = await acceptTask;
+            b.NoDelay = true;
+            listener.Stop();
+            tcps.Add(a);
+            tcps.Add(b);
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            if (mode == Amber.Core.Multiplayer.Transport.TransportMode.General)
+            {
+                client = a.GetStream();
+                server = b.GetStream();
+            }
+            else
+            {
+                var accept = Amber.Core.Multiplayer.Transport.TunnelHandshake.AcceptAsync(b.GetStream(), room, mode, disguise, ct);
+                client = await Amber.Core.Multiplayer.Transport.TunnelHandshake.ConnectAsync(a.GetStream(), room, mode, disguise, Amber.Core.Multiplayer.Transport.TunnelService.Game, ct);
+                server = (await accept)!.Value.Stream;
+            }
+            handshakes.Add(watch.Elapsed.TotalMilliseconds);
+        }
+        // 回显：服务端把收到的原样发回。
+        var echo = Task.Run(async () =>
+        {
+            var buf = new byte[65536];
+            int n;
+            try { while ((n = await server!.ReadAsync(buf, ct)) > 0) { await server.WriteAsync(buf.AsMemory(0, n), ct); await server.FlushAsync(ct); } } catch (Exception) { }
+        }, ct);
+        var msg = new byte[64];
+        var rtts = new List<double>();
+        for (var i = 0; i < 2000; i++)
+        {
+            var w = System.Diagnostics.Stopwatch.StartNew();
+            await client!.WriteAsync(msg, ct);
+            await client.FlushAsync(ct);
+            var read = 0;
+            while (read < 64) read += await client.ReadAsync(msg.AsMemory(read), ct);
+            rtts.Add(w.Elapsed.TotalMicroseconds);
+        }
+        rtts.Sort();
+        var data = new byte[64 * 1024];
+        var total = 64L * 1024 * 1024;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var reader = Task.Run(async () =>
+        {
+            var got = 0L;
+            var buf = new byte[65536];
+            while (got < total) got += await client!.ReadAsync(buf, ct);
+        }, ct);
+        for (long sent = 0; sent < total; sent += data.Length) await client!.WriteAsync(data, ct);
+        await reader;
+        var mbps = 64 / sw.Elapsed.TotalSeconds;
+        handshakes.Sort();
+        foreach (var t in tcps) t.Dispose();
+        var name = $"{mode}{(disguise ? "+伪装" : "")}";
+        return $"{name,-16} 握手中位数 {handshakes[10]:F2} ms | 64 B 往返中位数 {rtts[1000]:F0} µs p99 {rtts[1980]:F0} µs | 64 MB 回显吞吐 {mbps:F0} MB/s";
     }
 }

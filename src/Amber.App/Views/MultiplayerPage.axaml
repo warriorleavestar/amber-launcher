@@ -90,6 +90,23 @@
             <CheckBox Content="允许成员通过我的电脑上网（出口节点）" IsChecked="{Binding AllowExitNode}" IsEnabled="{Binding FullLanMode}" Margin="0,6,0,0" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowExitNode}" Foreground="#E0703A"
                        Text="注意：开启后，房间里选了你做出口的人，他们的全部网络流量会从你的电脑和网络出去，在外人看来就是你的 IP 在访问，你要为这些流量负责；也会占用你的带宽。只对信任的人开启。" />
+            <CheckBox Content="允许成员经我的电脑转发游戏流量（仅游戏）" IsChecked="{Binding AllowGameProxy}" Margin="0,6,0,0" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowGameProxy}" Foreground="#E0703A"
+                       Text="只转发对方从 Amber 启动的游戏（登录和进服务器），不需要管理员权限；不允许经你连你家里的设备和本机服务。外人看来是你的 IP 在玩，只对信任的人开启。" />
+          </StackPanel>
+        </Border>
+
+        <!-- 数据封装（开房间时选；加入时按房间码） -->
+        <Border Classes="card" Margin="0" IsVisible="{Binding IsIdle}">
+          <StackPanel Spacing="4">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="联机和聊天的数据封装" VerticalAlignment="Center" FontWeight="SemiBold" />
+              <ComboBox ItemsSource="{Binding TransportChoices}" SelectedItem="{Binding SelectedTransport}" MinWidth="140" />
+              <CheckBox Content="伪装成 Minecraft 流量" IsChecked="{Binding DisguiseAsMinecraft}" IsEnabled="{Binding CanDisguise}" />
+            </StackPanel>
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding SelectedTransport.Detail}" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
+                       Text="开房间时生效，设置写在房间码里，加入的人自动跟着用；加入方要用同样支持封装的 Amber。伪装只是让连接第一眼像在登录 MC 服务器，挡不住认真分析流量的人。" />
           </StackPanel>
         </Border>
 
@@ -225,8 +242,25 @@
               <Button Grid.Column="1" Content="结束联机" Command="{Binding StopCommand}" />
             </Grid>
             <TextBlock Classes="hint" Text="还没有人" IsVisible="{Binding !Peers.Count}" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding TransportText}" />
+            <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding !UsingGameProxy}">
+              <TextBlock Text="游戏流量经这个人的网络（仅游戏）" VerticalAlignment="Center" />
+              <ComboBox ItemsSource="{Binding ExitCandidates}" SelectedItem="{Binding SelectedExitPeer}" MinWidth="200">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate DataType="vm:PeerItem"><TextBlock Text="{Binding Meta}" /></DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <Button Content="开始" Command="{Binding UseGameProxyCommand}" IsEnabled="{Binding CanUseGameProxy}"
+                      ToolTip.Tip="对方要先勾选“允许成员经我的电脑转发游戏流量”。会重启联机组件几秒，聊天自动重连。之后从启动页启动的游戏生效。" />
+            </StackPanel>
+            <Border IsVisible="{Binding UsingGameProxy}" BorderBrush="#E0703A" BorderThickness="1" CornerRadius="6" Padding="8">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="{Binding GameProxyBanner}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Content="停止转发" Command="{Binding StopGameProxyCommand}" Margin="8,0,0,0" />
+              </Grid>
+            </Border>
             <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding CanUseExit}">
-              <TextBlock Text="经这个人的电脑上网" VerticalAlignment="Center" />
+              <TextBlock Text="经这个人的电脑上网（全部流量）" VerticalAlignment="Center" />
               <ComboBox ItemsSource="{Binding ExitCandidates}" SelectedItem="{Binding SelectedExitPeer}" MinWidth="200">
                 <ComboBox.ItemTemplate>
                   <DataTemplate DataType="vm:PeerItem"><TextBlock Text="{Binding Meta}" /></DataTemplate>

@@ -15,6 +15,45 @@ namespace Amber.App.ViewModels;
 /// <summary>启动页：选版本、账号、启动，退出后给出崩溃分析。</summary>
 public sealed partial class HomeViewModel : PageViewModel
 {
+    /// <summary>
+    /// 有“仅游戏”转发时改启动参数：加 SOCKS5 的 JVM 参数；要进的服务器（不是本机或房间里的地址）改成经出口的本机转发端口。
+    /// 返回那个转发（游戏结束时关掉），没有时返回 null。
+    /// </summary>
+    private readonly List<string> _proxyNotes = [];
+
+    private Amber.Core.Multiplayer.Transport.TunnelClient? ApplyGameProxy(ref LaunchOptions options)
+    {
+        _proxyNotes.Clear();
+        if (_service.ActiveGameProxy is not { } proxy) return null;
+        options = options with { ExtraJvmArgs = [.. options.ExtraJvmArgs, .. proxy.JvmArgs] };
+        _proxyNotes.Add($"[Amber] 仅游戏转发：游戏的登录和网络请求经 {proxy.ExitIp} 的电脑出去");
+        if (options.JoinServer is not { Length: > 0 } server || !TrySplitServer(server, out var host, out var port)) return null;
+        if (System.Net.IPAddress.TryParse(host, out var ip) && !Amber.Core.Multiplayer.Transport.Socks5.IsPublic(ip)) return null;
+        var relay = proxy.RelayTo(host, port);
+        options = options with { JoinServer = $"127.0.0.1:{relay.Port}" };
+        _proxyNotes.Add($"[Amber] 进入 {host}:{port} 也经 {proxy.ExitIp} 转发（游戏里显示的地址是本机转发端口 127.0.0.1:{relay.Port}）");
+        return relay;
+    }
+
+    private static bool TrySplitServer(string server, out string host, out int port)
+    {
+        server = server.Trim();
+        port = 25565;
+        host = server;
+        if (server.StartsWith('[') && server.IndexOf(']') is var close and > 0)
+        {
+            host = server[1..close];
+            return server.Length == close + 1 || server[close + 1] == ':' && int.TryParse(server[(close + 2)..], out port);
+        }
+        if (server.Count(c => c == ':') == 1)
+        {
+            var parts = server.Split(':');
+            host = parts[0];
+            return int.TryParse(parts[1], out port) && port is > 0 and < 65536;
+        }
+        return host.Length > 0;
+    }
+
     private const int KeptOutputLines = 400;
 
     private readonly LauncherService _service;
@@ -194,6 +233,8 @@ public sealed partial class HomeViewModel : PageViewModel
                 JoinServer = request.JoinServer ?? settings.JoinServer,
                 JoinWorld = request.JoinWorld,
             };
+            // 联机页开了“仅游戏”转发：游戏的 HTTP 走本机 SOCKS5，要进的服务器另开一个经出口的转发端口。
+            await using var relay = ApplyGameProxy(ref options);
             var memory = options.MaxMemoryMb;
 
             if (!string.IsNullOrWhiteSpace(settings.PreLaunchCommand))
@@ -207,6 +248,7 @@ public sealed partial class HomeViewModel : PageViewModel
             _log.Clear();
             _recentOutput.Clear();
             _log.AddRaw($"[Amber] 启动 {id}，Java：{javaPath}，最大内存 {memory} MB");
+            foreach (var note in _proxyNotes) _log.AddRaw(note);
             var parser = new GameLogParser();
             var launcher = new GameLauncher(_service.Directory);
             started = DateTime.UtcNow;
