@@ -67,6 +67,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             await CrashAsync();
             await ServersAndWorldsAsync();
             await ToolsAsync();
+            await MultiplayerAsync();
             await ExportImportAsync();
             Log("DONE");
         }
@@ -333,6 +334,113 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         instance.TabIndex = 2;
         await WaitAsync(() => instance.Worlds.Count > 0, 5);
     }
+
+    /// <summary>
+    /// 联机页：界面检查总是做；联机组件已下载时，再在本机起房主和加入方两个 EasyTier（只经 127.0.0.1 互连，不连公共节点），
+    /// 用一个假的“游戏”TCP 服务确认加入方的转发地址真的能连到房主。
+    /// </summary>
+    private async Task MultiplayerAsync()
+    {
+        var host = Page<MultiplayerViewModel>();
+        main.CurrentPage = host;
+        await Task.Delay(500);
+        host.JoinCode = "AMB-123";
+        Check("联机：房间码格式错误有提示", Press(await FindAsync<Button>(b => b.Content as string == "加入房间")) && host.Status.Contains("格式") || !host.IsComponentReady && host.Status.Contains("组件"), host.Status);
+        await ShotAsync("联机页");
+        if (!host.IsComponentReady)
+        {
+            Log("SKIP 联机：联机组件没有下载，跳过真实连接测试");
+            return;
+        }
+
+        // 假的游戏服务器：收到一行就回 pong:+原文。
+        var server = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        server.Start();
+        var gamePort = ((System.Net.IPEndPoint)server.LocalEndpoint).Port;
+        using var stopServer = new CancellationTokenSource();
+        _ = Task.Run(async () =>
+        {
+            while (!stopServer.IsCancellationRequested)
+            {
+                using var client = await server.AcceptTcpClientAsync(stopServer.Token);
+                var stream = client.GetStream();
+                var reader = new StreamReader(stream);
+                var line = await reader.ReadLineAsync(stopServer.Token);
+                var bytes = System.Text.Encoding.UTF8.GetBytes("pong:" + line + "\n");
+                await stream.WriteAsync(bytes, stopServer.Token);
+            }
+        });
+
+        var relayPort = Amber.Core.Multiplayer.EasyTierArgs.FreeTcpPort();
+        host.TestListeners = [$"tcp://127.0.0.1:{relayPort}"];
+        host.TestPeers = [];
+        host.ManualPort = gamePort.ToString();
+        await host.CreateRoomCommand.ExecuteAsync(null);
+        Check("联机：创建房间", host.IsHosting && host.RoomCodeText.StartsWith("AMB-", StringComparison.Ordinal), host.Status);
+        await ShotAsync("联机房主");
+
+        var guest = host.CreateTestPeer();
+        guest.Activate();
+        guest.TestPeers = [$"tcp://127.0.0.1:{relayPort}"];
+        guest.JoinCode = "朋友发来的：" + host.RoomCodeText;
+        guest.JoinCommand.Execute(null);
+        Check("联机：加入房间", guest.IsJoined && guest.JoinAddress.StartsWith("127.0.0.1:", StringComparison.Ordinal), guest.Status);
+
+        var connected = await WaitAsync(() => guest.Peers.Any(p => p.Peer.Ip == Amber.Core.Multiplayer.EasyTierArgs.HostIp), 60);
+        Check("联机：加入方看到房主", connected, guest.Status);
+        string? reply = null;
+        for (var attempt = 0; attempt < 15 && reply is null; attempt++)
+        {
+            try
+            {
+                using var client = new System.Net.Sockets.TcpClient();
+                var parts = guest.JoinAddress.Split(':');
+                await client.ConnectAsync(parts[0], int.Parse(parts[1]));
+                var stream = client.GetStream();
+                stream.ReadTimeout = 5000;
+                await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes("hello\n"));
+                reply = await new StreamReader(stream).ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException)
+            {
+                await Task.Delay(2000);
+            }
+        }
+        Check("联机：经虚拟网络连到房主的游戏端口", reply == "pong:hello", reply ?? "没有回应");
+        // 房间聊天：加入方经 EasyTier 转发连到房主的聊天服务，双方互发消息。
+        var chatUp = await WaitAsync(() => host.ChatReady && guest.ChatReady, 40);
+        Check("联机：双方进入房间聊天", chatUp, $"{host.ChatStatus} / {guest.ChatStatus}");
+        guest.ChatInput = "你好，房主";
+        await guest.SendChatCommand.ExecuteAsync(null);
+        host.ChatInput = "欢迎";
+        await host.SendChatCommand.ExecuteAsync(null);
+        var chatOk = await WaitAsync(() => host.ChatLines.Any(l => l.Text == "你好，房主" && !l.Mine) && guest.ChatLines.Any(l => l.Text == "欢迎" && !l.Mine), 15);
+        Check("联机：聊天消息双向送达", chatOk, string.Join(" | ", host.ChatLines.Select(l => l.Name + ":" + l.Text)));
+        Check("联机：进入房间通知", host.ChatLines.Any(l => l.Message.Kind == Amber.Core.Multiplayer.ChatKind.Join && !l.Mine));
+        main.CurrentPage = Page<HomeViewModel>();
+        guest.ChatInput = "看得到未读吗";
+        await guest.SendChatCommand.ExecuteAsync(null);
+        Check("联机：不在联机页时显示未读数", await WaitAsync(() => host.Badge > 0, 10), host.Badge.ToString());
+        main.CurrentPage = host;
+        Check("联机：回到联机页未读清零", host.Badge == 0);
+        await ShotAsync("联机聊天");
+        await WaitAsync(() => host.Peers.Count > 1, 10);
+        Check("联机：房主看到玩家", host.Peers.Any(p => p.Peer.Ip != Amber.Core.Multiplayer.EasyTierArgs.HostIp), host.Status);
+        main.CurrentPage = host;
+        await ShotAsync("联机房主有玩家");
+
+        guest.StopCommand.Execute(null);
+        host.StopCommand.Execute(null);
+        stopServer.Cancel();
+        server.Stop();
+        var left = System.Diagnostics.Process.GetProcessesByName("easytier-core")
+            .Count(p => { try { return p.MainModule?.FileName?.StartsWith(AppSettingsDataDir(), StringComparison.OrdinalIgnoreCase) == true; } catch { return false; } });
+        Check("联机：结束后 easytier-core 都关掉了", left == 0, $"剩 {left} 个");
+        host.TestListeners = null;
+        host.TestPeers = null;
+    }
+
+    private static string AppSettingsDataDir() => Amber.App.Services.AppSettings.DataDir;
 
     private async Task ToolsAsync()
     {

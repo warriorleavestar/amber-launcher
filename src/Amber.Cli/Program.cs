@@ -1,3 +1,4 @@
+using Amber.Core.Multiplayer;
 using Amber.Core.Auth;
 using Amber.Core.Content;
 using Amber.Core.Diagnostics;
@@ -27,6 +28,10 @@ Console.OutputEncoding = System.Text.Encoding.UTF8;
 //   export <版本名> <输出文件> [--format mrpack|curseforge] [--isolate]
 //   CurseForge：环境变量 AMBER_CF_KEY 提供 Key，AMBER_CF_ROOT 可以换接口地址
 //   launch <版本> <玩家名> [--mem 4096] [--isolate] [--dry-run]
+//   lan-setup                                下载并校验联机组件 EasyTier
+//   lan-host <本机游戏端口> [--peer url]... [--listen url]... [--seconds N]   开房间，打印房间码
+//   lan-join <房间码> [--peer url]... [--listen url]... [--seconds N]         加入房间，打印本机转发地址
+//   （--peer 不写时用 EasyTier 社区公共节点；联机组件放在 %APPDATA%\Amber\easytier）
 var argList = args.ToList();
 var root = TakeOption(argList, "--dir") ?? GameDirectory.DefaultRoot();
 var sources = TakeOption(argList, "--source") switch
@@ -199,6 +204,62 @@ try
             Console.WriteLine($"已导出 {argList[2]}（{new FileInfo(argList[2]).Length / 1024} KB）");
             break;
         }
+        case "lan-setup":
+        {
+            var et = new EasyTierInstaller(downloader, AmberDataDir());
+            await et.EnsureAsync(null, cts.Token);
+            Console.WriteLine($"EasyTier {EasyTierRelease.Version} 就绪：{et.CorePath}");
+            break;
+        }
+        case "lan-host" or "lan-join":
+        {
+            var host = argList[0] == "lan-host";
+            var peers = TakeAll(argList, "--peer");
+            var listen = TakeAll(argList, "--listen");
+            var seconds = int.Parse(TakeOption(argList, "--seconds") ?? "0");
+            RoomCode room;
+            int? local = null;
+            if (host)
+            {
+                room = RoomCode.Create(int.Parse(argList[1]));
+            }
+            else
+            {
+                if (!RoomCode.TryParse(argList[1], out room)) throw new ArgumentException("房间码格式不对");
+                local = EasyTierArgs.FreeTcpPort();
+            }
+            var et = new EasyTierInstaller(downloader, AmberDataDir());
+            if (!et.IsInstalled) throw new InvalidOperationException("先运行 lan-setup");
+            // --peer none：不连任何节点（本机测试时房主只开监听）。
+            List<string> effectivePeers = peers.Contains("none") ? [] : peers.Count > 0 ? peers : EasyTierRelease.DefaultPeers.ToList();
+            var options = new EasyTierOptions(room, host, effectivePeers, EasyTierArgs.FreeTcpPort(), local,
+                listen.Count > 0 ? listen : null, Guid.NewGuid().ToString());
+            using var session = EasyTierSession.Start(et, options, Path.Combine(AmberDataDir(), "easytier", "run-cli-" + options.RpcPort));
+            if (Environment.GetEnvironmentVariable("AMBER_ET_VERBOSE") == "1") session.Output += l => Console.WriteLine("  et| " + l);
+            Console.WriteLine($"RPC {options.RpcPort}");
+            Console.WriteLine($"CLI {et.CliPath}");
+            Console.WriteLine($"ARGS {string.Join(' ', EasyTierArgs.Build(options).Select(x => x == room.Secret ? "<secret>" : x))}");
+            Console.WriteLine(host ? $"ROOM {room}" : $"LOCAL 127.0.0.1:{local}");
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+            if (seconds > 0) stop.CancelAfter(TimeSpan.FromSeconds(seconds));
+            try
+            {
+                while (!session.HasExited)
+                {
+                    await Task.Delay(3000, stop.Token);
+                    var list = await session.PeersAsync(stop.Token);
+                    Console.WriteLine($"PEERS {list.Count}: " + string.Join("; ", list.Select(p => $"{p.Hostname} {p.Ip} {p.Cost} {p.LatencyMs}ms {p.Tunnel}")));
+                }
+                Console.WriteLine("easytier-core 退出了：");
+                foreach (var l in session.RecentOutput.TakeLast(20)) Console.WriteLine("  " + l);
+                return 3;
+            }
+            catch (OperationCanceledException) when (!cts.IsCancellationRequested)
+            {
+                Console.WriteLine("时间到，结束");
+            }
+            break;
+        }
         case "worlds":
         {
             foreach (var w in WorldManager.List(Path.Combine(argList[1], "saves")))
@@ -317,6 +378,15 @@ catch (Exception e)
 {
     Console.Error.WriteLine($"错误：{e.Message}");
     return 1;
+}
+
+static string AmberDataDir() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Amber");
+
+static List<string> TakeAll(List<string> list, string name)
+{
+    var result = new List<string>();
+    while (TakeOption(list, name) is { } value) result.Add(value);
+    return result;
 }
 
 static string? TakeOption(List<string> list, string name)

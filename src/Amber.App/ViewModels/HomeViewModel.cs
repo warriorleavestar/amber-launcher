@@ -232,6 +232,7 @@ public sealed partial class HomeViewModel : PageViewModel
                     if (_recentOutput.Count > KeptOutputLines) _recentOutput.Dequeue();
                     if (parser.Feed(line) is { } entry) _log.Add(entry);
                 }
+                _service.NotifyGameOutput(id, line);
             });
             IsRunning = true;
             Status = $"{id} 运行中（{memory} MB）";

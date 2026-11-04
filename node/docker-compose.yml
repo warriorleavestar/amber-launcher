@@ -1,0 +1,35 @@
+# Amber 联机节点（Docker 版）/ Amber relay node (Docker)
+# 用法 / usage:
+#   1. 把下面 NODE_SECRET 换成一串随机字符（只用来给节点一个身份）/ replace NODE_SECRET with a random string
+#   2. docker compose up -d
+#   3. 在云服务器安全组放行 TCP 和 UDP 11010 / open TCP and UDP 11010 in your security group
+#   4. 在 Amber 联机页添加节点 tcp://<你的公网 IP>:11010 / add tcp://<public IP>:11010 in Amber
+# 只转发 Amber 房间：relay-network-whitelist 是 amber-*；想转发所有 EasyTier 网络就改成 '*'。
+# Relays Amber rooms only (amber-*); change the whitelist to '*' to relay every EasyTier network.
+
+services:
+  amber-node:
+    image: easytier/easytier:v2.6.4
+    container_name: amber-node
+    restart: unless-stopped
+    ports:
+      - "11010:11010/tcp"
+      - "11010:11010/udp"
+    command:
+      - --network-name
+      - amber-node-change-me
+      - --network-secret
+      - NODE_SECRET
+      - --no-tun
+      - --listeners
+      - tcp://0.0.0.0:11010
+      - udp://0.0.0.0:11010
+      - --relay-network-whitelist
+      - amber-*
+      - --hostname
+      - amber-node
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

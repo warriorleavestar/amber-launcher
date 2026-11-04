@@ -21,6 +21,30 @@ public abstract class PageViewModel : ObservableObject
     public Geometry IconGeometry => _iconGeometry ??= Geometry.Parse(Icon);
 
     private bool _activated;
+    private int _badge;
+    private bool _isCurrent;
+
+    /// <summary>导航栏上的未读数，0 不显示。</summary>
+    public int Badge
+    {
+        get => _badge;
+        set
+        {
+            if (SetProperty(ref _badge, value)) OnPropertyChanged(nameof(HasBadge));
+        }
+    }
+
+    public bool HasBadge => Badge > 0;
+
+    /// <summary>是不是当前显示的页面。</summary>
+    public bool IsCurrent
+    {
+        get => _isCurrent;
+        set
+        {
+            if (SetProperty(ref _isCurrent, value) && value) Badge = 0;
+        }
+    }
 
     /// <summary>页面第一次显示时调用一次。启动时不联网、不扫描，都放在这里。</summary>
     public void Activate()
@@ -60,7 +84,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     public string VersionText { get; } = $"v{UpdateChecker.CurrentVersion} · 无云控 · 无遥测";
 
-    partial void OnCurrentPageChanged(PageViewModel value) => value.Activate();
+    partial void OnCurrentPageChanged(PageViewModel? oldValue, PageViewModel newValue)
+    {
+        if (oldValue is not null) oldValue.IsCurrent = false;
+        newValue.IsCurrent = true;
+        newValue.Activate();
+    }
 
     public MainViewModel(LauncherService service)
     {
@@ -68,6 +97,7 @@ public sealed partial class MainViewModel : ObservableObject
         var home = new HomeViewModel(service, log);
         var instance = new InstanceViewModel(service) { NavigateHome = null };
         var content = new ContentViewModel(service);
+        var multiplayer = new MultiplayerViewModel(service);
         Pages =
         [
             home,
@@ -75,11 +105,13 @@ public sealed partial class MainViewModel : ObservableObject
             instance,
             new DownloadViewModel(service),
             content,
+            multiplayer,
             new ToolsViewModel(service),
             new SettingsViewModel(service),
             log,
         ];
         instance.NavigateHome = () => CurrentPage = home;
+        multiplayer.NavigateHome = () => CurrentPage = home;
         instance.NavigateToDatapacks = (id, world) =>
         {
             CurrentPage = content;

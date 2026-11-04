@@ -1,3 +1,4 @@
+using Amber.Core.Multiplayer;
 using Amber.Core.Auth;
 using Amber.Core.Content;
 using Amber.Core.Game;
@@ -37,6 +38,15 @@ public sealed class LauncherService : IDisposable
 
     /// <summary>别的页面请求用某种方式启动（进服务器、进存档）。</summary>
     public event Action<LaunchRequest>? LaunchRequested;
+
+    /// <summary>运行中游戏的输出（版本 id，原始行），在游戏输出线程上触发。联机页用它认出“对局域网开放”的端口。</summary>
+    public event Action<string, string>? GameOutput;
+
+    /// <summary>联机组件放在数据目录下，和游戏目录无关。</summary>
+    public EasyTierInstaller EasyTier => new(Downloader, AppSettings.DataDir);
+
+    public IReadOnlyList<string> MultiplayerPeers =>
+        Settings.MultiplayerPeers is { Count: > 0 } peers ? peers : EasyTierRelease.DefaultPeers;
 
     public LauncherService(AppSettings settings)
     {
@@ -90,6 +100,7 @@ public sealed class LauncherService : IDisposable
     public void NotifyContentChanged() => ContentChanged?.Invoke();
     public void NotifyInstalledChanged() => InstalledVersionsChanged?.Invoke();
     public void RequestLaunch(LaunchRequest request) => LaunchRequested?.Invoke(request);
+    public void NotifyGameOutput(string versionId, string line) => GameOutput?.Invoke(versionId, line);
 
     public List<string> InstalledVersions() => Directory.ListInstalled().OrderDescending().ToList();
 
@@ -109,7 +120,14 @@ public sealed class LauncherService : IDisposable
         settings.Save(Directory, id);
     }
 
-    public void Dispose() => _http.Dispose();
+    /// <summary>进行中的联机会话，退出时一起结束。</summary>
+    public IDisposable? ActiveMultiplayer { get; set; }
+
+    public void Dispose()
+    {
+        ActiveMultiplayer?.Dispose();
+        _http.Dispose();
+    }
 }
 
 public sealed record LaunchRequest(string VersionId, string? JoinServer = null, string? JoinWorld = null);

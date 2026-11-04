@@ -1,0 +1,276 @@
+using Amber.Core.Multiplayer;
+
+namespace Amber.Core.Tests;
+
+public class MultiplayerTests
+{
+    [Fact]
+    public void RoomCode_RoundTrip()
+    {
+        var room = RoomCode.Create(51234);
+        Assert.Matches(@"^AMB-[0-9A-HJKMNP-TV-Z]{8}-[0-9A-HJKMNP-TV-Z]{12}-51234$", room.ToString());
+        Assert.True(RoomCode.TryParse(room.ToString(), out var parsed));
+        Assert.Equal(room, parsed);
+        Assert.StartsWith("amber-", parsed.NetworkName);
+        Assert.NotEqual(room, RoomCode.Create(51234));
+    }
+
+    [Theory]
+    [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565")]
+    [InlineData("  amb-k7q2m9xd-4hzp8rw2n6tc-25565  ")]
+    [InlineData("房间码：AMB-K7Q2M9XD-4HZP8RW2N6TC-25565，快来")]
+    [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565\r\n")]
+    public void RoomCode_ParsesPastedText(string text)
+    {
+        Assert.True(RoomCode.TryParse(text, out var room));
+        Assert.Equal(("K7Q2M9XD", "4HZP8RW2N6TC", 25565), (room.Network, room.Secret, room.Port));
+    }
+
+    [Fact]
+    public void RoomCode_ConfusableLettersMapToDigits()
+    {
+        Assert.True(RoomCode.TryParse("AMB-K7Q2M9XD-4HZP8RW2NOTL-25565", out var room));
+        Assert.Equal("4HZP8RW2N0T1", room.Secret);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("K7Q2M9XD-4HZP8RW2N6TC-25565")]
+    [InlineData("AMB-K7Q2M9X-4HZP8RW2N6TC-25565")]
+    [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-0")]
+    [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-70000")]
+    [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6T!-25565")]
+    [InlineData("AMB-K7Q2M9XU-4HZP8RW2N6TC-25565")]
+    public void RoomCode_RejectsBadInput(string text) => Assert.False(RoomCode.TryParse(text, out _));
+
+    [Theory]
+    [InlineData("[12:00:01] [Server thread/INFO]: Started serving on 51234", 51234)]
+    [InlineData("[CHAT] Local game hosted on port 25566", 25566)]
+    [InlineData("[CHAT] 本地游戏已在端口 61000 上开启", 61000)]
+    [InlineData("[Render thread/INFO]: Sound engine started", null)]
+    [InlineData("Started serving on 99999", null)]
+    public void PortFromLog(string line, int? port) => Assert.Equal(port, LanGames.PortFromLog(line));
+
+    [Fact]
+    public void LanAnnouncement_FormatAndParse()
+    {
+        var text = LanGames.Format("Tester - 新的世界", 51234);
+        Assert.Equal(new LanGame("Tester - 新的世界", 51234), LanGames.Parse(text));
+        Assert.Equal(new LanGame("x", 25565), LanGames.Parse("[MOTD]x[/MOTD][AD]192.168.1.2:25565[/AD]"));
+        Assert.Null(LanGames.Parse("[MOTD]x[/MOTD]"));
+    }
+
+    [Fact]
+    public void Args_Host()
+    {
+        var room = new RoomCode("K7Q2M9XD", "4HZP8RW2N6TC", 51234);
+        var args = EasyTierArgs.Build(new EasyTierOptions(room, true, ["tcp://public.easytier.top:11010", " "], 15999));
+        var text = string.Join(' ', args);
+        Assert.Contains("--network-name amber-k7q2m9xd --network-secret 4HZP8RW2N6TC", text);
+        Assert.Contains("--ipv4 10.233.144.1", text);
+        Assert.Contains("--no-tun", args);
+        Assert.Contains("--rpc-portal 127.0.0.1:15999", text);
+        Assert.Contains("--no-listener", text);
+        Assert.Single(args, "--peers");
+        Assert.DoesNotContain("--port-forward", args);
+    }
+
+    [Fact]
+    public void Args_GuestForwardsLocalPortToHost()
+    {
+        var room = new RoomCode("K7Q2M9XD", "4HZP8RW2N6TC", 51234);
+        var args = EasyTierArgs.Build(new EasyTierOptions(room, false, [], 16000, 40000, ["tcp://127.0.0.1:41000"], "guest-1"));
+        var forward = args[args.IndexOf("--port-forward") + 1];
+        Assert.Equal("tcp://127.0.0.1:40000/10.233.144.1:51234", forward);
+        Assert.Equal("tcp://127.0.0.1:41000", args[args.IndexOf("--listeners") + 1]);
+        Assert.DoesNotContain("--no-listener", args);
+        var ip = args[args.IndexOf("--ipv4") + 1];
+        Assert.StartsWith(EasyTierArgs.Subnet, ip);
+        Assert.NotEqual(EasyTierArgs.HostIp, ip);
+        Assert.Equal(ip, EasyTierArgs.Build(new EasyTierOptions(room, false, [], 1, 2, null, "guest-1"))[5]);
+        Assert.Throws<ArgumentException>(() => EasyTierArgs.Build(new EasyTierOptions(room, false, [], 1)));
+    }
+
+    /// <summary>easytier-cli 2.6.4 -o json peer 的真实输出（本机两个实例直连时）。</summary>
+    [Fact]
+    public void ParsePeers_RealOutput()
+    {
+        const string json = """
+            [{"cidr":"10.233.144.231/24","ipv4":"10.233.144.231","hostname":"amber-guest","cost":"Local","lat_ms":"-","loss_rate":"-","rx_bytes":"-","tx_bytes":"-","tunnel_proto":"-","nat_type":"Unknown","id":"747661651","version":"2.6.4-8428a89d"},
+             {"cidr":"10.233.144.1/24","ipv4":"10.233.144.1","hostname":"amber-host","cost":"p2p","lat_ms":"0.27","loss_rate":"0.0%","rx_bytes":"940 B","tx_bytes":"1.17 kB","tunnel_proto":"tcp","nat_type":"Unknown","id":"1016038928","version":"2.6.4-8428a89d"}]
+            """;
+        var peers = EasyTierSession.ParsePeers(json);
+        Assert.Equal(2, peers.Count);
+        Assert.Equal(new PeerInfo("amber-guest", "10.233.144.231", "Local", null, "-"), peers[0]);
+        Assert.Equal(new PeerInfo("amber-host", "10.233.144.1", "p2p", 0.27, "tcp"), peers[1]);
+        Assert.Empty(EasyTierSession.ParsePeers("not json"));
+    }
+
+    [Fact]
+    public void Args_LoopbackPeerDisablesDeviceBinding()
+    {
+        var room = new RoomCode("K7Q2M9XD", "4HZP8RW2N6TC", 51234);
+        var local = EasyTierArgs.Build(new EasyTierOptions(room, false, ["tcp://127.0.0.1:5000"], 1, 2));
+        Assert.Equal("false", local[local.IndexOf("--bind-device") + 1]);
+        Assert.DoesNotContain("--bind-device", EasyTierArgs.Build(new EasyTierOptions(room, false, ["tcp://node.example.com:11010"], 1, 2)));
+    }
+
+    [Fact]
+    public void Args_TunModeHasNoForwardAndNamedAdapter()
+    {
+        var room = new RoomCode("K7Q2M9XD", "4HZP8RW2N6TC", 51234);
+        var guest = EasyTierArgs.Build(new EasyTierOptions(room, false, [], 1, null, null, "g", Tun: true));
+        Assert.DoesNotContain("--no-tun", guest);
+        Assert.DoesNotContain("--port-forward", guest);
+        Assert.Equal("Amber LAN", guest[guest.IndexOf("--dev-name") + 1]);
+    }
+}
+
+/// <summary>完整局域网模式的守护脚本：不提权运行，用 ping 代替 easytier-core，验证停止标记和父进程退出两种结束方式。</summary>
+public class ElevatedGuardTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "amber-guard-" + Guid.NewGuid().ToString("N"));
+
+    public ElevatedGuardTests() => Directory.CreateDirectory(_dir);
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, true); } catch (IOException) { }
+    }
+
+    private (System.Diagnostics.Process Guard, string Stop, string Exited) StartGuard(int parentId)
+    {
+        var script = Path.Combine(_dir, "guard.ps1");
+        File.WriteAllText(script, EasyTierElevatedSession.GuardScript, new System.Text.UTF8Encoding(true));
+        var args = Path.Combine(_dir, "args.json");
+        File.WriteAllText(args, """["-n","60","127.0.0.1"]""");
+        var stop = Path.Combine(_dir, "stop");
+        var exited = Path.Combine(_dir, "exited");
+        var info = new System.Diagnostics.ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var a in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Core", Path.Combine(Environment.SystemDirectory, "PING.EXE"),
+                     "-ArgsFile", args, "-ParentId", parentId.ToString(), "-StopFile", stop, "-ExitedFile", exited, "-LogFile", Path.Combine(_dir, "log.txt") })
+            info.ArgumentList.Add(a);
+        return (System.Diagnostics.Process.Start(info)!, stop, exited);
+    }
+
+    [Fact]
+    public async Task StopFileEndsCore()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var (guard, stop, exited) = StartGuard(Environment.ProcessId);
+        for (var i = 0; i < 50 && !File.Exists(Path.Combine(_dir, "log.txt")); i++) await Task.Delay(100);
+        await Task.Delay(1500);
+        Assert.False(File.Exists(exited));
+        File.WriteAllText(stop, "stop");
+        Assert.True(guard.WaitForExit(15000));
+        Assert.True(File.Exists(exited));
+        Assert.Contains("127.0.0.1", File.ReadAllText(Path.Combine(_dir, "log.txt")));
+    }
+
+    [Fact]
+    public async Task ParentExitEndsCore()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var parent = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell.exe", "-NoProfile -Command Start-Sleep 4") { CreateNoWindow = true, UseShellExecute = false })!;
+        var (guard, _, exited) = StartGuard(parent.Id);
+        await Task.Delay(1000);
+        Assert.False(File.Exists(exited));
+        Assert.True(guard.WaitForExit(20000));
+        Assert.True(File.Exists(exited));
+    }
+}
+
+public class RelayNodeTests
+{
+    [Theory]
+    [InlineData("tcp://public.easytier.top:11010", true)]
+    [InlineData("udp://1.2.3.4:11010", true)]
+    [InlineData("wss://node.example.com:443", true)]
+    [InlineData("tcp://public.easytier.top", false)]
+    [InlineData("http://example.com:80", false)]
+    [InlineData("public.easytier.top:11010", false)]
+    public void Validate(string url, bool ok) => Assert.Equal(ok, RelayNodes.IsValid(url));
+
+    [Fact]
+    public void ShareCode_RoundTrip()
+    {
+        var code = RelayNodes.Encode("小明的节点", ["tcp://a.example.com:11010", "udp://a.example.com:11010", "bad", "tcp://a.example.com:11010"]);
+        Assert.StartsWith("AMBNODE-", code);
+        Assert.DoesNotContain('=', code);
+        Assert.True(RelayNodes.TryDecode("节点在这：" + code + "  拿去用", out var name, out var urls));
+        Assert.Equal("小明的节点", name);
+        Assert.Equal(["tcp://a.example.com:11010", "udp://a.example.com:11010"], urls);
+    }
+
+    /// <summary>node/install.sh 和 node/install-windows.ps1 打印的分享码（两边输出逐字节相同）。</summary>
+    [Theory]
+    [InlineData("AMBNODE-eyJ2IjoxLCJuYW1lIjoi5bCP5piOIFwi5rWL6K-VXCIgXFwg6IqC54K5IiwicGVlcnMiOlsidGNwOi8vMjAzLjAuMTEzLjU6MTEwMTAiLCJ1ZHA6Ly8yMDMuMC4xMTMuNToxMTAxMCJdfQ", @"小明 ""测试"" \ 节点")]
+    [InlineData("AMBNODE-eyJ2IjoxLCJwZWVycyI6WyJ0Y3A6Ly8yMDMuMC4xMTMuNToxMTAxMCIsInVkcDovLzIwMy4wLjExMy41OjExMDEwIl19", null)]
+    public void ShareCode_FromNodeScripts(string code, string? expectedName)
+    {
+        Assert.True(RelayNodes.TryDecode(code, out var name, out var urls));
+        Assert.Equal(expectedName, name);
+        Assert.Equal(["tcp://203.0.113.5:11010", "udp://203.0.113.5:11010"], urls);
+    }
+
+    [Fact]
+    public void ShareCode_AcceptsPlainAddresses()
+    {
+        Assert.True(RelayNodes.TryDecode("tcp://x.example:11010\nudp://x.example:11010, nonsense", out var name, out var urls));
+        Assert.Null(name);
+        Assert.Equal(2, urls.Count);
+        Assert.False(RelayNodes.TryDecode("AMBNODE-!!!", out _, out _));
+        Assert.Throws<ArgumentException>(() => RelayNodes.Encode(null, ["nope"]));
+    }
+
+    [Fact]
+    public async Task Probe_LocalListenerAndUdp()
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        var (ms, error) = await RelayNodes.ProbeAsync($"tcp://127.0.0.1:{port}");
+        Assert.NotNull(ms);
+        Assert.Null(error);
+        listener.Stop();
+        var (_, closed) = await RelayNodes.ProbeAsync($"tcp://127.0.0.1:{port}");
+        Assert.NotNull(closed);
+        var (udpMs, udp) = await RelayNodes.ProbeAsync("udp://127.0.0.1:11010");
+        Assert.Null(udpMs);
+        Assert.Contains("UDP", udp);
+    }
+}
+
+public class ExitNodeArgsTests
+{
+    private static readonly RoomCode Room = new("K7Q2M9XD", "4HZP8RW2N6TC", 51234);
+
+    [Fact]
+    public void OffByDefault()
+    {
+        var args = EasyTierArgs.Build(new EasyTierOptions(Room, true, [], 1, Tun: true));
+        Assert.DoesNotContain("--enable-exit-node", args);
+        Assert.DoesNotContain("--exit-nodes", args);
+    }
+
+    [Fact]
+    public void AllowAndUse()
+    {
+        Assert.Contains("--enable-exit-node", EasyTierArgs.Build(new EasyTierOptions(Room, true, [], 1, Tun: true, AllowExit: true)));
+        var guest = EasyTierArgs.Build(new EasyTierOptions(Room, false, [], 1, Tun: true, ExitNode: "10.233.144.1"));
+        Assert.Equal("10.233.144.1", guest[guest.IndexOf("--exit-nodes") + 1]);
+    }
+
+    [Theory]
+    [InlineData("10.233.144.1", false)]
+    [InlineData("8.8.8.8", true)]
+    [InlineData("not-an-ip", true)]
+    public void UsingExitNeedsTunAndRoomMember(string exit, bool tun)
+    {
+        Assert.Throws<ArgumentException>(() => EasyTierArgs.Build(new EasyTierOptions(Room, false, [], 1, 2, Tun: tun, ExitNode: exit)));
+    }
+}

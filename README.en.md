@@ -52,6 +52,14 @@ Amber needs 64-bit Windows 10 or later. You don't need to set up Java either: Am
 - Find the likely cause of a crash, list suspect mods and export an error report
 - Toolbox: clean up game junk, download files, install Java ahead of time
 
+### Multiplayer
+
+- Play together without being on the same LAN: the host opens the world to LAN, creates a room and shares the room code; friends paste the code to join
+- Built on the open-source networking tool [EasyTier](https://github.com/EasyTier/EasyTier), downloaded from its GitHub releases and verified on first use; the default mode needs no admin rights and installs no driver
+- Room chat: peer-to-peer, no server in between, with messages additionally encrypted with the room secret
+- Optional full-LAN mode: everyone gets a virtual IP so other LAN games and apps work too (needs admin rights); members can also route their internet traffic through one member's PC (exit node, opt-in on both sides)
+- You add the relay nodes yourself: the [node folder](node/README.md) has one-step scripts for Linux, Docker and Windows, and a share code to send to friends
+
 ### Downloads
 
 - Parallel chunked downloads, resume and SHA1 verification
@@ -71,6 +79,7 @@ Amber needs 64-bit Windows 10 or later. You don't need to set up Java either: Am
 - **No remote control:** no remote switch or cloud config can change what Amber does. The time zone is only used to pick the default download source.
 - **Updates are up to you:** Amber doesn't check for updates unless you set an update URL, and even then it only tells you. It never downloads or replaces anything by itself.
 - **Network access only for what you're doing:** signing in, fetching version lists, downloading and searching. The services involved are Microsoft and Xbox sign-in, any skin site you add, Mojang's game file servers, your chosen download source, loader download sites (OptiFine via BMCLAPI, authlib-injector via its official site or BMCLAPI), Modrinth and CurseForge.
+- **Multiplayer only connects to nodes you added:** only while you host or join a room on the Multiplayer page, Amber connects to the relay nodes you added there and to the other players in the room. Amber ships no nodes and fetches no node list; room codes are generated randomly on your computer and never pass through an Amber server (Amber has none). The EasyTier component is downloaded from the releases page of `github.com/EasyTier/EasyTier`.
 
 The code is open source, so you can check all of this yourself.
 
@@ -131,11 +140,13 @@ Switch the download source on the Settings page and try the official source or t
 Only Windows builds are available for now.
 
 **What isn't supported yet?**
-Multiplayer tunnelling, and Forge 1.5.2 and earlier.
+Forge 1.5.2 and earlier.
 
 ## License
 
 [MIT](LICENSE)
+
+The multiplayer feature uses EasyTier, a separate open-source project (LGPL-3.0). Amber does not bundle it; it is downloaded separately the first time you use multiplayer.
 
 ---
 

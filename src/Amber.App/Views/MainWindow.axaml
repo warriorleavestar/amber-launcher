@@ -16,6 +16,7 @@
     <DataTemplate DataType="vm:InstanceViewModel"><views:InstancePage /></DataTemplate>
     <DataTemplate DataType="vm:DownloadViewModel"><views:DownloadPage /></DataTemplate>
     <DataTemplate DataType="vm:ContentViewModel"><views:ContentPage /></DataTemplate>
+    <DataTemplate DataType="vm:MultiplayerViewModel"><views:MultiplayerPage /></DataTemplate>
     <DataTemplate DataType="vm:ToolsViewModel"><views:ToolsPage /></DataTemplate>
     <DataTemplate DataType="vm:LogViewModel"><views:LogPage /></DataTemplate>
 
@@ -132,6 +133,9 @@
               <StackPanel Orientation="Horizontal" Spacing="12">
                 <PathIcon Data="{Binding IconGeometry}" Width="16" Height="16" Foreground="{DynamicResource AmberAccent}" />
                 <TextBlock Text="{Binding Title}" Foreground="#EDE6DC" FontSize="14" VerticalAlignment="Center" />
+                <Border IsVisible="{Binding HasBadge}" Background="{DynamicResource AmberAccent}" CornerRadius="8" MinWidth="18" Height="18" Padding="5,0" VerticalAlignment="Center">
+                  <TextBlock Text="{Binding Badge}" Foreground="#1C1A18" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
               </StackPanel>
             </DataTemplate>
           </ListBox.ItemTemplate>
