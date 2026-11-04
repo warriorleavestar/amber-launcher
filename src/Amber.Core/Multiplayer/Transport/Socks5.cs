@@ -40,7 +40,7 @@ public static class Socks5
         var (host, port) = await ReadAddressAsync(client, request[3], ct);
         if (!allowPort(port))
         {
-            log?.Invoke($"[转发] 拒绝连接 {host}:{port}（发邮件的端口不能经别人转发）");
+            log?.Invoke("[转发] 拒绝了一个连接：发邮件的端口不能经别人转发");
             await ReplyAsync(client, 2, ct);
             return;
         }
@@ -57,7 +57,7 @@ public static class Socks5
         var targets = addresses.Where(allow).ToArray();
         if (targets.Length == 0)
         {
-            log?.Invoke($"[转发] 拒绝连接 {host}:{port}（本机、局域网或保留地址）");
+            log?.Invoke("[转发] 拒绝了一个连接：目标是你的电脑、局域网或保留地址");
             await ReplyAsync(client, 2, ct);   // 规则不允许
             return;
         }
@@ -73,8 +73,9 @@ public static class Socks5
         }
         Pump.Tune(remote);
         await ReplyAsync(client, 0, ct);
-        log?.Invoke($"[转发] {host}:{port}");
-        await Pump.RunAsync(client, remote.GetStream(), ct);
+        // 只记有连接经过，不记别人连去了哪里（导出诊断报告时也不会带出成员的访问记录）。
+        log?.Invoke("[转发] 转发了一个连接");
+        await Pump.RunAsync(client, remote.GetStream(), ct, () => Pump.Abort(remote));
     }
 
     /// <summary>加入方：在流上发 CONNECT host:port，成功后这个流就是到目标的连接。</summary>

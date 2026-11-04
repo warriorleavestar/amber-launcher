@@ -334,7 +334,7 @@ try
                 room = invite.Room;
             }
             var log = new DiagnosticLog();
-            log.Added += e => { if (debug || e.Category is not "EasyTier") Console.WriteLine("  log| " + NetDiagnostics.Redact(e.ToString(), [room.Secret], true)); };
+            log.Added += e => { if (debug || e.Category is not "EasyTier") Console.WriteLine("  log| " + NetDiagnostics.Redact(e.ToString(), [.. room.Secrets], true)); };
             var options = new DirectOptions(stunList.Count > 0 ? stunList : Stun.DefaultServers, !sim, nodes, false, false, debug, sim);
             await using var direct = new DirectSession(et, Path.Combine(AmberDataDir(), "easytier"), room, isHost, options, log);
             var code = await direct.PrepareAsync(cts.Token);
@@ -392,8 +392,12 @@ try
             // 封装模式：--transport 0..3（通用 / MC 专用 / 高加密 / 极端加密），--disguise 伪装成 MC。
             var transportMode = TakeOption(argList, "--transport") is { } tm ? (Amber.Core.Multiplayer.Transport.TransportMode)int.Parse(tm) : Amber.Core.Multiplayer.Transport.TransportMode.General;
             var disguise = argList.Remove("--disguise");
+            if (transportMode == Amber.Core.Multiplayer.Transport.TransportMode.Extreme && !Amber.Core.Multiplayer.Transport.NoiseHandshake.HybridSupported)
+                throw new PlatformNotSupportedException("极端加密需要系统支持 ML-KEM（较新的 Windows 11），这台电脑不支持");
             var allowProxy = argList.Remove("--allow-proxy");
             var proxyExit = TakeOption(argList, "--proxy-exit");
+            // 测试用：--extra-forward 本机端口:房主端口，模拟有人自己加转发去连房主的别的端口（应该被白名单挡住）。
+            var extraForward = TakeOption(argList, "--extra-forward") is { } ef ? (int.Parse(ef.Split(':')[0]), int.Parse(ef.Split(':')[1])) : ((int, int)?)null;
             // --echo：房主在游戏端口上开一个回显服务代替游戏；--probe N：加入方连上后测 N 次往返延迟和一次吞吐。
             var echo = argList.Remove("--echo");
             var probe = int.Parse(TakeOption(argList, "--probe") ?? "0");
@@ -406,6 +410,8 @@ try
             else
             {
                 if (!RoomCode.TryParse(argList[1], out room)) throw new ArgumentException("房间码格式不对");
+                if (room.Tunnel.Mode == Amber.Core.Multiplayer.Transport.TransportMode.Extreme && !Amber.Core.Multiplayer.Transport.NoiseHandshake.HybridSupported)
+                    throw new PlatformNotSupportedException("这个房间用的是极端加密，需要系统支持 ML-KEM，这台电脑不支持");
                 local = EasyTierArgs.FreeTcpPort();
             }
             var et = new EasyTierInstaller(downloader, AmberDataDir());
@@ -421,6 +427,7 @@ try
                 LocalSocksPort = proxyExit is null ? null : EasyTierArgs.FreeTcpPort(),
                 LocalExitPort = proxyExit is null ? null : EasyTierArgs.FreeTcpPort(),
             };
+            if (extraForward is { } xf) options = options with { ExtraForwards = [xf] };
             using var echoServer = host && echo ? EchoServer.Start(room.Port) : null;
             using var session = EasyTierSession.Start(et, options, Path.Combine(AmberDataDir(), "easytier", "run-cli-" + options.RpcPort));
             await using var transport = Amber.Core.Multiplayer.Transport.RoomTransport.Start(options, l => Console.WriteLine("  tunnel| " + l));
@@ -428,7 +435,7 @@ try
             if (Environment.GetEnvironmentVariable("AMBER_ET_VERBOSE") == "1") session.Output += l => Console.WriteLine("  et| " + l);
             Console.WriteLine($"RPC {options.RpcPort}");
             Console.WriteLine($"CLI {et.CliPath}");
-            Console.WriteLine($"ARGS {string.Join(' ', EasyTierArgs.Build(options).Select(x => x == room.Secret ? "<secret>" : x))}");
+            Console.WriteLine($"ARGS {string.Join(' ', EasyTierArgs.Build(options).Select(x => room.Secrets.Contains(x) ? "<secret>" : x))}");
             Console.WriteLine(host ? $"ROOM {room}" : $"LOCAL 127.0.0.1:{local}");
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
             if (seconds > 0) stop.CancelAfter(TimeSpan.FromSeconds(seconds));

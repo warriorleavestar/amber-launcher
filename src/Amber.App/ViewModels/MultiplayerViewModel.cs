@@ -130,12 +130,13 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         public override string ToString() => Label;
     }
 
+    /// <summary>极端加密要系统支持 ML-KEM（较新的 Windows 11）；不支持时不列出来。</summary>
     public IReadOnlyList<TransportChoice> TransportChoices { get; } =
     [
         new(TransportMode.General, "通用"),
         new(TransportMode.Minecraft, "MC 专用"),
         new(TransportMode.High, "高加密"),
-        new(TransportMode.Extreme, "极端加密"),
+        .. NoiseHandshake.HybridSupported ? [new TransportChoice(TransportMode.Extreme, "极端加密")] : Array.Empty<TransportChoice>(),
     ];
 
     /// <summary>开房间时用的封装方式；加入时跟着房间码走。</summary>
@@ -156,8 +157,11 @@ public sealed partial class MultiplayerViewModel : PageViewModel
 
     public bool UsingGameProxy => GameProxyIp.Length > 0;
     public string GameProxyBanner => UsingGameProxy
-        ? $"从 Amber 启动的游戏经 {GameProxyIp} 的电脑和网络连服务器、登录（只影响游戏，别的程序照常）。启动页填了“进入服务器”时那个服务器也经它连；在游戏里的服务器列表里点别的服务器是直接连的。"
+        ? $"从 Amber 启动的游戏经 {GameProxyIp} 的电脑和网络登录、连服务器（只影响游戏，别的程序照常）。启动页填了“进入服务器”时那个服务器也经它连；在游戏里的服务器列表里点别的服务器是直接连的。域名查询仍走你自己的网络。"
         : "";
+
+    /// <summary>允许别人经自己转发、但查不到自己公网 IP 时的提示（这时不转发）。</summary>
+    [ObservableProperty] public partial string ExitWarning { get; set; } = "";
 
     /// <summary>这个房间实际用的封装方式（显示用）。</summary>
     [ObservableProperty] public partial string TransportText { get; set; } = "";
@@ -454,6 +458,11 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (!RoomCode.TryParse(JoinCode, out var room))
         {
             Status = "房间码格式不对，应该像 AMB-XXXXXXXX-XXXXXXXXXXXX-25565";
+            return;
+        }
+        if (room.Tunnel.Mode == TransportMode.Extreme && !NoiseHandshake.HybridSupported)
+        {
+            Status = "这个房间用的是极端加密，需要系统支持 ML-KEM（较新的 Windows 11），这台电脑不支持。请房主换成“高加密”。";
             return;
         }
         if ((TestPeers ?? _service.MultiplayerPeers).Count == 0)
@@ -771,6 +780,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _refreshing = true;
         try
         {
+            ExitWarning = _transport?.ExitProblem ?? "";
             var peers = await session.PeersAsync();
             TickDirect(peers);
             if (UsingExit) OnPropertyChanged(nameof(ExitBanner));

@@ -6,7 +6,11 @@ namespace Amber.Core.Multiplayer.Transport;
 public sealed record GameProxy(int SocksPort, string ExitIp, Func<CancellationToken, Task<Stream>> Open)
 {
     /// <summary>给游戏的 Java 加的参数：游戏里的 HTTP（登录、皮肤、会话校验）走本机的 SOCKS5 转发。</summary>
+    /// <remarks>Java 会先在本机解析域名再经代理连（实测 SOCKS5 请求里是 IP），所以域名查询走的是你自己的网络，连接本身才经出口。</remarks>
     public IReadOnlyList<string> JvmArgs => [$"-DsocksProxyHost=127.0.0.1", $"-DsocksProxyPort={SocksPort}"];
+
+    /// <summary>Minecraft 自己的代理参数：登录和会话校验用的 HTTP 请求明确走这个代理。</summary>
+    public IReadOnlyList<string> GameArgs => ["--proxyHost", "127.0.0.1", "--proxyPort", SocksPort.ToString(System.Globalization.CultureInfo.InvariantCulture)];
 
     /// <summary>
     /// 为要进的服务器开一个本机转发端口：游戏连 127.0.0.1:端口，Amber 经出口连到真正的服务器（并把握手包里的地址改回去）。
@@ -33,6 +37,9 @@ public sealed class RoomTransport : IAsyncDisposable
     public TunnelClient? Chat { get; private set; }
     public TunnelClient? Socks { get; private set; }
     public GameProxy? Proxy { get; private set; }
+
+    /// <summary>允许别人经自己转发、却查不到自己公网 IP 时的说明（这时不转发）。</summary>
+    public string? ExitProblem => _exitPolicy?.Failure;
 
     private RoomTransport(Action<string>? log) => _log = log;
 
@@ -62,7 +69,7 @@ public sealed class RoomTransport : IAsyncDisposable
         {
             // 别人借我上网：不许连我自己的电脑、路由器和家里的设备。公网 IPv4 用 STUN 在后台查一次。
             _exitPolicy = new ExitPolicy();
-            _ = _exitPolicy.DiscoverPublicAddressAsync();
+            _exitPolicy.Start(log: _log);
         }
         if (o.IsHost && settings.Wraps || o.AllowProxy)
         {
@@ -70,7 +77,12 @@ public sealed class RoomTransport : IAsyncDisposable
             {
                 TunnelService.Game when o.IsHost && settings.Wraps => TunnelServer.ToLocalPort(room.Port),
                 TunnelService.Chat when o.IsHost && settings.Wraps => TunnelServer.ToLocalPort(RoomChat.Port),
-                TunnelService.Socks when o.AllowProxy => (stream, ct) => Socks5.ServeAsync(stream, ct, _log, _exitPolicy!.Allows),
+                TunnelService.Socks when o.AllowProxy => async (stream, ct) =>
+                {
+                    // 还没查到自己的公网 IP 时先等一会；查不到就一律拒绝（Allows 在没就绪时返回 false）。
+                    await _exitPolicy!.WaitReadyAsync(TimeSpan.FromSeconds(8), ct);
+                    await Socks5.ServeAsync(stream, ct, _log, _exitPolicy.Allows);
+                },
                 _ => null,
             }, _log, listen));
         }

@@ -44,7 +44,7 @@ public sealed partial class MultiplayerViewModel
         _diag.Added += entry => Dispatcher.UIThread.Post(() =>
         {
             if (!DebugMode && entry.Category == "EasyTier") return;
-            DebugLines.Add(NetDiagnostics.Redact(entry.ToString(), _room is { } r ? [r.Secret] : [], includePublicIps: true));
+            DebugLines.Add(NetDiagnostics.Redact(entry.ToString(), _room is { } r ? [.. r.Secrets] : [], includePublicIps: true));
             while (DebugLines.Count > 400) DebugLines.RemoveAt(0);
         });
     }
@@ -313,7 +313,7 @@ public sealed partial class MultiplayerViewModel
     public void ExportDiagnostics(string path)
     {
         var table = _lastMatrix.Count > 0 ? TestMatrix.FormatTable(_lastMatrix) : MatrixLines.Count > 0 ? MatrixLines.ToList() : null;
-        var secrets = _room is { } r ? new[] { r.Secret } : [];
+        var secrets = _room is { } r ? r.Secrets : [];
         var extra = new List<DiagnosticEntry>();
         if (_session is { } s) extra.AddRange(s.RecentOutput.Select(l => new DiagnosticEntry(DateTime.Now, "EasyTier 最近输出", l)));
         var report = NetDiagnostics.BuildReport(Amber.Core.Launch.UpdateChecker.CurrentVersion, _diag.Snapshot().Concat(extra), table, secrets, IncludePublicIps);

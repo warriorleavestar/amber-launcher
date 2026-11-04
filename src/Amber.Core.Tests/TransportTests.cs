@@ -535,6 +535,7 @@ public class ExitPolicyTests
     {
         // 这台电脑真实网卡上的每个地址都必须被拒绝。
         using var policy = new ExitPolicy();
+        policy.SetReady(true);
         foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
             foreach (var u in nic.GetIPProperties().UnicastAddresses)
                 Assert.False(policy.Allows(u.Address), u.Address.ToString());

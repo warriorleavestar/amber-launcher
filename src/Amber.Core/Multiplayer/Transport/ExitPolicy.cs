@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 
 namespace Amber.Core.Multiplayer.Transport;
 
@@ -14,12 +15,33 @@ namespace Amber.Core.Multiplayer.Transport;
 /// 主机名在出口这边解析，按解析出的每个地址判断，连接也只连判断过的地址（不会被 DNS 重绑定绕过）。
 /// 网卡地址变化时自动重新收集。
 /// </summary>
-public sealed class ExitPolicy : IDisposable
+public sealed partial class ExitPolicy : IDisposable
 {
+    /// <summary>本机公网 IPv6 周围按这个长度一起拦（运营商一般给家里一个 /56 或 /48，路由器和别的 VLAN 都在里面）。</summary>
+    public int IPv6SitePrefix { get; init; } = 56;
+    /// <summary>
+    /// 别处（直连房间的 STUN、路由器端口映射）查到的本机公网地址，所有出口规则共用。
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<IPAddress, byte> Reported = new();
+
+    public static void ReportPublicAddress(IPAddress address) => Reported.TryAdd(Normalize(address), 0);
+
     private volatile IReadOnlyList<(IPAddress Network, int PrefixLength)> _localNetworks = [];
     private volatile IReadOnlySet<IPAddress> _localAddresses = new HashSet<IPAddress>();
     private readonly HashSet<IPAddress> _publicAddresses = [];
     private readonly Lock _lock = new();
+
+    private volatile bool _ready;
+    private volatile string? _failure;
+    private readonly CancellationTokenSource _cts = new();
+    private readonly SemaphoreSlim _refreshLock = new(1, 1);
+    private IReadOnlyList<string>? _stunServers;
+
+    /// <summary>已经查到本机公网地址，可以开始转发。没查到之前所有连接都拒绝（宁可不转，也不放过自己的公网地址）。</summary>
+    public bool IsReady => _ready;
+
+    /// <summary>查不到公网地址时的说明（这时不当出口）；正常时为 null。</summary>
+    public string? Failure => _failure;
 
     public ExitPolicy()
     {
@@ -27,14 +49,76 @@ public sealed class ExitPolicy : IDisposable
         NetworkChange.NetworkAddressChanged += OnAddressChanged;
     }
 
+    /// <summary>开始当出口：先查公网地址，之后每 3 分钟、网络变化时再查（路由器重新拨号会换公网 IP）。</summary>
+    public void Start(IReadOnlyList<string>? stunServers = null, Action<string>? log = null)
+    {
+        _stunServers = stunServers;
+        _ = LoopAsync(log, _cts.Token);
+    }
+
+    private async Task LoopAsync(Action<string>? log, CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var wasReady = _ready;
+                await RefreshPublicAsync(ct);
+                if (_failure is { } f && wasReady != _ready) log?.Invoke("[转发] " + f);
+                await Task.Delay(TimeSpan.FromMinutes(3), ct);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task RefreshPublicAsync(CancellationToken ct)
+    {
+        await _refreshLock.WaitAsync(ct);
+        try
+        {
+            if (await DiscoverPublicAddressAsync(_stunServers, ct))
+            {
+                _failure = null;
+                _ready = true;
+            }
+            else
+            {
+                _ready = false;
+                _failure = "查不到你的公网 IP（STUN 服务器连不上，可能是 UDP 被拦了），为了不让别人经你连到你的路由器，暂时不转发。网络恢复后会自动重试。";
+            }
+        }
+        finally
+        {
+            _refreshLock.Release();
+        }
+    }
+
+    /// <summary>等到可以转发（最多等 timeout）。</summary>
+    public async Task<bool> WaitReadyAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!_ready && _failure is null && DateTime.UtcNow < deadline) await Task.Delay(100, ct);
+        return _ready;
+    }
+
     /// <summary>测试用：指定本机地址和网段，不读真实网卡。</summary>
     internal ExitPolicy(IEnumerable<IPAddress> localAddresses, IEnumerable<(IPAddress, int)> localNetworks)
     {
         _localAddresses = localAddresses.Select(Normalize).ToHashSet();
         _localNetworks = localNetworks.Select(n => (Normalize(n.Item1), n.Item2)).ToList();
+        _ready = true;
     }
 
-    private void OnAddressChanged(object? sender, EventArgs e) => RefreshLocal();
+    /// <summary>测试用：模拟还没查到公网地址的状态。</summary>
+    internal void SetReady(bool ready) => _ready = ready;
+
+    /// <summary>网卡地址变了：重新收集本机地址，公网地址也重新查，查到之前不转发。</summary>
+    private void OnAddressChanged(object? sender, EventArgs e)
+    {
+        RefreshLocal();
+        _ready = false;
+        _ = RefreshPublicAsync(_cts.Token).ContinueWith(_ => { }, TaskScheduler.Default);
+    }
 
     /// <summary>本机所有网卡（包括停用的、虚拟的）的单播地址和所在网段。</summary>
     public void RefreshLocal()
@@ -45,16 +129,23 @@ public sealed class ExitPolicy : IDisposable
         {
             foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
             {
-                foreach (var u in nic.GetIPProperties().UnicastAddresses)
+                var props = nic.GetIPProperties();
+                foreach (var u in props.UnicastAddresses)
                 {
                     var ip = Normalize(u.Address);
                     addresses.Add(ip);
                     var prefix = u.PrefixLength;
                     if (prefix is > 0 and < 128) networks.Add((ip, prefix));
+                    // 公网 IPv6：同一个 /56 里的别的 /64（路由器、别的网段）也是家里的。
+                    if (ip.AddressFamily == AddressFamily.InterNetworkV6 && IsGloballyRoutable(ip)) networks.Add((ip, IPv6SitePrefix));
                 }
+                // 默认网关（路由器）的地址。
+                foreach (var g in props.GatewayAddresses) addresses.Add(Normalize(g.Address));
             }
         }
         catch (NetworkInformationException) { }
+        // 路由表里除默认路由以外的每条路由的目标网段（包括 VPN 推下来的路由）：这些地址不走普通的上网出口。
+        if (OperatingSystem.IsWindows()) networks.AddRange(NonDefaultRoutes());
         _localAddresses = addresses;
         _localNetworks = networks;
     }
@@ -65,8 +156,8 @@ public sealed class ExitPolicy : IDisposable
         lock (_lock) _publicAddresses.Add(Normalize(address));
     }
 
-    /// <summary>用 STUN 查一次自己的公网 IPv4（查不到就算了，不影响其他规则）。</summary>
-    public async Task DiscoverPublicAddressAsync(IReadOnlyList<string>? stunServers = null, CancellationToken ct = default)
+    /// <summary>用 STUN 查一次自己的公网 IPv4，查到返回 true。</summary>
+    public async Task<bool> DiscoverPublicAddressAsync(IReadOnlyList<string>? stunServers = null, CancellationToken ct = default)
     {
         foreach (var server in stunServers ?? Stun.DefaultServers)
         {
@@ -77,11 +168,12 @@ public sealed class ExitPolicy : IDisposable
                 if (await Stun.QueryAsync(socket, server, TimeSpan.FromSeconds(3), ct) is { } mapped)
                 {
                     AddPublicAddress(mapped.Address);
-                    return;
+                    return true;
                 }
             }
-            catch (Exception e) when (e is SocketException or OperationCanceledException or IOException) { }
+            catch (Exception e) when (e is SocketException or IOException) { }
         }
+        return false;
     }
 
     /// <summary>发邮件的端口（SMTP 25、465、587）：不许借别人的 IP 发垃圾邮件。其他端口都放行（游戏服务器端口各不相同）。</summary>
@@ -92,11 +184,13 @@ public sealed class ExitPolicy : IDisposable
     /// <summary>这个目标能不能经出口连。</summary>
     public bool Allows(IPAddress address)
     {
+        if (!_ready) return false;
         var ip = Normalize(address);
         if (!IsGloballyRoutable(ip)) return false;
         if (_localAddresses.Contains(ip)) return false;
         lock (_lock)
             if (_publicAddresses.Contains(ip)) return false;
+        if (Reported.ContainsKey(ip)) return false;
         foreach (var (network, prefix) in _localNetworks)
             if (InNetwork(ip, network, prefix)) return false;
         return true;
@@ -155,6 +249,61 @@ public sealed class ExitPolicy : IDisposable
         return false;
     }
 
+    /// <summary>
+    /// 读 Windows 路由表（GetIpForwardTable2），返回所有非默认路由的目标网段。
+    /// 太宽的路由（IPv4 短于 /8、IPv6 短于 /16，比如全局 VPN 常用的 0.0.0.0/1）当作默认路由，不拦，否则什么都连不了。
+    /// </summary>
+    internal static List<(IPAddress, int)> NonDefaultRoutes()
+    {
+        var result = new List<(IPAddress, int)>();
+        if (GetIpForwardTable2(0 /* AF_UNSPEC */, out var table) != 0 || table == IntPtr.Zero) return result;
+        try
+        {
+            var count = Marshal.ReadInt32(table);
+            const int rowSize = 104;
+            const int firstRow = 8;
+            for (var i = 0; i < count; i++)
+            {
+                var row = table + firstRow + i * rowSize;
+                // DestinationPrefix：SOCKADDR_INET（偏移 12，28 字节）+ PrefixLength（偏移 40）。
+                var prefixLength = Marshal.ReadByte(row, 40);
+                if (ReadSockaddr(row + 12) is not { } address) continue;
+                var minimum = address.AddressFamily == AddressFamily.InterNetwork ? 8 : 16;
+                if (prefixLength < minimum) continue;
+                result.Add((Normalize(address), prefixLength));
+            }
+        }
+        finally
+        {
+            FreeMibTable(table);
+        }
+        return result;
+    }
+
+    private static IPAddress? ReadSockaddr(IntPtr p)
+    {
+        var family = (ushort)Marshal.ReadInt16(p);
+        if (family == 2)
+        {
+            var bytes = new byte[4];
+            Marshal.Copy(p + 4, bytes, 0, 4);
+            return new IPAddress(bytes);
+        }
+        if (family == 23)
+        {
+            var bytes = new byte[16];
+            Marshal.Copy(p + 8, bytes, 0, 16);
+            return new IPAddress(bytes);
+        }
+        return null;
+    }
+
+    [LibraryImport("iphlpapi.dll")]
+    private static partial int GetIpForwardTable2(ushort family, out IntPtr table);
+
+    [LibraryImport("iphlpapi.dll")]
+    private static partial void FreeMibTable(IntPtr memory);
+
     internal static bool InNetwork(IPAddress ip, IPAddress network, int prefixLength)
     {
         if (ip.AddressFamily != network.AddressFamily) return false;
@@ -169,5 +318,9 @@ public sealed class ExitPolicy : IDisposable
         return (a[full] & mask) == (n[full] & mask);
     }
 
-    public void Dispose() => NetworkChange.NetworkAddressChanged -= OnAddressChanged;
+    public void Dispose()
+    {
+        NetworkChange.NetworkAddressChanged -= OnAddressChanged;
+        _cts.Cancel();
+    }
 }

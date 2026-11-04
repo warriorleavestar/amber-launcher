@@ -12,7 +12,7 @@ namespace Amber.Core.Multiplayer.Transport;
 ///   Noise_NNhfspsk0_25519+MLKEM768_ChaChaPoly_SHA256：-> psk, e, e1   &lt;- e, ee, ekem1（Noise HFS 扩展，KEM 用 ML-KEM-768，混合抗量子）
 /// psk 由房间密钥派生，所以只有知道房间码的人能完成握手；每次连接的临时密钥带来前向保密。
 /// </summary>
-public sealed class CipherState
+public sealed class CipherState : IDisposable
 {
     public const int KeyLength = 32;
     public const int TagLength = 16;
@@ -23,8 +23,10 @@ public sealed class CipherState
     public bool HasKey => _k is not null;
     public ulong Nonce => _n;
 
+    /// <summary>接管 key 数组（之后由这个对象负责清零）；旧密钥先清零。</summary>
     public void InitializeKey(byte[]? key)
     {
+        if (_k is not null && !ReferenceEquals(_k, key)) CryptographicOperations.ZeroMemory(_k);
         _k = key;
         _aead?.Dispose();
         _aead = key is null ? null : new ChaCha20Poly1305(key);
@@ -77,9 +79,18 @@ public sealed class CipherState
         InitializeKey(output);
         _n = n;
     }
+
+    /// <summary>关闭时把密钥清零。</summary>
+    public void Dispose()
+    {
+        if (_k is not null) CryptographicOperations.ZeroMemory(_k);
+        _k = null;
+        _aead?.Dispose();
+        _aead = null;
+    }
 }
 
-public sealed class SymmetricState
+public sealed class SymmetricState : IDisposable
 {
     private readonly CipherState _cipher = new();
     private byte[] _ck;
@@ -95,11 +106,25 @@ public sealed class SymmetricState
     public byte[] HandshakeHash => (byte[])_h.Clone();
     public bool HasKey => _cipher.HasKey;
 
-    public void MixHash(ReadOnlySpan<byte> data) => _h = SHA256.HashData([.. _h, .. data]);
+    public void MixHash(ReadOnlySpan<byte> data)
+    {
+        var old = _h;
+        _h = SHA256.HashData([.. _h, .. data]);
+        CryptographicOperations.ZeroMemory(old);
+    }
+
+    /// <summary>握手结束后清掉链密钥、哈希和握手用的密钥。</summary>
+    public void Dispose()
+    {
+        CryptographicOperations.ZeroMemory(_ck);
+        CryptographicOperations.ZeroMemory(_h);
+        _cipher.Dispose();
+    }
 
     public void MixKey(ReadOnlySpan<byte> ikm)
     {
         var (ck, k, _) = Hkdf(_ck, ikm, 2);
+        CryptographicOperations.ZeroMemory(_ck);
         _ck = ck;
         _cipher.InitializeKey(k);
     }
@@ -107,8 +132,10 @@ public sealed class SymmetricState
     public void MixKeyAndHash(ReadOnlySpan<byte> ikm)
     {
         var (ck, h, k) = Hkdf(_ck, ikm, 3);
+        CryptographicOperations.ZeroMemory(_ck);
         _ck = ck;
         MixHash(h);
+        CryptographicOperations.ZeroMemory(h);
         _cipher.InitializeKey(k!);
     }
 
@@ -267,6 +294,39 @@ public sealed class NoiseHandshake : IDisposable
     /// <summary>写下一条握手消息（payload 会被加密）。</summary>
     public byte[] WriteMessage(ReadOnlySpan<byte> payload)
     {
+        EnsureHybridSupported();
+        try
+        {
+            return WriteMessageCore(payload);
+        }
+        catch (PlatformNotSupportedException e)
+        {
+            throw new CryptographicException("这台电脑的系统不支持极端加密要用的 ML-KEM（需要较新的 Windows 11）", e);
+        }
+    }
+
+    /// <summary>读对方的握手消息，返回解密后的 payload。认证失败、本机不支持时抛 CryptographicException。</summary>
+    public byte[] ReadMessage(ReadOnlySpan<byte> message)
+    {
+        EnsureHybridSupported();
+        try
+        {
+            return ReadMessageCore(message);
+        }
+        catch (PlatformNotSupportedException e)
+        {
+            throw new CryptographicException("这台电脑的系统不支持极端加密要用的 ML-KEM（需要较新的 Windows 11）", e);
+        }
+    }
+
+    private void EnsureHybridSupported()
+    {
+        if (_pattern == NoisePattern.NNhfspsk0 && !HybridSupported)
+            throw new CryptographicException("这台电脑的系统不支持极端加密要用的 ML-KEM（需要较新的 Windows 11）");
+    }
+
+    private byte[] WriteMessageCore(ReadOnlySpan<byte> payload)
+    {
         var message = new List<byte>();
         if (_initiator && _step == 0)
         {
@@ -301,8 +361,7 @@ public sealed class NoiseHandshake : IDisposable
         return [.. message];
     }
 
-    /// <summary>读对方的握手消息，返回解密后的 payload。认证失败抛 CryptographicException。</summary>
-    public byte[] ReadMessage(ReadOnlySpan<byte> message)
+    private byte[] ReadMessageCore(ReadOnlySpan<byte> message)
     {
         if (!_initiator && _step == 0)
         {
@@ -353,6 +412,7 @@ public sealed class NoiseHandshake : IDisposable
     {
         _e?.Dispose();
         _e1?.Dispose();
+        _ss.Dispose();
         CryptographicOperations.ZeroMemory(_psk);
     }
 }

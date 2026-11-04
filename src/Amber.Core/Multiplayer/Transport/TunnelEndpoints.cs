@@ -11,7 +11,8 @@ public sealed record TunnelSettings(TransportMode Mode, bool Disguise)
     public bool Wraps => Mode != TransportMode.General;
 
     /// <summary>封装通道在每个成员虚拟地址上用的端口（房主：游戏和聊天；出口成员：转发）。</summary>
-    public const int Port = 47653;
+    /// <remarks>47652 是聊天，47653 是直连房间的测速，47654 是通用模式的 SOCKS5。</remarks>
+    public const int Port = 47656;
     /// <summary>通用模式下出口成员的 SOCKS5 端口（不封装，只靠 EasyTier 加密）。</summary>
     public const int PlainSocksPort = 47654;
 }
@@ -19,12 +20,17 @@ public sealed record TunnelSettings(TransportMode Mode, bool Disguise)
 /// <summary>两个流互相转发，任何一边结束就都关掉。返回两个方向各转了多少字节。</summary>
 public static class Pump
 {
-    public static async Task<(long Up, long Down)> RunAsync(Stream a, Stream b, CancellationToken ct = default)
+    /// <param name="abortLocal">封装通道没有正常结束（被截断、认证失败）时调用：把本机那头的连接直接重置，而不是像正常结束那样关闭，
+    /// 免得游戏把半截数据当成完整的。</param>
+    public static async Task<(long Up, long Down)> RunAsync(Stream a, Stream b, CancellationToken ct = default, Action? abortLocal = null)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var up = CopyAsync(a, b, linked.Token);
         var down = CopyAsync(b, a, linked.Token);
-        await Task.WhenAny(up, down);
+        var first = await Task.WhenAny(up, down);
+        // 先结束的是“从封装通道读”的那一边，而通道没收到结束记录：异常结束。
+        var secureEnded = first == up ? a : b;
+        if (secureEnded is SecureStream { ClosedCleanly: false }) abortLocal?.Invoke();
         linked.Cancel();
         a.Dispose();
         b.Dispose();
@@ -47,8 +53,14 @@ public static class Pump
                 total += n;
             }
         }
-        catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException or CryptographicException or SocketException) { }
+        catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException or CryptographicException or SocketException or EndOfStreamException) { }
         return total;
+    }
+
+    /// <summary>关闭时直接发 RST（不经过正常的四次挥手），对面马上知道连接是出错断的。</summary>
+    public static void Abort(TcpClient client)
+    {
+        try { client.Client.LingerState = new LingerOption(true, 0); } catch (Exception e) when (e is SocketException or ObjectDisposedException) { }
     }
 
     /// <summary>游戏用的 TCP：关掉 Nagle（MC 的包小而频繁，等着合并只会加延迟）。</summary>
@@ -96,7 +108,7 @@ public sealed class TunnelServer : IAsyncDisposable
         using var target = new TcpClient();
         await target.ConnectAsync(IPAddress.Loopback, port, ct);
         Pump.Tune(target);
-        await Pump.RunAsync(stream, target.GetStream(), ct);
+        await Pump.RunAsync(stream, target.GetStream(), ct, () => Pump.Abort(target));
     };
 
     private async Task AcceptLoopAsync(CancellationToken ct)
@@ -142,10 +154,10 @@ public sealed class TunnelServer : IAsyncDisposable
                 Interlocked.Increment(ref Accepted);
                 await handler(stream, ct);
             }
-            catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException)
+            catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException or PlatformNotSupportedException)
             {
                 Interlocked.Increment(ref Rejected);
-                if (e is CryptographicException) _log?.Invoke("[封装] 握手或认证失败，连接已断开：" + e.Message);
+                if (e is CryptographicException or PlatformNotSupportedException) _log?.Invoke("[封装] 握手或认证失败，连接已断开：" + e.Message);
             }
             finally
             {
@@ -242,11 +254,11 @@ public sealed class TunnelClient : IAsyncDisposable
                 remote = await _open(ct);
                 Stream local = game.GetStream();
                 if (_prepare is not null) local = await _prepare(local, remote, ct);
-                var (up, down) = await Pump.RunAsync(local, remote, ct);
-                Interlocked.Add(ref BytesUp, up);
-                Interlocked.Add(ref BytesDown, down);
+                var (up, down) = await Pump.RunAsync(remote, local, ct, () => Pump.Abort(game));
+                Interlocked.Add(ref BytesUp, down);
+                Interlocked.Add(ref BytesDown, up);
             }
-            catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException or InvalidDataException)
+            catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException or InvalidDataException or PlatformNotSupportedException)
             {
                 Interlocked.Increment(ref Failures);
                 _log?.Invoke("[封装] 连不上对面：" + e.Message);

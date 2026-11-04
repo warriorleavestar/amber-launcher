@@ -18,6 +18,20 @@ public sealed record RoomCode(string Network, string Secret, int Port)
     /// <summary>EasyTier 的网络名。加前缀避免和别人在公共节点上手动起的网络撞名。</summary>
     public string NetworkName => "amber-" + Network.ToLowerInvariant();
 
+    /// <summary>
+    /// 给 EasyTier 用的网络名和密钥。封装模式的房间用按模式派生的另一套（HKDF），
+    /// 这样房间码末尾的模式被删掉或改掉的人连 EasyTier 网络都进不来，碰不到房主没封装的端口。通用模式和以前一样。
+    /// </summary>
+    public string EasyTierNetworkName => Tunnel.Wraps ? $"{NetworkName}-t{(int)Tunnel.Mode}{(Tunnel.Disguise ? "d" : "")}" : NetworkName;
+
+    public string EasyTierSecret => Tunnel.Wraps
+        ? Convert.ToHexStringLower(HKDF.DeriveKey(HashAlgorithmName.SHA256, Encoding.UTF8.GetBytes(Secret), 32, Encoding.UTF8.GetBytes(NetworkName),
+            Encoding.UTF8.GetBytes($"amber-et-v1|{(int)Tunnel.Mode}|{(Tunnel.Disguise ? 1 : 0)}")))
+        : Secret;
+
+    /// <summary>要在日志里遮掉的密钥（房间密钥和派生出来的 EasyTier 密钥）。</summary>
+    public IReadOnlyList<string> Secrets => Tunnel.Wraps ? [Secret, EasyTierSecret] : [Secret];
+
     /// <summary>联机和聊天的封装方式，房间里所有人一样。</summary>
     public Transport.TunnelSettings Tunnel { get; init; } = Transport.TunnelSettings.Default;
 
@@ -55,8 +69,17 @@ public sealed record RoomCode(string Network, string Secret, int Port)
         if (!int.TryParse(digits, out var port) || port is < 1 or > 65535) return false;
         var tunnel = Transport.TunnelSettings.Default;
         var rest = parts[2][digits.Length..];
-        if (rest.Length >= 3 && rest[0] == '-' && rest[1] == 'T' && rest[2] is >= '0' and <= '3')
-            tunnel = new Transport.TunnelSettings((Transport.TransportMode)(rest[2] - '0'), rest.Length > 3 && rest[3] == 'D');
+        if (rest.StartsWith('-'))
+        {
+            // 端口后面跟着 “-” 就必须是合法的模式段：-T0…-T3，可选 D，后面不能再接字母数字。
+            // 被截断、改坏或不认识的模式直接算格式不对，不会悄悄当成通用模式。
+            if (rest.Length < 3 || rest[1] != 'T' || rest[2] is < '0' or > '3') return false;
+            var disguise = rest.Length > 3 && rest[3] == 'D';
+            var end = disguise ? 4 : 3;
+            if (rest.Length > end && char.IsAsciiLetterOrDigit(rest[end])) return false;
+            tunnel = new Transport.TunnelSettings((Transport.TransportMode)(rest[2] - '0'), disguise);
+        }
+        else if (rest.Length > 0 && char.IsAsciiLetterOrDigit(rest[0])) return false;
         room = new RoomCode(network, secret, port) { Tunnel = tunnel };
         return true;
     }

@@ -128,7 +128,7 @@ public sealed class DirectSession : IAsyncDisposable
     private async Task StartEasyTierAsync(EasyTierOptions options, CancellationToken ct)
     {
         if (_currentOptions is { } current && SameConfig(current, options) && EasyTier is { HasExited: false }) return;
-        Log("启动 EasyTier：" + string.Join(' ', EasyTierArgs.Build(options).Select(a => a == Room.Secret ? "<房间密钥>" : a)));
+        Log("启动 EasyTier：" + string.Join(' ', EasyTierArgs.Build(options).Select(a => Room.Secrets.Contains(a) ? "<房间密钥>" : a)));
         if (EasyTier is EasyTierElevatedSession elevated && !elevated.HasExited)
         {
             elevated.Restart(options);

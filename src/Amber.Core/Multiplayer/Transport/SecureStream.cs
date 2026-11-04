@@ -19,6 +19,8 @@ public sealed class SecureStream : Stream
 
     private const byte FlagCover = 1;
     private const byte FlagRekey = 2;
+    /// <summary>正常结束：发送方不会再发数据。没收到它就断开的连接算被截断（可能是攻击者掐断），按出错处理。</summary>
+    private const byte FlagClose = 4;
 
     private readonly Stream _inner;
     private readonly CipherState _send;
@@ -29,6 +31,13 @@ public sealed class SecureStream : Stream
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly CancellationTokenSource _cts = new();
     private readonly Task? _cover;
+    private readonly Task _rekeyTimer;
+    private long _lastReceiveRekeyTicks = Stopwatch.GetTimestamp();
+    private bool _closeSent;
+    private int _disposed;
+
+    /// <summary>对方发来了加密认证过的结束记录（不是被半路掐断）。</summary>
+    public bool ClosedCleanly { get; private set; }
     private byte[] _readBuffer = [];
     private int _readOffset;
     private long _sentSinceRekey;
@@ -51,7 +60,11 @@ public sealed class SecureStream : Stream
         _sendMask = sendMask;
         _receiveMask = receiveMask;
         if (profile.CoverTrafficIdle is { } idle) _cover = CoverLoopAsync(idle, _cts.Token);
+        _rekeyTimer = RekeyLoopAsync(_cts.Token);
     }
+
+    /// <summary>收方向的密钥最多用这么久：对方按时间换钥，空闲时也会发空记录换钥，超过就说明对方不守规矩或者被重放。</summary>
+    private TimeSpan MaxReceiveKeyAge => _profile.RekeyEvery * 2 + (_profile.RekeyEvery < TimeSpan.FromSeconds(30) ? _profile.RekeyEvery : TimeSpan.FromSeconds(30));
 
     public override bool CanRead => true;
     public override bool CanWrite => true;
@@ -86,8 +99,10 @@ public sealed class SecureStream : Stream
     {
         while (true)
         {
+            if (ClosedCleanly) return null;
             var header = new byte[2];
-            if (!await ReadExactAsync(_inner, header, ct)) return null;
+            if (!await ReadExactAsync(_inner, header, ct)) throw new EndOfStreamException("对方没有正常结束就断开了（连接可能被截断）");
+            if (Stopwatch.GetElapsedTime(_lastReceiveRekeyTicks) > MaxReceiveKeyAge) throw new CryptographicException("对方太久没有换钥");
             _receiveMask?.Apply(header);
             var length = BinaryPrimitives.ReadUInt16BigEndian(header);
             if (length < CipherState.TagLength + HeaderLength) throw new CryptographicException("记录太短");
@@ -97,7 +112,16 @@ public sealed class SecureStream : Stream
             var flags = plain[0];
             var dataLength = BinaryPrimitives.ReadUInt16BigEndian(plain.AsSpan(1));
             if (HeaderLength + dataLength > plain.Length) throw new CryptographicException("记录长度不对");
-            if ((flags & FlagRekey) != 0) _receive.Rekey();
+            if ((flags & FlagRekey) != 0)
+            {
+                _receive.Rekey();
+                _lastReceiveRekeyTicks = Stopwatch.GetTimestamp();
+            }
+            if ((flags & FlagClose) != 0)
+            {
+                ClosedCleanly = true;
+                return null;
+            }
             if ((flags & FlagCover) != 0) continue;
             return plain.AsSpan(HeaderLength, dataLength).ToArray();
         }
@@ -108,6 +132,7 @@ public sealed class SecureStream : Stream
         await _writeLock.WaitAsync(ct);
         try
         {
+            ObjectDisposedException.ThrowIf(_closeSent, this);
             for (var offset = 0; offset < buffer.Length || buffer.Length == 0 && offset == 0; offset += MaxData)
             {
                 var chunk = buffer.Slice(offset, Math.Min(MaxData, buffer.Length - offset));
@@ -175,6 +200,7 @@ public sealed class SecureStream : Stream
                 if (!await _writeLock.WaitAsync(0, ct)) continue;
                 try
                 {
+                    if (_closeSent) return;
                     await WriteRecordAsync([], FlagCover, ct);
                     await _inner.FlushAsync(ct);
                 }
@@ -185,6 +211,52 @@ public sealed class SecureStream : Stream
             }
         }
         catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException) { }
+    }
+
+    /// <summary>按时间换钥不能只靠“有数据要发”：一个方向空闲时由这里发一条空记录来换钥。</summary>
+    private async Task RekeyLoopAsync(CancellationToken ct)
+    {
+        var step = TimeSpan.FromTicks(Math.Max(_profile.RekeyEvery.Ticks / 8, TimeSpan.FromMilliseconds(50).Ticks));
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(step, ct);
+                if (Stopwatch.GetElapsedTime(_lastRekeyTicks) < _profile.RekeyEvery) continue;
+                await _writeLock.WaitAsync(ct);
+                try
+                {
+                    if (_closeSent) return;
+                    if (Stopwatch.GetElapsedTime(_lastRekeyTicks) >= _profile.RekeyEvery)
+                    {
+                        await WriteRecordAsync([], FlagCover, ct);
+                        await _inner.FlushAsync(ct);
+                    }
+                }
+                finally
+                {
+                    _writeLock.Release();
+                }
+            }
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException or System.Net.Sockets.SocketException) { }
+    }
+
+    /// <summary>发结束记录（只发一次）。之后不能再写。</summary>
+    public async Task CloseAsync(CancellationToken ct = default)
+    {
+        await _writeLock.WaitAsync(ct);
+        try
+        {
+            if (_closeSent) return;
+            _closeSent = true;
+            await WriteRecordAsync([], FlagClose, ct);
+            await _inner.FlushAsync(ct);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 
     internal static async Task<bool> ReadExactAsync(Stream stream, Memory<byte> buffer, CancellationToken ct)
@@ -205,14 +277,18 @@ public sealed class SecureStream : Stream
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && Interlocked.Exchange(ref _disposed, 1) == 0)
         {
+            // 先尽量告诉对方“正常结束”（最多等 1 秒），再关连接。
+            try { CloseAsync().Wait(TimeSpan.FromSeconds(1)); } catch (Exception e) when (e is AggregateException or ObjectDisposedException or IOException) { }
             _cts.Cancel();
-            try { _cover?.Wait(TimeSpan.FromSeconds(1)); } catch (AggregateException) { }
+            try { Task.WaitAll([.. new[] { _cover, _rekeyTimer }.OfType<Task>()], TimeSpan.FromSeconds(1)); } catch (AggregateException) { }
             _inner.Dispose();
             _cts.Dispose();
             _sendMask?.Dispose();
             _receiveMask?.Dispose();
+            _send.Dispose();
+            _receive.Dispose();
         }
         base.Dispose(disposing);
     }

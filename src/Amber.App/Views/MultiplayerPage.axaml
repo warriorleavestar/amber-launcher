@@ -92,7 +92,7 @@
                        Text="注意：开启后，房间里选了你做出口的人，他们的全部网络流量会从你的电脑和网络出去，在外人看来就是你的 IP 在访问，你要为这些流量负责；也会占用你的带宽。只对信任的人开启。" />
             <CheckBox Content="允许成员经我的电脑转发游戏流量（仅游戏）" IsChecked="{Binding AllowGameProxy}" Margin="0,6,0,0" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowGameProxy}" Foreground="#E0703A"
-                       Text="只转发对方从 Amber 启动的游戏（登录和进服务器），不需要管理员权限；不允许经你连你家里的设备和本机服务。外人看来是你的 IP 在玩，只对信任的人开启。" />
+                       Text="对方从 Amber 启动的游戏会经你的网络登录和进服务器，不需要管理员权限。经你连不到你的电脑、路由器和家里的设备，也不能发邮件；但其他公网地址都能连（对方改了程序也能用来访问别的网站）。外人看来是你的 IP，只对信任的人开启。" />
           </StackPanel>
         </Border>
 
@@ -243,6 +243,8 @@
             </Grid>
             <TextBlock Classes="hint" Text="还没有人" IsVisible="{Binding !Peers.Count}" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding TransportText}" />
+            <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="#E0703A" Text="{Binding ExitWarning}"
+                       IsVisible="{Binding ExitWarning, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding !UsingGameProxy}">
               <TextBlock Text="游戏流量经这个人的网络（仅游戏）" VerticalAlignment="Center" />
               <ComboBox ItemsSource="{Binding ExitCandidates}" SelectedItem="{Binding SelectedExitPeer}" MinWidth="200">
