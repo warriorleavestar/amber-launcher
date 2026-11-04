@@ -1,3 +1,4 @@
+using Amber.Core;
 using Amber.Core.Multiplayer;
 using Amber.Core.Auth;
 using Amber.Core.Content;
@@ -214,6 +215,45 @@ try
             Console.WriteLine($"WARMUP {(result.Done ? "DONE" : "FAIL")} {result.Detail}");
             var left = ConnectorWarmup.Pending(instance.WorkDir, new ModManager(instance.ModsDir).List(), instance.Loader);
             Console.WriteLine($"PENDING-AFTER {left.Count}");
+            break;
+        }
+        case "account-check":
+        {
+            // 检查选中的微软账号能不能正常进服务器，只打印不涉密的结果。--force-refresh：在内存里强制走一次刷新令牌（不写回文件）。
+            var force = argList.Remove("--force-refresh");
+            var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Amber");
+            var store = new AccountStore(Path.Combine(dataDir, "accounts.json"));
+            store.Load();
+            var account = store.Selected;
+            if (account is not { Kind: AccountKind.Microsoft })
+            {
+                Console.WriteLine($"选中的账号不是微软账号（{account?.Kind.ToString() ?? "没有账号"}）");
+                break;
+            }
+            var auth = new MicrosoftAuth(http, MicrosoftAuth.DefaultClientId);
+            Console.WriteLine($"账号 {account.Name}，令牌到期 {account.AccessTokenExpires:u}，已存访问令牌 {account.AccessToken is { Length: > 0 }}，已存刷新令牌 {account.RefreshToken is { Length: > 0 }}");
+            if (force)
+            {
+                var before = account.AccessToken;
+                account.AccessTokenExpires = DateTimeOffset.UtcNow.AddMinutes(-1);
+                await auth.RefreshAsync(account, cts.Token);
+                Console.WriteLine($"刷新：成功，得到新的访问令牌 {account.AccessToken != before}，新的到期时间 {account.AccessTokenExpires:u}（没有写回文件）");
+            }
+            else await auth.RefreshAsync(account, cts.Token);
+            using (var profileRequest = new HttpRequestMessage(HttpMethod.Get, "https://api.minecraftservices.com/minecraft/profile"))
+            {
+                profileRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", account.AccessToken);
+                using var profile = await http.SendAsync(profileRequest, cts.Token);
+                var body = System.Text.Json.Nodes.JsonNode.Parse(await profile.Content.ReadAsStringAsync(cts.Token));
+                Console.WriteLine($"档案接口：HTTP {(int)profile.StatusCode}，名字 {body?["name"]}，UUID 一致 {body?["id"]?.GetValue<string>() == account.Uuid.ToString("N")}，皮肤 {body?["skins"]?.AsArray().Count ?? 0} 个");
+            }
+            // 和进服务器时一样：客户端向会话服务器登记一个随机的服务器 id，再像服务器那样查询 hasJoined。
+            var serverId = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(20));
+            var joinBody = new System.Text.Json.Nodes.JsonObject { ["accessToken"] = account.AccessToken, ["selectedProfile"] = account.Uuid.ToString("N"), ["serverId"] = serverId };
+            using (var join = await http.PostAsync("https://sessionserver.mojang.com/session/minecraft/join", AmberJson.Body(joinBody), cts.Token))
+                Console.WriteLine($"会话登记（join）：HTTP {(int)join.StatusCode}{(join.IsSuccessStatusCode ? "" : " " + await join.Content.ReadAsStringAsync(cts.Token))}");
+            using (var joined = await http.GetAsync($"https://sessionserver.mojang.com/session/minecraft/hasJoined?username={Uri.EscapeDataString(account.Name)}&serverId={serverId}", cts.Token))
+                Console.WriteLine($"服务器校验（hasJoined）：HTTP {(int)joined.StatusCode}{(joined.StatusCode == System.Net.HttpStatusCode.OK ? "，通过" : "，没通过")}");
             break;
         }
         case "check-updates" or "update-mods":

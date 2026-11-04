@@ -1,0 +1,369 @@
+using System.Net;
+using System.Net.Sockets;
+using System.Security.Cryptography;
+using Amber.Core.Multiplayer;
+using Amber.Core.Multiplayer.Transport;
+
+namespace Amber.Core.Tests;
+
+public class TransportPrimitiveTests
+{
+    private static byte[] H(string hex) => Convert.FromHexString(hex.Replace(" ", ""));
+
+    [Fact]
+    public void X25519_Rfc7748Vector()
+    {
+        // RFC 7748 第 6.1 节。
+        using var alice = X25519KeyPair.Import(H("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"), H("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"));
+        using var bob = X25519KeyPair.Import(H("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"), H("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"));
+        var expected = "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742";
+        Assert.Equal(expected, Convert.ToHexStringLower(alice.Dh(bob.PublicKey)));
+        Assert.Equal(expected, Convert.ToHexStringLower(bob.Dh(alice.PublicKey)));
+        // 小阶点（全零公钥）要被拒绝。
+        Assert.ThrowsAny<CryptographicException>(() => alice.Dh(new byte[32]));
+    }
+
+    [Fact]
+    public void ChaCha20Poly1305_Rfc8439Vector()
+    {
+        // RFC 8439 第 2.8.2 节。
+        var key = H("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f");
+        var nonce = H("070000004041424344454647");
+        var ad = H("50515253c0c1c2c3c4c5c6c7");
+        var plain = System.Text.Encoding.ASCII.GetBytes("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.");
+        var cipher = new byte[plain.Length];
+        var tag = new byte[16];
+        using var aead = new ChaCha20Poly1305(key);
+        aead.Encrypt(nonce, plain, cipher, tag, ad);
+        Assert.Equal("1ae10b594f09e26a7e902ecbd0600691", Convert.ToHexStringLower(tag));
+        Assert.StartsWith("d31a8d34648e60db7b86afbc53ef7ec2", Convert.ToHexStringLower(cipher));
+    }
+
+    [Fact]
+    public void NoiseHkdf_MatchesRfc5869()
+    {
+        // Noise 的 HKDF 就是 RFC 5869（salt = 链密钥，info 为空）；和系统的 HKDF 对一下。
+        var ck = RandomNumberGenerator.GetBytes(32);
+        var ikm = RandomNumberGenerator.GetBytes(32);
+        var (o1, o2, o3) = SymmetricState.Hkdf(ck, ikm, 3);
+        var reference = HKDF.DeriveKey(HashAlgorithmName.SHA256, ikm, 96, ck, []);
+        Assert.Equal(reference, (byte[])[.. o1, .. o2, .. o3!]);
+    }
+
+    [Fact]
+    public void CipherState_NonceAndRekey()
+    {
+        var a = new CipherState();
+        var b = new CipherState();
+        var key = RandomNumberGenerator.GetBytes(32);
+        a.InitializeKey(key);
+        b.InitializeKey((byte[])key.Clone());
+        var c1 = a.EncryptWithAd([], "hello"u8);
+        Assert.Equal("hello"u8.ToArray(), b.DecryptWithAd([], c1));
+        // 同一明文两次加密结果不同（nonce 前进）。
+        Assert.NotEqual(c1, a.EncryptWithAd([], "hello"u8));
+        Assert.Equal(2UL, a.Nonce);
+    }
+
+    [Fact]
+    public void CipherState_RejectsTamperAndReplay()
+    {
+        var key = RandomNumberGenerator.GetBytes(32);
+        var a = new CipherState();
+        var b = new CipherState();
+        a.InitializeKey(key);
+        b.InitializeKey((byte[])key.Clone());
+        var c = a.EncryptWithAd([], "data"u8);
+        var tampered = (byte[])c.Clone();
+        tampered[0] ^= 1;
+        Assert.ThrowsAny<CryptographicException>(() => b.DecryptWithAd([], tampered));
+        Assert.Equal("data"u8.ToArray(), b.DecryptWithAd([], c));
+        // 重放同一条：接收方 nonce 已经前进，解不开。
+        Assert.ThrowsAny<CryptographicException>(() => b.DecryptWithAd([], c));
+        // 换钥后两边同步换才解得开。
+        a.Rekey();
+        var after = a.EncryptWithAd([], "z"u8);
+        var noRekey = new CipherState();
+        noRekey.InitializeKey((byte[])key.Clone());
+        noRekey.SetNonce(1);
+        Assert.ThrowsAny<CryptographicException>(() => noRekey.DecryptWithAd([], after));
+        b.Rekey();
+        Assert.Equal("z"u8.ToArray(), b.DecryptWithAd([], after));
+    }
+}
+
+public class NoiseHandshakeTests
+{
+    private static readonly byte[] Psk = RandomNumberGenerator.GetBytes(32);
+
+    private static (CipherState, CipherState, CipherState, CipherState, byte[], byte[]) Run(NoisePattern pattern, byte[] psk1, byte[] psk2, string prologue1 = "p", string prologue2 = "p")
+    {
+        using var i = new NoiseHandshake(pattern, true, System.Text.Encoding.ASCII.GetBytes(prologue1), psk1);
+        using var r = new NoiseHandshake(pattern, false, System.Text.Encoding.ASCII.GetBytes(prologue2), psk2);
+        var m1 = i.WriteMessage("req"u8);
+        Assert.Equal("req"u8.ToArray(), r.ReadMessage(m1));
+        var m2 = r.WriteMessage("ok"u8);
+        Assert.Equal("ok"u8.ToArray(), i.ReadMessage(m2));
+        Assert.Equal(i.HandshakeHash, r.HandshakeHash);
+        var (iSend, iReceive) = i.Split();
+        var (rSend, rReceive) = r.Split();
+        return (iSend, iReceive, rSend, rReceive, m1, m2);
+    }
+
+    [Theory]
+    [InlineData(NoisePattern.NNpsk0)]
+    [InlineData(NoisePattern.NNhfspsk0)]
+    public void HandshakeAndTransport(NoisePattern pattern)
+    {
+        if (pattern == NoisePattern.NNhfspsk0 && !NoiseHandshake.HybridSupported) return;
+        var (iSend, iReceive, rSend, rReceive, m1, m2) = Run(pattern, Psk, (byte[])Psk.Clone());
+        Assert.Equal("a"u8.ToArray(), rReceive.DecryptWithAd([], iSend.EncryptWithAd([], "a"u8)));
+        Assert.Equal("b"u8.ToArray(), iReceive.DecryptWithAd([], rSend.EncryptWithAd([], "b"u8)));
+        // 握手消息大小：NN 是 32 字节临时公钥 + 加密的 payload；混合模式再加 ML-KEM 公钥 / 密文。
+        if (pattern == NoisePattern.NNpsk0) Assert.Equal((32 + 3 + 16, 32 + 2 + 16), (m1.Length, m2.Length));
+        else Assert.Equal((32 + 1184 + 16 + 3 + 16, 32 + 1088 + 16 + 2 + 16), (m1.Length, m2.Length));
+    }
+
+    [Theory]
+    [InlineData(NoisePattern.NNpsk0)]
+    [InlineData(NoisePattern.NNhfspsk0)]
+    public void WrongPskOrPrologueFails(NoisePattern pattern)
+    {
+        if (pattern == NoisePattern.NNhfspsk0 && !NoiseHandshake.HybridSupported) return;
+        // 不知道房间码（psk 不同）的人在第一条消息就失败。
+        Assert.ThrowsAny<CryptographicException>(() => Run(pattern, Psk, RandomNumberGenerator.GetBytes(32)));
+        // 两边模式不一样（prologue 不同）也失败，不会悄悄用弱的那种。
+        Assert.ThrowsAny<CryptographicException>(() => Run(pattern, Psk, (byte[])Psk.Clone(), "mode1", "mode2"));
+    }
+
+    [Fact]
+    public void TamperedHandshakeFails()
+    {
+        using var i = new NoiseHandshake(NoisePattern.NNpsk0, true, [], Psk);
+        using var r = new NoiseHandshake(NoisePattern.NNpsk0, false, [], (byte[])Psk.Clone());
+        var m1 = i.WriteMessage("req"u8);
+        m1[5] ^= 0x40;   // 改临时公钥
+        Assert.ThrowsAny<CryptographicException>(() => r.ReadMessage(m1));
+    }
+
+    [Fact]
+    public void EphemeralKeysGiveForwardSecrecy()
+    {
+        // 同一个 psk 两次握手得到不同的会话密钥。
+        var (a, _, _, _, _, _) = Run(NoisePattern.NNpsk0, Psk, (byte[])Psk.Clone());
+        var (b, _, _, _, _, _) = Run(NoisePattern.NNpsk0, Psk, (byte[])Psk.Clone());
+        Assert.NotEqual(a.EncryptWithAd([], new byte[16]), b.EncryptWithAd([], new byte[16]));
+    }
+}
+
+public class TunnelTests
+{
+    private static readonly RoomCode Room = RoomCode.Create(25565);
+
+    /// <summary>本机回环上建一对 TCP 连接。</summary>
+    private static async Task<(NetworkStream Client, NetworkStream Server, TcpClient A, TcpClient B)> PairAsync()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var a = new TcpClient();
+        var accept = listener.AcceptTcpClientAsync();
+        await a.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+        var b = await accept;
+        listener.Stop();
+        return (a.GetStream(), b.GetStream(), a, b);
+    }
+
+    public static TheoryData<TransportMode, bool> Modes()
+    {
+        var data = new TheoryData<TransportMode, bool>();
+        foreach (var mode in new[] { TransportMode.Minecraft, TransportMode.High, TransportMode.Extreme })
+            foreach (var disguise in new[] { false, true }) data.Add(mode, disguise);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task RoundTrip_AllModes(TransportMode mode, bool disguise)
+    {
+        if (mode == TransportMode.Extreme && !NoiseHandshake.HybridSupported) return;
+        var (c, s, a, b) = await PairAsync();
+        using (a)
+        using (b)
+        {
+            var accept = TunnelHandshake.AcceptAsync(s, Room, mode, disguise);
+            await using var client = await TunnelHandshake.ConnectAsync(c, Room, mode, disguise, TunnelService.Chat);
+            var accepted = await accept;
+            Assert.NotNull(accepted);
+            Assert.Equal(TunnelService.Chat, accepted.Value.Service);
+            await using var server = accepted.Value.Stream;
+
+            // 大小不一的数据（包括超过一条记录上限的）两个方向都原样到达。
+            foreach (var size in new[] { 1, 100, 5000, SecureStream.MaxData, SecureStream.MaxData + 1, 200_000 })
+            {
+                var data = RandomNumberGenerator.GetBytes(size);
+                var got = new byte[size];
+                // 写和读同时进行：数据比 TCP 缓冲区大时先写完再读会卡住。
+                var write = client.WriteAsync(data).AsTask();
+                Assert.True(await SecureStream.ReadExactAsync(server, got, default));
+                await write;
+                Assert.Equal(data, got);
+                write = server.WriteAsync(data).AsTask();
+                Assert.True(await SecureStream.ReadExactAsync(client, got, default));
+                await write;
+                Assert.Equal(data, got);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task WrongRoomCodeIsRejected()
+    {
+        var (c, s, a, b) = await PairAsync();
+        using (a)
+        using (b)
+        {
+            var accept = TunnelHandshake.AcceptAsync(s, Room, TransportMode.High, false);
+            var connect = TunnelHandshake.ConnectAsync(c, RoomCode.Create(25565), TransportMode.High, false, TunnelService.Game);
+            await Assert.ThrowsAnyAsync<CryptographicException>(async () => await accept);
+            b.Close();
+            await Assert.ThrowsAnyAsync<Exception>(async () => await connect);
+        }
+    }
+
+    [Fact]
+    public async Task ModeMismatchIsRejected()
+    {
+        var (c, s, a, b) = await PairAsync();
+        using (a)
+        using (b)
+        {
+            var accept = TunnelHandshake.AcceptAsync(s, Room, TransportMode.High, false);
+            var connect = TunnelHandshake.ConnectAsync(c, Room, TransportMode.Minecraft, false, TunnelService.Game);
+            await Assert.ThrowsAnyAsync<CryptographicException>(async () => await accept);
+            b.Close();
+            await Assert.ThrowsAnyAsync<Exception>(async () => await connect);
+        }
+    }
+
+    [Fact]
+    public async Task TamperedRecordBreaksTheConnection()
+    {
+        // 中间人在两条 TCP 之间转发，改掉客户端第一条数据记录密文里的一个字节：服务端必须报认证失败，而不是收到改过的数据。
+        var (c, mitmIn, a, b) = await PairAsync();
+        var (mitmOut, s, a2, b2) = await PairAsync();
+        using (a) using (b) using (a2) using (b2)
+        {
+            // 握手消息 1 的帧 = 2 字节长度 + 32 字节临时公钥 + 加密的 1 字节 payload（17）= 51；再往后是记录头 2 字节 + 密文。
+            const int tamperAt = 51 + 2 + 5;
+            var up = Task.Run(async () =>
+            {
+                var buf = new byte[1];
+                var count = 0;
+                try
+                {
+                    while (await mitmIn.ReadAsync(buf) == 1)
+                    {
+                        if (++count == tamperAt) buf[0] ^= 0x01;
+                        await mitmOut.WriteAsync(buf);
+                    }
+                }
+                catch (IOException) { }
+            });
+            var down = Task.Run(async () => { try { await mitmOut.CopyToAsync(mitmIn); } catch (IOException) { } catch (ObjectDisposedException) { } });
+
+            var accept = TunnelHandshake.AcceptAsync(s, Room, TransportMode.High, false);
+            await using var client = await TunnelHandshake.ConnectAsync(c, Room, TransportMode.High, false, TunnelService.Game);
+            var accepted = await accept;
+            Assert.NotNull(accepted);
+            await using var server = accepted.Value.Stream;
+            await client.WriteAsync("secret game data"u8.ToArray());
+            await Assert.ThrowsAnyAsync<CryptographicException>(async () => await server.ReadAsync(new byte[64]));
+        }
+    }
+
+    [Fact]
+    public async Task RekeyPaddingAndCover()
+    {
+        var (c, s, a, b) = await PairAsync();
+        using (a)
+        using (b)
+        {
+            using var i = new NoiseHandshake(NoisePattern.NNpsk0, true, [], RandomNumberGenerator.GetBytes(32));
+            var psk = (byte[])typeof(NoiseHandshake).GetField("_psk", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(i)!;
+            using var r = new NoiseHandshake(NoisePattern.NNpsk0, false, [], (byte[])psk.Clone());
+            r.ReadMessage(i.WriteMessage([]));
+            i.ReadMessage(r.WriteMessage([]));
+            var (iSend, iReceive) = i.Split();
+            var (rSend, rReceive) = r.Split();
+            // 每 3 条记录换钥、填充到档位、空闲 30 毫秒发掩护记录。
+            var profile = new TransportProfile(TransportMode.Extreme, NoisePattern.NNpsk0, 3, TimeSpan.FromHours(1), 1, [256, 1024, SecureStream.MaxPlaintext], TimeSpan.FromMilliseconds(30));
+            await using var client = new SecureStream(c, iSend, iReceive, profile);
+            await using var server = new SecureStream(s, rSend, rReceive, profile with { CoverTrafficIdle = null });
+
+            for (var n = 0; n < 10; n++)
+            {
+                var data = RandomNumberGenerator.GetBytes(10 + n * 100);
+                await client.WriteAsync(data);
+                var got = new byte[data.Length];
+                Assert.True(await SecureStream.ReadExactAsync(server, got, default));
+                Assert.Equal(data, got);
+            }
+            Assert.True(client.Rekeys >= 3);
+            // 10 字节的数据也填充到 256 档。
+            Assert.Equal(256, client.PaddedLength(3 + 10));
+            Assert.Equal(1024, client.PaddedLength(3 + 300));
+            await Task.Delay(300);
+            Assert.True(client.CoverRecordsSent > 0, "空闲时应该发掩护记录");
+            // 掩护记录在接收方被丢弃，之后的真实数据照样对得上。
+            await client.WriteAsync("after cover"u8.ToArray());
+            var tail = new byte[11];
+            Assert.True(await SecureStream.ReadExactAsync(server, tail, default));
+            Assert.Equal("after cover"u8.ToArray(), tail);
+        }
+    }
+
+    [Fact]
+    public async Task Disguise_AnswersServerListPing()
+    {
+        // 伪装模式下，有人（比如服务器列表）来查询状态，回答得像个普通服务器。
+        var (c, s, a, b) = await PairAsync();
+        using (a)
+        using (b)
+        {
+            var accept = TunnelHandshake.AcceptAsync(s, Room, TransportMode.High, true);
+            var hs = new McDisguise.PacketWriter().VarInt(0).VarInt(767).String("example.org").UShort(25565).VarInt(1).ToPacket();
+            var req = new McDisguise.PacketWriter().VarInt(0).ToPacket();
+            var ping = new McDisguise.PacketWriter().VarInt(1).Long(42).ToPacket();
+            await c.WriteAsync((byte[])[.. hs, .. req, .. ping]);
+            var status = new McDisguise.PacketReader(await McDisguise.ReadPacketAsync(c, default));
+            Assert.Equal(0, status.VarInt());
+            Assert.Contains("\"protocol\":767", status.String(32767));
+            var pong = new McDisguise.PacketReader(await McDisguise.ReadPacketAsync(c, default));
+            Assert.Equal((1, 42L), (pong.VarInt(), pong.Long()));
+            Assert.Null(await accept);
+        }
+    }
+
+    [Fact]
+    public async Task Disguise_LooksLikeMinecraftLogin()
+    {
+        // 抓客户端发出的前几个字节：应该是合法的 MC Handshake（下一状态 = 登录）和 Login Start。
+        var (c, s, a, b) = await PairAsync();
+        using (a)
+        using (b)
+        {
+            var connect = TunnelHandshake.ConnectAsync(c, Room, TransportMode.High, true, TunnelService.Game);
+            var handshake = new McDisguise.PacketReader(await McDisguise.ReadPacketAsync(s, default));
+            Assert.Equal(0, handshake.VarInt());
+            Assert.Equal(767, handshake.VarInt());
+            handshake.String(255);
+            handshake.UShort();
+            Assert.Equal(2, handshake.VarInt());
+            var login = new McDisguise.PacketReader(await McDisguise.ReadPacketAsync(s, default));
+            Assert.Equal(0, login.VarInt());
+            Assert.StartsWith("Player", login.String(16));
+            b.Close();
+            await Assert.ThrowsAnyAsync<Exception>(async () => await connect);
+        }
+    }
+}
