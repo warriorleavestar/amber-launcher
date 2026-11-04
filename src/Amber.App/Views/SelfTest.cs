@@ -429,6 +429,15 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         main.CurrentPage = host;
         await ShotAsync("联机房主有玩家");
 
+        // 结束后用同一个房间码再加入：之前的聊天还在（只在内存里），后面有分隔行。
+        var code = host.RoomCodeText;
+        guest.StopCommand.Execute(null);
+        Check("联机：结束后聊天清空", guest.ChatLines.Count == 0);
+        guest.JoinCode = code;
+        guest.JoinCommand.Execute(null);
+        var restored = guest.ChatLines.Any(l => l.Text == "欢迎") && guest.ChatLines.Any(l => l.IsSeparator);
+        Check("联机：重新加入同一房间看到之前的消息", restored, string.Join(" | ", guest.ChatLines.Select(l => l.Text)));
+        Check("联机：重新加入后聊天重连", await WaitAsync(() => guest.ChatReady, 40), guest.ChatStatus);
         guest.StopCommand.Execute(null);
         host.StopCommand.Execute(null);
         stopServer.Cancel();

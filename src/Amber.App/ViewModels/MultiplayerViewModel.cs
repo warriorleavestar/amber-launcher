@@ -26,9 +26,11 @@ public sealed partial class NodeItem(string url) : ObservableObject
 
 public sealed record ChatLine(ChatMessage Message, bool Mine)
 {
+    /// <summary>恢复的历史和新消息之间的分隔行。</summary>
+    public bool IsSeparator { get; init; }
     public string Time => Message.Time.ToLocalTime().ToString("HH:mm");
     public string Name => Mine ? "我" : Message.Name;
-    public bool IsNotice => Message.Kind != ChatKind.Message;
+    public bool IsNotice => Message.Kind != ChatKind.Message || IsSeparator;
     public string Text => Message.Kind switch
     {
         ChatKind.Join => $"{Message.Name} 进入了房间",
@@ -116,6 +118,21 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     [ObservableProperty] public partial string ChatStatus { get; set; } = "";
     [ObservableProperty] public partial bool ChatReady { get; set; }
     private int? _localChatPort;
+
+    /// <summary>每个房间的聊天记录只放在内存里（最近 5 个房间、每个 500 条），关掉 Amber 就没了，从不写磁盘。</summary>
+    private readonly ChatHistory<ChatLine> _chatHistory = new();
+
+    private void SaveChatHistory(RoomCode room) =>
+        _chatHistory.Save(room, ChatLines.Where(l => !l.IsSeparator));
+
+    private void RestoreChatHistory(RoomCode room)
+    {
+        ChatLines.Clear();
+        var lines = _chatHistory.Restore(room);
+        if (lines.Count == 0) return;
+        foreach (var line in lines) ChatLines.Add(line);
+        ChatLines.Add(new ChatLine(new ChatMessage(ChatKind.Message, "", "", "—— 以上是之前的消息（离开期间的消息看不到）——", DateTimeOffset.Now), false) { IsSeparator = true });
+    }
     [ObservableProperty] public partial string? TargetInstance { get; set; }
 
     [ObservableProperty]
@@ -356,6 +373,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         Mode = "host";
         RoomCodeText = room.ToString();
         _room = room;
+        RestoreChatHistory(room);
         StartHub(room);
         Status = FullLanMode
             ? "房间已创建（完整局域网模式）。把房间码发给朋友。如果朋友连不进来，在 Windows 防火墙里允许 Java（javaw.exe）通过“Amber LAN”网络。"
@@ -385,6 +403,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         var chatPort = FullLanMode ? (int?)null : EasyTierArgs.FreeTcpPort();
         if (!TryStartSession(new EasyTierOptions(room, false, TestPeers ?? _service.MultiplayerPeers, EasyTierArgs.FreeTcpPort(), local, TestListeners, Guid.NewGuid().ToString(), FullLanMode, chatPort, FullLanMode && AllowExitNode))) return;
         _room = room;
+        RestoreChatHistory(room);
         _localChatPort = chatPort;
         ChatStatus = "连上房主后自动进入聊天";
         Mode = "join";
@@ -461,7 +480,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             }
             _chat = client;
             ChatReady = true;
-            ChatStatus = "消息用房间密码加密，只有拿到房间码的人能看到；聊天记录只在这次联机期间保存在内存里。";
+            ChatStatus = "消息用房间密码加密，只有拿到房间码的人能看到；聊天记录只保存在内存里，关掉 Amber 就清空。";
         }
         catch (Exception e) when (e is System.Net.Sockets.SocketException or OperationCanceledException or IOException)
         {
@@ -674,6 +693,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _session = null;
         _service.ActiveMultiplayer = null;
         Peers.Clear();
+        if (_room is { } leftRoom) SaveChatHistory(leftRoom);
         _room = null;
         _localChatPort = null;
         _hubOnVirtualIp = false;

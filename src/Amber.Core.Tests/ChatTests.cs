@@ -135,3 +135,56 @@ public class ChatTests
         foreach (var c in new[] { a, spammer, intruder, big }) await c.DisposeAsync();
     }
 }
+
+public class ChatHistoryTests
+{
+    private static RoomCode Room(int i) => new("K7Q2M9X" + i, "4HZP8RW2N6TC", 25565);
+
+    [Fact]
+    public void SaveAndRestorePerRoom()
+    {
+        var history = new ChatHistory<string>();
+        history.Save(Room(1), ["a", "b"]);
+        history.Save(Room(2), ["c"]);
+        Assert.Equal(["a", "b"], history.Restore(Room(1)));
+        Assert.Equal(["c"], history.Restore(Room(2)));
+        Assert.Empty(history.Restore(Room(3)));
+        // 同一个网络名、不同密钥是另一个房间。
+        Assert.Empty(history.Restore(Room(1) with { Secret = "000000000000" }));
+    }
+
+    [Fact]
+    public void CapsPerRoomAndRoomCountLru()
+    {
+        var history = new ChatHistory<int>(maxRooms: 5, maxPerRoom: 500);
+        history.Save(Room(0), Enumerable.Range(0, 800));
+        Assert.Equal(500, history.Restore(Room(0)).Count);
+        Assert.Equal(300, history.Restore(Room(0))[0]);
+        for (var i = 1; i <= 5; i++)
+        {
+            history.Save(Room(i), [i]);
+            if (i == 3) history.Restore(Room(0));   // 房间 0 被用过，比房间 1、2 新
+        }
+        Assert.Equal(5, history.RoomCount);
+        Assert.Empty(history.Restore(Room(1)));
+        Assert.NotEmpty(history.Restore(Room(0)));
+        Assert.Equal([5], history.Restore(Room(5)));
+    }
+
+    [Fact]
+    public void KeyIsHashNotRoomCode()
+    {
+        var key = ChatHistory<string>.KeyOf(Room(1));
+        Assert.Matches("^[0-9a-f]{64}$", key);
+        Assert.DoesNotContain("4HZP8RW2N6TC", key, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void EmptySaveForgetsRoom()
+    {
+        var history = new ChatHistory<string>();
+        history.Save(Room(1), ["x"]);
+        history.Save(Room(1), []);
+        Assert.Equal(0, history.RoomCount);
+    }
+}
