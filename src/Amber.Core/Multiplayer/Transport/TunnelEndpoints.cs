@@ -38,6 +38,8 @@ public static class Pump
         try { await Task.WhenAll(up, down).WaitAsync(TimeSpan.FromSeconds(2)); } catch (TimeoutException) { }
         // 另一个方向收尾时才出错（比如本机连接在取消前一刻被重置）也一样。
         if (fromLocal is { IsCompletedSuccessfully: true, Result.Error: true }) secure!.Abort();
+        // 是外面取消（联机结束、程序退出）让转发停下的：数据流并没有正常结束，对面不能当成“正常关闭”。
+        if (ct.IsCancellationRequested) secure?.Abort();
         // 不管哪边先结束，只要封装通道没收到认证过的结束记录，就把本机那头重置，而不是正常关闭。
         if (secure is { ClosedCleanly: false }) abortLocal?.Invoke();
         await a.DisposeAsync();

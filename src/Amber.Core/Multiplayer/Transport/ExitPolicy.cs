@@ -69,6 +69,9 @@ public sealed partial class ExitPolicy : IDisposable
     /// <summary>已经查到本机公网地址，可以开始转发。没查到之前所有连接都拒绝（宁可不转，也不放过自己的公网地址）。</summary>
     public bool IsReady => _ready;
 
+    /// <summary>现在能不能转发：准备好了，而且公网 IP 没有旧到 <see cref="Allows"/> 会一律拒绝的程度。</summary>
+    public bool CanForward => IsFresh(MaxPublicIpAge == TimeSpan.MaxValue ? TimeSpan.MaxValue : MaxPublicIpAge + StaleGrace);
+
     /// <summary>查不到公网地址时的说明（这时不当出口）；正常时为 null。</summary>
     public string? Failure => _failure;
 
@@ -283,7 +286,7 @@ public sealed partial class ExitPolicy : IDisposable
     public bool Allows(IPAddress address)
     {
         // 公网 IP 太久没确认（后台一直查不到新结果）也拒绝：路由器可能已经换了 IP，旧的名单拦不住新的。
-        if (!IsFresh(MaxPublicIpAge == TimeSpan.MaxValue ? TimeSpan.MaxValue : MaxPublicIpAge + StaleGrace)) return false;
+        if (!CanForward) return false;
         var ip = Normalize(address);
         // 只转 IPv4：路由器的 IPv6 外网地址不在本机任何网段里，拦不全；Minecraft 服务器和 Mojang 都有 IPv4，Java 也优先用 IPv4。
         if (ip.AddressFamily != AddressFamily.InterNetwork) return false;
