@@ -191,7 +191,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
 
         content.SourceIndex = 1;
         await WaitAsync(() => content.Status.Contains("失败") || content.Results.Count > 0, 20);
-        Check("没配 Key 时 CurseForge 给出明确提示", content.Status.Contains("API Key") || content.Results.Count > 0, content.Status);
+        Check("没配 Key 时 CurseForge 给出明确提示", content.Status.Contains("API 密钥") || content.Results.Count > 0, content.Status);
         content.SourceIndex = 0;
     }
 
@@ -690,6 +690,18 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         download.SelectedLoader = download.LoaderChoices.First(c => c.Label == "Forge");
         await WaitAsync(() => download.LoaderVersions.Count > 0 || download.LoaderHint.Length > 0 && !download.LoaderHint.StartsWith("正在", StringComparison.Ordinal), 45);
         Check("下载页：1.5.2 能选 Forge 版本", download.LoaderVersions.Any(v => v.Version.StartsWith("1.5.2-", StringComparison.Ordinal)), $"{download.LoaderVersions.Count} 个 {download.LoaderHint}");
+        // 换语言时 Forge 的“推荐 / 最新”备注跟着换，但不能把用户填的名字改回默认。
+        Dispatcher.UIThread.Invoke(() => download.CustomName = "MyPack");
+        var noted = download.LoaderVersions.Count(v => v.Note is not null);
+        Amber.Core.Localization.L.SetLanguage("en");
+        await Task.Delay(800);
+        var englishNotes = download.LoaderVersions.Where(v => v.Note is not null).Select(v => v.Note).Distinct().ToList();
+        var nameKept = download.CustomName == "MyPack";
+        Amber.Core.Localization.L.SetLanguage(Amber.Core.Localization.L.Source);
+        await Task.Delay(500);
+        Check("下载页：换语言后 Forge 备注换成英文，自己填的名字不变",
+            nameKept && (noted == 0 || englishNotes.All(n => n is "Recommended" or "Latest")),
+            $"名字 {download.CustomName}，备注 {string.Join("/", englishNotes)}");
         download.CloseConfigureCommand.Execute(null);
 
         var instance = Page<InstanceViewModel>();

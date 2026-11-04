@@ -90,29 +90,39 @@ public static class L
         Changed?.Invoke();
     }
 
-    public static string T(string key)
-    {
-        var table = _state.Table;
-        return table.TryGetValue(key, out var text) ? text : Fallback.TryGetValue(key, out var source) ? source : key;
-    }
+    public static string T(string key) => Lookup(_state.Table, key);
+
+    private static string Lookup(IReadOnlyDictionary<string, string> table, string key) =>
+        table.TryGetValue(key, out var text) ? text : FallbackText(key) ?? key;
+
+    /// <summary>简体原文；单复数变体（key.one / key.other）在原文表里只有 key。</summary>
+    private static string? FallbackText(string key) =>
+        Fallback.TryGetValue(key, out var source) ? source
+        : PluralBaseKey(key) is { } b && Fallback.TryGetValue(b, out var baseText) ? baseText
+        : null;
+
+    private static string? PluralBaseKey(string key) =>
+        key.EndsWith(".one", StringComparison.Ordinal) ? key[..^4] : key.EndsWith(".other", StringComparison.Ordinal) ? key[..^6] : null;
 
     /// <summary>按当前语言的区域格式化。译文的占位符写错了（格式异常）时先用简体原文，再不行就直接显示文字，不让界面崩掉。</summary>
-    public static string F(string key, params object?[] args)
+    public static string F(string key, params object?[] args) => Format(_state, key, args);
+
+    private static string Format(State state, string key, object?[] args)
     {
-        var state = _state;
+        var text = Lookup(state.Table, key);
         try
         {
-            return string.Format(state.Culture, T(key), args);
+            return string.Format(state.Culture, text, args);
         }
         catch (FormatException)
         {
             try
             {
-                return Fallback.TryGetValue(key, out var source) ? string.Format(state.Culture, source, args) : key;
+                return FallbackText(key) is { } source ? string.Format(state.Culture, source, args) : text;
             }
             catch (FormatException)
             {
-                return T(key);
+                return text;
             }
         }
     }
@@ -121,7 +131,11 @@ public static class L
     /// 区分单复数：count 是 1 时优先用 key.one，否则用 key.other，都没有就用 key（中文、日文只有一种写法）。
     /// args 照常传给 F（count 本身要显示的话也放在 args 里）。
     /// </summary>
-    public static string P(string key, long count, params object?[] args) => F(PluralKey(_state.Table, key, count), args);
+    public static string P(string key, long count, params object?[] args)
+    {
+        var state = _state;
+        return Format(state, PluralKey(state.Table, key, count), args);
+    }
 
     /// <summary>在这张表里，count 对应用哪个键。</summary>
     internal static string PluralKey(IReadOnlyDictionary<string, string> table, string key, long count) =>

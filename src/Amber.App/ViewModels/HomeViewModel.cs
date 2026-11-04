@@ -57,12 +57,17 @@ public sealed partial class HomeViewModel : PageViewModel
     private List<string> _lastRunFiles = [];
     private bool _refreshingAccounts;
     private (string WorkDir, DateTime Started, string[] Output)? _crashInput;
+    /// <summary>每次显示新的崩溃结果（或清掉）加一：换语言的重新分析只在期间没有新结果时才替换。</summary>
+    private int _crashGeneration;
+
+    partial void OnCrashChanged(CrashAnalysis? value) => _crashGeneration++;
 
     protected override void OnLanguageChanged()
     {
         if (Crash is null || _crashInput is not { } input) return;
+        var generation = _crashGeneration;
         _ = Task.Run(() => CrashAnalyzer.AnalyzeRun(input.WorkDir, input.Started, input.Output)).ContinueWith(
-            t => { if (t.IsCompletedSuccessfully && Crash is not null) Crash = t.Result; },
+            t => { if (t.IsCompletedSuccessfully && Crash is not null && generation == _crashGeneration) Crash = t.Result; },
             TaskScheduler.FromCurrentSynchronizationContext());
     }
 

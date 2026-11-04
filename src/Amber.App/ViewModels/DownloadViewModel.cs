@@ -108,14 +108,33 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     protected override void OnLanguageChanged()
     {
         if (_loaderHint is not null) LoaderHint = _loaderHint();
-        // Forge 的“推荐 / 最新”备注是取列表时按当时的语言写的。
-        for (var i = 0; i < LoaderVersions.Count; i++)
-            if (LoaderVersions[i] is { Note: not null } v)
-            {
-                var selected = SelectedLoaderVersion == v;
-                LoaderVersions[i] = v with { Note = L.T(v.Recommended ? "core.install.forge.recommended" : "core.install.forge.latest") };
-                if (selected) SelectedLoaderVersion = LoaderVersions[i];
-            }
+        RelabelForgeNotes();
+    }
+
+    /// <summary>正在按新语言换 Forge 备注：重新选中同一个版本时不要改用户填的名字。</summary>
+    private bool _relabeling;
+
+    /// <summary>
+    /// Forge 的“推荐 / 最新”备注是取列表时按当时的语言写的，换语言时换掉。
+    /// 只动 Forge 的行（OptiFine 的备注写的是对应的 Forge 版本，不能改）。
+    /// </summary>
+    internal void RelabelForgeNotes()
+    {
+        _relabeling = true;
+        try
+        {
+            for (var i = 0; i < LoaderVersions.Count; i++)
+                if (LoaderVersions[i] is { Kind: LoaderKind.Forge, Note: not null } v)
+                {
+                    var selected = SelectedLoaderVersion == v;
+                    LoaderVersions[i] = v with { Note = L.T(v.Recommended ? "core.install.forge.recommended" : "core.install.forge.latest") };
+                    if (selected) SelectedLoaderVersion = LoaderVersions[i];
+                }
+        }
+        finally
+        {
+            _relabeling = false;
+        }
     }
 
     [ObservableProperty]
@@ -142,7 +161,10 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     partial void OnSearchChanged(string value) => ApplyFilter();
     partial void OnSelectedLoaderChanged(LoaderChoice value) => _ = LoadLoaderVersionsAsync();
     partial void OnShowUnstableLoadersChanged(bool value) => _ = LoadLoaderVersionsAsync();
-    partial void OnSelectedLoaderVersionChanged(LoaderVersion? value) => UpdateDefaultName();
+    partial void OnSelectedLoaderVersionChanged(LoaderVersion? value)
+    {
+        if (!_relabeling) UpdateDefaultName();
+    }
 
     [RelayCommand]
     private async Task RefreshAsync()

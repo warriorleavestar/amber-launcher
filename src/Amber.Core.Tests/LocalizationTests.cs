@@ -13,8 +13,8 @@ public partial class LocalizationTests
     /// <summary>开发用的自检文件不翻译。</summary>
     private static readonly string[] Excluded = ["SelfTest.cs", "LayoutCheck.cs"];
 
-    // 汉字、假名，以及中日文标点（、。「」……全角符号）：写死在代码里的标点换语言后也会留在文字中间。
-    [GeneratedRegex(@"[一-鿿぀-ヿ　-〿＀-￯]")]
+    // 汉字（含扩展 A）、假名、中日文标点和全角符号，以及中文里常用的 …“”—：写死在代码里的标点换语言后也会留在文字中间。
+    [GeneratedRegex(@"[㐀-䶿一-鿿぀-ヿ　-〿＀-￯…“”—]")]
     private static partial Regex Cjk();
 
     [GeneratedRegex(@"//[^\n]*|/\*.*?\*/", RegexOptions.Singleline)]
@@ -48,8 +48,11 @@ public partial class LocalizationTests
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
             .Where(f => !Excluded.Contains(Path.GetFileName(f)));
 
+    /// <summary>
+    /// 去掉注释，以及只有一个省略号的字符串（截断长文字时用的 "…"，跟语言无关）。
+    /// </summary>
     private static string StripComments(string file, string text) =>
-        file.EndsWith(".cs", StringComparison.Ordinal) ? CsComments().Replace(text, "") : XmlComments().Replace(text, "");
+        file.EndsWith(".cs", StringComparison.Ordinal) ? CsComments().Replace(text, "").Replace("\"…\"", "\"\"") : XmlComments().Replace(text, "");
 
     [Fact]
     public void NoHardCodedChineseInUi()

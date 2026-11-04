@@ -543,6 +543,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         // 快速切换实例或连续刷新时，只用最后一次读的结果；旧的读完不再往列表里加（否则会混进别的实例的模组、重复显示）。
         var generation = ++_modsGeneration;
         Mods.Clear();
+        _modsLoadedFor = null;
         var list = await Task.Run(() => new ModManager(c.ModsDir).List());
         if (generation != _modsGeneration || Current != c) return;
         foreach (var mod in list)
@@ -552,8 +553,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             if (mod.Icon is { } icon) _ = DecodeIconAsync(item, icon);
         }
         ModSummary = L.P("instance.mods.summary", list.Count, list.Count, list.Count(m => m.Enabled));
+        _modsLoadedFor = c;
         RecheckCompat();
     }
+
+    /// <summary>Mods 列表现在装的是哪个实例的模组（加载完才设；加载中或者换了实例时为 null）。</summary>
+    private GameInstance? _modsLoadedFor;
 
     /// <summary>按当前启用的模组重新算一遍每个模组的匹配情况（启用、禁用、删除之后也要重算）。</summary>
     private void UpdateInfoText()
@@ -565,7 +570,8 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     protected override void OnLanguageChanged()
     {
         UpdateInfoText();
-        if (Mods.Count > 0)
+        // 只在模组页已经加载完、而且是当前实例的模组时重算（加载中或者刚换实例时列表可能还是上一个实例的）。
+        if (_modsLoadedFor is { } loaded && ReferenceEquals(loaded, Current))
         {
             ModSummary = L.P("instance.mods.summary", Mods.Count, Mods.Count, Mods.Count(m => m.Enabled));
             // 兼容提示是检查时按当时的语言写的，重新检查一遍（只读已经扫描好的信息，很快）。
