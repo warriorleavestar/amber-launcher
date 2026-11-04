@@ -46,7 +46,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     public string[] Filters => [L.T("download.filter.release"), L.T("download.filter.snapshot"), L.T("download.filter.old"), L.T("common.all")];
     public ObservableCollection<RemoteVersionItem> Items { get; } = [];
 
-    public LoaderChoice[] LoaderChoices =>
+    public LoaderChoice[] LoaderChoices { get; } =
     [
         new("", null),
         new("Fabric", LoaderKind.Fabric),
