@@ -168,6 +168,15 @@ public sealed partial class MultiplayerViewModel : PageViewModel
 
     private RoomTransport? _transport;
     private DateTime _joinedAt;
+    /// <summary>这次加入之后连上过房主没有：连上过就不再提示“还没连上房主，检查房间码”。</summary>
+    private bool _hostSeen;
+
+    /// <summary>刚加入或者刚重启了联机组件：从现在开始计时，20 秒还没连上房主才提示。</summary>
+    private void MarkJoinStarted(bool newRoom)
+    {
+        _joinedAt = DateTime.UtcNow;
+        if (newRoom) _hostSeen = false;
+    }
     /// <summary>当前会话实际用的参数（完整局域网模式下换转发不重启 EasyTier，参数记在这里）。</summary>
     private EasyTierOptions? _currentOptions;
 
@@ -458,7 +467,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         if (!RoomCode.TryParse(JoinCode, out var room))
         {
-            Status = "房间码格式不对，应该像 AMB-XXXXXXXX-XXXXXXXXXXXX-25565";
+            Status = "房间码格式不对，应该像 AMB-XXXXXXXX-XXXXXXXXXXXX-25565，封装模式的码在 AMB- 后面多一段模式，比如 AMB-T2D-XXXXXXXX-XXXXXXXXXXXX-25565";
             return;
         }
         if (room.Tunnel.Mode == TransportMode.Extreme && !NoiseHandshake.HybridSupported)
@@ -481,7 +490,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
                 AllowProxy = AllowGameProxy,
             })) return;
         _room = room;
-        _joinedAt = DateTime.UtcNow;
+        MarkJoinStarted(newRoom: true);
         RestoreChatHistory(room);
         _localChatPort = chatPort;
         ChatStatus = "连上房主后自动进入聊天";
@@ -595,6 +604,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             {
                 _session = EasyTierSession.Start(_service.EasyTier, options, Path.Combine(AppSettings.DataDir, "easytier", "run"));
                 _service.ActiveMultiplayer = _session;
+                MarkJoinStarted(newRoom: false);
             }
             catch (Exception e) when (e is IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
             {
@@ -730,6 +740,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (old is EasyTierElevatedSession { HasExited: false } elevated)
         {
             elevated.Restart(options);
+            MarkJoinStarted(newRoom: false);
             return true;
         }
         old.Dispose();
@@ -737,6 +748,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         {
             _session = EasyTierElevatedSession.Start(_service.EasyTier, options, Path.Combine(AppSettings.DataDir, "easytier", "run-lan"));
             _service.ActiveMultiplayer = _session;
+            MarkJoinStarted(newRoom: false);
             return true;
         }
         catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
@@ -799,7 +811,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             }
             var host = Peers.FirstOrDefault(p => p.Peer.Ip == EasyTierArgs.HostIp && p.Peer.Cost != "Local");
             TickChat(host is not null);
-            if (IsJoined && host is null && DateTime.UtcNow - _joinedAt > TimeSpan.FromSeconds(20))
+            if (host is not null) _hostSeen = true;
+            if (IsJoined && host is null && !_hostSeen && DateTime.UtcNow - _joinedAt > TimeSpan.FromSeconds(20))
                 Status = "还没连上房主。请确认房间码完整（包括开头的 AMB- 和模式段），双方用同样的联机节点，而且都是同一版本的 Amber（封装模式需要 v0.5.7 或更新）。";
             else if (IsJoined)
                 Status = host is null ? "正在连接房主……（第一次可能要十几秒）"

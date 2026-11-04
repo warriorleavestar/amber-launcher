@@ -25,14 +25,16 @@ public sealed partial class HomeViewModel : PageViewModel
     {
         _proxyNotes.Clear();
         if (_service.ActiveGameProxy is not { } proxy) return (options, null);
-        // 用户自己在游戏参数里写了 --proxyHost 时不再加第二个。
-        var hasProxyArg = options.ExtraGameArgs.Any(a => a.Equals("--proxyHost", StringComparison.OrdinalIgnoreCase));
+        // 用户自己在游戏参数里写了 --proxyHost（或 --proxyHost=地址）时不再加第二个。
+        var hasProxyArg = options.ExtraGameArgs.Any(a => a.Equals("--proxyHost", StringComparison.OrdinalIgnoreCase) || a.StartsWith("--proxyHost=", StringComparison.OrdinalIgnoreCase));
         options = options with
         {
             ExtraJvmArgs = [.. options.ExtraJvmArgs, .. proxy.JvmArgs],
             ExtraGameArgs = hasProxyArg ? options.ExtraGameArgs : [.. options.ExtraGameArgs, .. proxy.GameArgs],
         };
         _proxyNotes.Add($"[Amber] 仅游戏转发：游戏里的 HTTP 请求（进服务器时的会话校验、皮肤）经 {proxy.ExitIp} 的电脑出去；域名在本机查询，Amber 自己刷新登录不经过它");
+        if (hasProxyArg)
+            _proxyNotes.Add("[Amber] 游戏参数里已经有你自己写的 --proxyHost：游戏会用你的代理，进服务器时的会话校验不经出口");
         if (options.JoinServer is not { Length: > 0 } server) return (options, null);
         // 本机、局域网、本机解析成私有地址的服务器不经出口（出口也会拒绝），游戏照常直连；端口是 25565 时像游戏一样查 SRV。
         if (await Amber.Core.Multiplayer.Transport.JoinTarget.ResolveForRelayAsync(server, onSkip: reason => _proxyNotes.Add("[Amber] 进服务器不经出口：" + reason)) is not { } plan)

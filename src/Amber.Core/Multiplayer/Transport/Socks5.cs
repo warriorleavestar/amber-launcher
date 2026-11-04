@@ -13,33 +13,34 @@ public static class Socks5
 {
     private const byte Version = 5;
 
+    /// <summary>握手（问候和请求）最多等这么久：不让人先开好一堆空闲连接，等网络变了再发请求。</summary>
+    public static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
+
     /// <summary>出口成员：处理一条已经接上的 SOCKS5 连接。</summary>
-    /// <param name="ready">出口准备好了没有（查到了自己的公网 IP）。没有时读完请求就回“网络不可达”，不解析也不连接。</param>
-    public static async Task ServeAsync(Stream client, CancellationToken ct, Action<string>? log = null, Func<IPAddress, bool>? allow = null, Func<int, bool>? allowPort = null, bool ready = true)
+    /// <param name="ready">出口准备好了没有（查到了自己的公网 IP）。没有时读完请求就回“出口没准备好”，不解析也不连接。</param>
+    /// <param name="ensureReady">收到请求之后、解析和连接之前调用（出口在这里确认公网 IP 还是新的）；返回 false 时同样回“出口没准备好”。</param>
+    public static async Task ServeAsync(Stream client, CancellationToken ct, Action<string>? log = null, Func<IPAddress, bool>? allow = null, Func<int, bool>? allowPort = null, bool ready = true,
+        Func<CancellationToken, Task<bool>>? ensureReady = null, TimeSpan? handshakeTimeout = null)
     {
         allowPort ??= ExitPolicy.AllowsPort;
         allow ??= IsPublic;
-        var head = new byte[2];
-        if (!await SecureStream.ReadExactAsync(client, head, ct) || head[0] != Version) return;
-        var methods = new byte[head[1]];
-        if (!await SecureStream.ReadExactAsync(client, methods, ct)) return;
-        if (!methods.Contains((byte)0))
+        string host;
+        int port;
+        using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
-            await client.WriteAsync(new byte[] { Version, 0xFF }, ct);
-            return;
+            deadline.CancelAfter(handshakeTimeout ?? HandshakeTimeout);
+            try
+            {
+                if (await ReadRequestAsync(client, deadline.Token) is not { } request) return;
+                (host, port) = request;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                log?.Invoke("[转发] 断开了一个连接：握手太慢");
+                return;
+            }
         }
-        await client.WriteAsync(new byte[] { Version, 0 }, ct);
-        await client.FlushAsync(ct);
-
-        var request = new byte[4];
-        if (!await SecureStream.ReadExactAsync(client, request, ct)) return;
-        if (request[0] != Version || request[1] != 1)
-        {
-            await ReplyAsync(client, 7, ct);   // 只支持 CONNECT
-            return;
-        }
-        var (host, port) = await ReadAddressAsync(client, request[3], ct);
-        if (!ready)
+        if (!ready || ensureReady is not null && !await ensureReady(ct))
         {
             log?.Invoke("[转发] 拒绝了一个连接：还没确认自己的公网 IP");
             await ReplyAsync(client, 3, ct);
@@ -64,6 +65,13 @@ public static class Socks5
         var targets = addresses.Where(allow).ToArray();
         if (targets.Length == 0)
         {
+            // 只有 IPv6 地址（里面也没嵌 IPv4）：单独回“地址类型不支持”，加入方能看到“出口只转 IPv4”。
+            if (addresses.Length > 0 && addresses.All(a => ExitPolicy.Normalize(a).AddressFamily == AddressFamily.InterNetworkV6))
+            {
+                log?.Invoke("[转发] 拒绝了一个连接：目标只有 IPv6 地址，出口只转 IPv4");
+                await ReplyAsync(client, 8, ct);
+                return;
+            }
             log?.Invoke("[转发] 拒绝了一个连接：目标是你的电脑、局域网或保留地址");
             await ReplyAsync(client, 2, ct);   // 规则不允许
             return;
@@ -83,6 +91,31 @@ public static class Socks5
         // 只记有连接经过，不记别人连去了哪里（导出诊断报告时也不会带出成员的访问记录）。
         log?.Invoke("[转发] 转发了一个连接");
         await Pump.RunAsync(client, remote.GetStream(), ct, () => Pump.Abort(remote));
+    }
+
+    /// <summary>读问候和 CONNECT 请求；对方断开或请求不对时返回 null（需要回复的已经回过了）。</summary>
+    private static async Task<(string Host, int Port)?> ReadRequestAsync(Stream client, CancellationToken ct)
+    {
+        var head = new byte[2];
+        if (!await SecureStream.ReadExactAsync(client, head, ct) || head[0] != Version) return null;
+        var methods = new byte[head[1]];
+        if (!await SecureStream.ReadExactAsync(client, methods, ct)) return null;
+        if (!methods.Contains((byte)0))
+        {
+            await client.WriteAsync(new byte[] { Version, 0xFF }, ct);
+            return null;
+        }
+        await client.WriteAsync(new byte[] { Version, 0 }, ct);
+        await client.FlushAsync(ct);
+
+        var request = new byte[4];
+        if (!await SecureStream.ReadExactAsync(client, request, ct)) return null;
+        if (request[0] != Version || request[1] != 1)
+        {
+            await ReplyAsync(client, 7, ct);   // 只支持 CONNECT
+            return null;
+        }
+        return await ReadAddressAsync(client, request[3], ct);
     }
 
     /// <summary>加入方：在流上发 CONNECT host:port，成功后这个流就是到目标的连接。</summary>
@@ -117,6 +150,7 @@ public static class Socks5
         {
             2 => $"出口拒绝连接 {host}:{port}（本机、局域网、保留地址和发邮件的端口不能经别人转发）",
             4 => $"出口那边找不到 {host}",
+            8 => $"出口只转 IPv4，{host} 只有 IPv6 地址，经出口进不去",
             3 => "出口还没准备好（还在确认它的公网 IP，或者它查不到自己的公网 IP），稍后再试",
             5 => $"{host}:{port} 拒绝连接",
             _ => $"出口连不上 {host}:{port}（代码 {reply[1]}）",

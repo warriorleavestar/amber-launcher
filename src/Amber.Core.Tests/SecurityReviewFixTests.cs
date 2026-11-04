@@ -101,7 +101,7 @@ public class SecurityReviewFixTests
     [Theory]
     [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565-T2")]     // 旧的模式写法
     [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565X")]
-    [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565-thanks")]
+    [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565-T3D")]
     [InlineData("AMB-T-K7Q2M9XD-4HZP8RW2N6TC-25565")]
     [InlineData("AMB-TX-K7Q2M9XD-4HZP8RW2N6TC-25565")]
     [InlineData("AMB-T0-K7Q2M9XD-4HZP8RW2N6TC-25565")]

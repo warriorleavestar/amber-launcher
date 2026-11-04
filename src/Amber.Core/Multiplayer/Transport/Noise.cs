@@ -21,7 +21,9 @@ public sealed class CipherState : IDisposable
     private ulong _n;
 
     public bool HasKey => _k is not null;
-    private bool _disposed;
+    private volatile bool _disposed;
+    /// <summary>换钥和关闭互斥：关闭之后换钥不能再把密钥装回去。</summary>
+    private readonly Lock _keyLock = new();
     public ulong Nonce => _n;
 
     /// <summary>接管 key 数组（之后由这个对象负责清零）；旧密钥先清零。</summary>
@@ -79,28 +81,34 @@ public sealed class CipherState : IDisposable
     /// <summary>Noise 规范 11.3 的 Rekey：k = ENCRYPT(k, 2^64-1, 空, 32 个零) 的前 32 字节。nonce 不变。</summary>
     public void Rekey()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_k is null) return;
-        var zeros = new byte[KeyLength];
-        var output = new byte[KeyLength];
-        var tag = new byte[TagLength];
-        var aead = _aead;
-        ObjectDisposedException.ThrowIf(_disposed || aead is null, this);
-        aead.Encrypt(NonceBytes(ulong.MaxValue), zeros, output, tag);
-        CryptographicOperations.ZeroMemory(_k);
-        var n = _n;
-        InitializeKey(output);
-        _n = n;
+        lock (_keyLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_k is null) return;
+            var zeros = new byte[KeyLength];
+            var output = new byte[KeyLength];
+            var tag = new byte[TagLength];
+            var aead = _aead;
+            ObjectDisposedException.ThrowIf(aead is null, this);
+            aead.Encrypt(NonceBytes(ulong.MaxValue), zeros, output, tag);
+            CryptographicOperations.ZeroMemory(_k);
+            var n = _n;
+            InitializeKey(output);
+            _n = n;
+        }
     }
 
     /// <summary>关闭时把密钥清零。之后再加解密会抛异常（不会退回“没有密钥就原样”的状态）。</summary>
     public void Dispose()
     {
-        _disposed = true;
-        if (_k is not null) CryptographicOperations.ZeroMemory(_k);
-        _k = null;
-        _aead?.Dispose();
-        _aead = null;
+        lock (_keyLock)
+        {
+            _disposed = true;
+            if (_k is not null) CryptographicOperations.ZeroMemory(_k);
+            _k = null;
+            _aead?.Dispose();
+            _aead = null;
+        }
     }
 }
 

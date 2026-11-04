@@ -29,17 +29,14 @@ public static class Pump
         var down = CopyAsync(b, a, linked.Token);
         var first = await Task.WhenAny(up, down);
         var secure = a as SecureStream ?? b as SecureStream;
-        if (secure is not null)
-        {
-            var readFromSecure = ReferenceEquals(secure, a) ? up : down;
-            if (first != readFromSecure && first.Result.Error)
-            {
-                // 本机那头出错断的：封装通道也按出错处理，不发“正常结束”。
-                secure.Abort();
-            }
-        }
+        // 从本机那头读、写进封装通道的那个方向。
+        var fromLocal = secure is null ? null : ReferenceEquals(secure, a) ? down : up;
+        // 本机那头出错断的：封装通道也按出错处理，不发“正常结束”。
+        if (first == fromLocal && first.Result.Error) secure!.Abort();
         linked.Cancel();
         try { await Task.WhenAll(up, down).WaitAsync(TimeSpan.FromSeconds(2)); } catch (TimeoutException) { }
+        // 另一个方向收尾时才出错（比如本机连接在取消前一刻被重置）也一样。
+        if (fromLocal is { IsCompletedSuccessfully: true, Result.Error: true }) secure!.Abort();
         // 不管哪边先结束，只要封装通道没收到认证过的结束记录，就把本机那头重置，而不是正常关闭。
         if (secure is { ClosedCleanly: false }) abortLocal?.Invoke();
         await a.DisposeAsync();
@@ -68,8 +65,9 @@ public static class Pump
         {
             return (total, false);
         }
-        catch (Exception e) when (e is IOException or ObjectDisposedException or CryptographicException or SocketException or EndOfStreamException)
+        catch (Exception)
         {
+            // 不认识的异常也算出错结束：宁可当成截断，也不发“正常结束”。
             return (total, true);
         }
     }
@@ -174,6 +172,8 @@ public sealed class TunnelServer : IAsyncDisposable
             }
             catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException or PlatformNotSupportedException or InvalidDataException or ArgumentException)
             {
+                // 出错断开：不给对面发“正常结束”。
+                (stream as SecureStream)?.Abort();
                 Interlocked.Increment(ref Rejected);
                 if (e is CryptographicException or PlatformNotSupportedException) _log?.Invoke("[封装] 握手或认证失败，连接已断开：" + e.Message);
             }
@@ -279,6 +279,9 @@ public sealed class TunnelClient : IAsyncDisposable
             }
             catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException or InvalidDataException or PlatformNotSupportedException or ArgumentException)
             {
+                // 出错断开：封装通道不发“正常结束”，本机的游戏连接也直接重置。
+                (remote as SecureStream)?.Abort();
+                Pump.Abort(game);
                 Interlocked.Increment(ref Failures);
                 _log?.Invoke("[封装] 连不上对面：" + e.Message);
             }

@@ -213,6 +213,8 @@ public sealed partial class MultiplayerViewModel
         IsDirect = true;
         _room = room;
         _session = direct.EasyTier;
+        // 直连从组件真正开起来时开始计时（之前在等回复码、打洞）。
+        MarkJoinStarted(newRoom: true);
         _sessionCts = new CancellationTokenSource();
         _service.ActiveMultiplayer = new DirectHandle(direct);
         direct.StateChanged += () => Dispatcher.UIThread.Post(() =>

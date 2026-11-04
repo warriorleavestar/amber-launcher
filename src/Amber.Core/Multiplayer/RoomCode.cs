@@ -69,7 +69,7 @@ public sealed record RoomCode(string Network, string Secret, int Port)
         var firstDash = body.IndexOf('-');
         if (firstDash is > 0 and < NetworkLength)
         {
-            var marker = body[..firstDash];
+            var marker = body[..firstDash].Trim();
             if (marker.Length is < 2 or > 3 || marker[0] != 'T' || marker[1] is < '1' or > '3' || marker.Length == 3 && marker[2] != 'D') return false;
             tunnel = new Transport.TunnelSettings((Transport.TransportMode)(marker[1] - '0'), marker.Length == 3);
             body = body[(firstDash + 1)..];
@@ -82,10 +82,11 @@ public sealed record RoomCode(string Network, string Secret, int Port)
         var digits = new string(parts[2].TakeWhile(char.IsAsciiDigit).ToArray());
         if (network is not { Length: NetworkLength } || secret is not { Length: SecretLength }) return false;
         if (!int.TryParse(digits, out var port) || port is < 1 or > 65535) return false;
-        // 端口后面紧跟字母数字或者“-字母数字”（比如旧的 -T2 写法、被改坏的码）都算格式不对；空格、中文等普通文字可以。
+        // 端口后面紧跟字母数字（被改坏的码）、或者“-T数字”（旧的把模式写在末尾的写法）算格式不对；
+        // 空格、中文、“-thanks”这类粘贴时带上的普通文字可以。
         var rest = parts[2][digits.Length..];
         if (rest.Length > 0 && char.IsAsciiLetterOrDigit(rest[0])) return false;
-        if (rest.Length > 1 && rest[0] == '-' && char.IsAsciiLetterOrDigit(rest[1])) return false;
+        if (rest.Length > 2 && rest[0] == '-' && rest[1] == 'T' && char.IsAsciiDigit(rest[2])) return false;
         room = new RoomCode(network, secret, port) { Tunnel = tunnel };
         return true;
     }

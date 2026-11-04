@@ -9,7 +9,8 @@ namespace Amber.Core.Multiplayer.Transport;
 /// “仅游戏”转发出口的目标地址规则：别人借你上网时，只能连公网上的别的机器，碰不到你自己的电脑、路由器和家里的设备。
 /// 拒绝：
 ///   保留和私有地址（本机回环、私有网段、链路本地、CGNAT、组播 / 广播、ULA、文档和基准测试网段、EasyTier 虚拟网段）；
-///   IPv6 里嵌着 IPv4 的各种写法（::ffff:a.b.c.d、::a.b.c.d、64:ff9b::/96、64:ff9b:1::/48、6to4 2002::/16、Teredo 2001::/32）——按里面的 IPv4 再判断一次；
+///   IPv6 里嵌着 IPv4 的各种写法（::ffff:a.b.c.d、::a.b.c.d、64:ff9b::/96、6to4 2002::/16、Teredo 2001::/32）——按里面的 IPv4 再判断一次；
+///   其余 IPv6 目标一律不转（只转 IPv4）；
 ///   本机所有网卡的地址（包括公网 IPv6 和临时地址）以及这些网卡所在的网段（家里其他设备的公网 IPv6 也在里面）；
 ///   路由器的公网 IPv4（经 STUN 查到的，以及端口映射报告的外部地址）。
 /// 主机名在出口这边解析，按解析出的每个地址判断，连接也只连判断过的地址（不会被 DNS 重绑定绕过）。
@@ -54,6 +55,15 @@ public sealed partial class ExitPolicy : IDisposable
     /// 超过这个时间，新的转发连接先重查一次再放行。
     /// </summary>
     internal TimeSpan MaxPublicIpAge { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// 公网 IP 超过 MaxPublicIpAge 之后，<see cref="Allows"/> 还容忍这么久（给正在重查的连接留时间），再久就一律拒绝，
+    /// 哪怕后台一直查不到新结果。
+    /// </summary>
+    internal TimeSpan StaleGrace { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>正在进行的重查：同时来的多条连接共用这一次，不各自排队查 STUN。</summary>
+    private Task? _inflight;
 
     /// <summary>已经查到本机公网地址，可以开始转发。没查到之前所有连接都拒绝（宁可不转，也不放过自己的公网地址）。</summary>
     public bool IsReady => _ready;
@@ -110,16 +120,20 @@ public sealed partial class ExitPolicy : IDisposable
         {
             var generation = Volatile.Read(ref _generation);
             var ok = await (Discover ?? (c => DiscoverPublicAddressAsync(_stunServers, c)))(ct);
-            if (ok && generation == Volatile.Read(ref _generation))
+            // 检查“期间网络没变”和设成可用放在同一把锁里：网络变化（也拿这把锁）不会插在两步中间。
+            lock (_lock)
             {
-                _failure = null;
-                Interlocked.Exchange(ref _lastSuccessTicks, System.Diagnostics.Stopwatch.GetTimestamp());
-                _ready = true;
-            }
-            else if (!ok)
-            {
-                _ready = false;
-                _failure = "查不到你的公网 IP（STUN 服务器连不上，可能是 UDP 被拦了），为了不让别人经你连到你的路由器，暂时不转发。网络恢复后会自动重试。";
+                if (ok && generation == _generation)
+                {
+                    _failure = null;
+                    Interlocked.Exchange(ref _lastSuccessTicks, System.Diagnostics.Stopwatch.GetTimestamp());
+                    _ready = true;
+                }
+                else if (!ok)
+                {
+                    _ready = false;
+                    _failure = "查不到你的公网 IP（STUN 服务器连不上，可能是 UDP 被拦了），为了不让别人经你连到你的路由器，暂时不转发。网络恢复后会自动重试。";
+                }
             }
         }
         finally
@@ -128,28 +142,35 @@ public sealed partial class ExitPolicy : IDisposable
         }
     }
 
+    private bool IsFresh(TimeSpan maxAge) =>
+        _ready && (maxAge == TimeSpan.MaxValue || System.Diagnostics.Stopwatch.GetElapsedTime(Interlocked.Read(ref _lastSuccessTicks)) <= maxAge);
+
     /// <summary>
-    /// 每条转发连接开始前调用：公网 IP 查到太久（可能路由器重新拨号了）就先重查一次，多条连接同时来时只查一次。
-    /// 返回能不能转发；查不到、超时或者网络刚变化时返回 false。
+    /// 每次转发前（收到 CONNECT 请求、去连目标之前）调用：公网 IP 查到太久（可能路由器重新拨号了）就先重查一次。
+    /// 多条连接同时来时共用同一次重查。返回能不能转发；查不到、超时或者网络刚变化时返回 false。
     /// </summary>
     public async Task<bool> EnsureFreshAsync(TimeSpan timeout, CancellationToken ct)
     {
-        var started = Interlocked.Read(ref _lastSuccessTicks);
-        if (_ready && System.Diagnostics.Stopwatch.GetElapsedTime(started) <= MaxPublicIpAge) return true;
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        limit.CancelAfter(timeout);
+        if (IsFresh(MaxPublicIpAge)) return true;
+        Task refresh;
+        lock (_lock)
+        {
+            if (_inflight is null || _inflight.IsCompleted) _inflight = RefreshPublicAsync(_cts.Token);
+            refresh = _inflight;
+        }
         try
         {
-            await _refreshLock.WaitAsync(limit.Token);
-            _refreshLock.Release();
-            // 等锁期间别的连接已经查过了，就不再查。
-            if (Interlocked.Read(ref _lastSuccessTicks) == started || !_ready) await RefreshPublicAsync(limit.Token);
+            await refresh.WaitAsync(timeout, ct);
+        }
+        catch (TimeoutException)
+        {
+            return false;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             return false;
         }
-        return _ready;
+        return IsFresh(MaxPublicIpAge);
     }
 
     /// <summary>测试用：指定本机地址和网段，不读真实网卡。</summary>
@@ -165,8 +186,8 @@ public sealed partial class ExitPolicy : IDisposable
     /// <summary>测试用：模拟还没查到公网地址的状态。</summary>
     internal void SetReady(bool ready)
     {
-        _ready = ready;
         if (ready) _lastSuccessTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        _ready = ready;
     }
 
     /// <summary>测试用：模拟网卡地址变化。</summary>
@@ -175,9 +196,14 @@ public sealed partial class ExitPolicy : IDisposable
     /// <summary>网卡地址变了：先停止转发，再重新收集本机地址，公网地址也重新查，查到之前不转发。</summary>
     private void OnAddressChanged(object? sender, EventArgs e)
     {
-        _ready = false;
-        Interlocked.Increment(ref _generation);
+        lock (_lock)
+        {
+            _ready = false;
+            _generation++;
+        }
         RefreshLocal();
+        // 收集网卡期间开始、按旧网段算的查询也作废。
+        lock (_lock) _generation++;
         _failure = null;
         Volatile.Read(ref _wake).TrySetResult();
     }
@@ -249,7 +275,8 @@ public sealed partial class ExitPolicy : IDisposable
     /// <summary>这个目标能不能经出口连。</summary>
     public bool Allows(IPAddress address)
     {
-        if (!_ready) return false;
+        // 公网 IP 太久没确认（后台一直查不到新结果）也拒绝：路由器可能已经换了 IP，旧的名单拦不住新的。
+        if (!IsFresh(MaxPublicIpAge == TimeSpan.MaxValue ? TimeSpan.MaxValue : MaxPublicIpAge + StaleGrace)) return false;
         var ip = Normalize(address);
         // 只转 IPv4：路由器的 IPv6 外网地址不在本机任何网段里，拦不全；Minecraft 服务器和 Mojang 都有 IPv4，Java 也优先用 IPv4。
         if (ip.AddressFamily != AddressFamily.InterNetwork) return false;
@@ -273,8 +300,8 @@ public sealed partial class ExitPolicy : IDisposable
         var b = address.GetAddressBytes();
         // ::a.b.c.d（已废弃的 IPv4 兼容地址）；:: 和 ::1 不算。
         if (b.Take(12).All(x => x == 0) && !(b[12] == 0 && b[13] == 0 && b[14] == 0 && b[15] <= 1)) return new IPAddress(b[12..16]);
-        // NAT64：64:ff9b::/96 和 64:ff9b:1::/48（嵌在最后 4 字节）。
-        if (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b && (b.Skip(4).Take(8).All(x => x == 0) || b[4] == 0 && b[5] == 1))
+        // NAT64：64:ff9b::/96（嵌在最后 4 字节）。
+        if (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b && b.Skip(4).Take(8).All(x => x == 0))
             return new IPAddress(b[12..16]);
         // 6to4：2002:AABB:CCDD::/48，嵌的是 AA.BB.CC.DD。
         if (b[0] == 0x20 && b[1] == 0x02) return new IPAddress(b[2..6]);
@@ -339,7 +366,16 @@ public sealed partial class ExitPolicy : IDisposable
                 if (ReadSockaddr(row + 12) is not { } destination) continue;
                 var nextHop = ReadSockaddr(row + 44);
                 var onLink = nextHop is null || nextHop.Equals(IPAddress.Any) || nextHop.Equals(IPAddress.IPv6Any);
-                rows.Add((index, Normalize(destination), prefixLength, onLink));
+                var normalized = Normalize(destination);
+                // IPv6 里嵌着的 IPv4 换成 IPv4 后，前缀长度也要按 IPv4 算（和网卡地址那里一样）。
+                int prefix = prefixLength;
+                if (destination.AddressFamily == AddressFamily.InterNetworkV6 && normalized.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    prefix -= 96;
+                    // 比 /96 还宽的嵌入式前缀（比如整个 ::ffff:0:0/96）换算后什么都不剩，不能当成默认路由。
+                    if (prefix <= 0) continue;
+                }
+                rows.Add((index, normalized, prefix, onLink));
             }
             // 有默认路由的网卡（正常上网走的那块）。
             var defaultInterfaces = rows.Where(r => r.Prefix == 0).Select(r => r.Interface).ToHashSet();
@@ -392,6 +428,7 @@ public sealed partial class ExitPolicy : IDisposable
         if (ip.AddressFamily != network.AddressFamily) return false;
         var a = ip.GetAddressBytes();
         var n = network.GetAddressBytes();
+        prefixLength = Math.Clamp(prefixLength, 0, a.Length * 8);
         var full = prefixLength / 8;
         for (var i = 0; i < full; i++)
             if (a[i] != n[i]) return false;

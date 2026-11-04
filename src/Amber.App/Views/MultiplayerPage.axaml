@@ -47,7 +47,7 @@
             <StackPanel Spacing="8">
               <TextBlock Classes="h2" Text="加入朋友的房间" Margin="0" />
               <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="把朋友发来的房间码粘贴到这里。" />
-              <TextBox Text="{Binding JoinCode}" PlaceholderText="AMB-XXXXXXXX-XXXXXXXXXXXX-端口" />
+              <TextBox Text="{Binding JoinCode}" PlaceholderText="AMB-[模式-]XXXXXXXX-XXXXXXXXXXXX-端口" />
               <Button Classes="amber" Content="加入房间" Command="{Binding JoinCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
             </StackPanel>
           </Border>
