@@ -60,6 +60,12 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Directory.CreateDirectory(reportDir);
         try
         {
+            // 先检查每个页面在各种窗口大小下有没有被切掉的东西（截图放在报告目录的 layout 文件夹）。
+            var layout = await new LayoutCheck(window, main, Path.Combine(reportDir, "layout")).RunAsync(Log);
+            Check($"界面尺寸：{main.Pages.Count} 个页面 × {LayoutCheck.Sizes.Length} 种窗口大小没有被切掉的内容", layout.Count == 0,
+                layout.Count == 0 ? "" : string.Join("；", layout.Take(5).Select(p => $"{p.Page}@{p.Size} {p.What}")));
+            window.Width = 1080;
+            window.Height = 700;
             await InstallLoaderAsync();
             await InstallModAsync();
             await InstanceAsync();

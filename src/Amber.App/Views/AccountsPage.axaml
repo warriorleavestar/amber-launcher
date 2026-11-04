@@ -4,12 +4,17 @@
              xmlns:auth="using:Amber.Core.Auth"
              x:Class="Amber.App.Views.AccountsPage"
              x:DataType="vm:AccountsViewModel">
-  <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,330">
+  <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,Auto">
     <TextBlock Classes="h1" Text="账号" Grid.ColumnSpan="2" />
 
     <Border Grid.Row="1" Classes="card" Padding="8">
-      <Grid RowDefinitions="*,Auto">
-        <ListBox ItemsSource="{Binding Accounts}" Background="Transparent">
+      <!-- 皮肤预览放在列表左边一块固定大小的区域里，不再挤在下面留一大块空白 -->
+      <Grid ColumnDefinitions="Auto,*">
+        <Border Width="104" Margin="4,4,10,4" VerticalAlignment="Top" IsVisible="{Binding Current.Body, Converter={x:Static ObjectConverters.IsNotNull}}">
+          <Image Source="{Binding Current.Body}" Width="96" Height="192" Stretch="Uniform"
+                 RenderOptions.BitmapInterpolationMode="None" ToolTip.Tip="当前账号的皮肤" />
+        </Border>
+        <ListBox Grid.Column="1" ItemsSource="{Binding Accounts}" Background="Transparent">
           <ListBox.ItemTemplate>
             <DataTemplate DataType="vm:AccountItem">
               <Grid ColumnDefinitions="Auto,*,Auto" Margin="4">
@@ -22,10 +27,10 @@
                 </Border>
                 <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
                   <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
                     <TextBlock Text="当前" IsVisible="{Binding IsCurrent}" Foreground="{DynamicResource AmberAccent}" />
                   </StackPanel>
-                  <TextBlock Text="{Binding KindText}" Classes="hint" FontSize="12" />
+                  <TextBlock Text="{Binding KindText}" Classes="hint" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding KindText}" />
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                   <Button Content="使用" Command="{Binding $parent[ListBox].((vm:AccountsViewModel)DataContext).UseCommand}" CommandParameter="{Binding}" />
@@ -35,12 +40,10 @@
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>
-        <Image Grid.Row="1" Source="{Binding Current.Body}" Height="160" Margin="0,8" HorizontalAlignment="Center"
-               RenderOptions.BitmapInterpolationMode="None" />
       </Grid>
     </Border>
 
-    <Border Grid.Row="1" Grid.Column="1" Classes="card" Margin="14,0,0,14">
+    <Border Grid.Row="1" Grid.Column="1" Classes="card" Margin="14,0,0,14" Width="320" MinWidth="240">
       <ScrollViewer>
         <StackPanel Spacing="10">
           <TextBlock Classes="h2" Text="添加账号" Margin="0" />
@@ -49,11 +52,11 @@
           <StackPanel Spacing="10" IsVisible="{Binding IsOfflineTab}">
             <TextBox Text="{Binding OfflineName}" PlaceholderText="玩家名（3-16 位字母数字下划线）" MaxLength="16" />
             <Button Classes="amber" Content="添加离线账号" Command="{Binding AddOfflineCommand}" />
-            <TextBlock Classes="hint" Text="离线账号只能进单人和离线模式服务器。" />
+            <TextBlock Classes="hint" Text="离线账号只能进单人和离线模式服务器。" TextWrapping="Wrap" />
           </StackPanel>
 
           <StackPanel Spacing="10" IsVisible="{Binding IsMicrosoftTab}">
-            <TextBlock Text="Azure 应用 Client ID（可选，留空用内置默认值）" />
+            <TextBlock Text="Azure 应用 Client ID（可选，留空用内置默认值）" TextWrapping="Wrap" />
             <TextBox Text="{Binding ClientIdInput}" PlaceholderText="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
             <TextBlock Classes="hint"
                        Text="高级：可以换成你自己的 Azure 应用 Client ID，也可以用环境变量 AMBER_MS_CLIENT_ID。一般不用填。" />
@@ -87,7 +90,7 @@
               </ComboBox>
               <Button Content="确定" Command="{Binding ConfirmProfileCommand}" />
             </StackPanel>
-            <TextBlock Classes="hint" Text="支持 authlib-injector 协议的皮肤站（LittleSkin、Blessing Skin 等）。" />
+            <TextBlock Classes="hint" Text="支持 authlib-injector 协议的皮肤站（LittleSkin、Blessing Skin 等）。" TextWrapping="Wrap" />
           </StackPanel>
         </StackPanel>
       </ScrollViewer>

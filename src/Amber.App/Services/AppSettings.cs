@@ -47,6 +47,9 @@ public sealed class AppSettings
     /// <summary>system / light / dark</summary>
     public string Theme { get; set; } = "system";
 
+    /// <summary>启动器窗口上次的位置和大小（逻辑像素，按当时那块屏幕记）。</summary>
+    public WindowPlacement? LauncherWindow { get; set; }
+
     /// <summary>联机用的 EasyTier 中继节点，空表示用 EasyTier 社区的公共节点。</summary>
     public List<string>? MultiplayerPeers { get; set; }
 
@@ -107,4 +110,14 @@ internal static class AppSettingsJson
 {
     internal static JsonSerializerOptions Options => AppSettings.JsonOptions;
     internal static System.Text.Json.Serialization.Metadata.IJsonTypeInfoResolver Generated => AppJsonContext.Default;
+}
+
+/// <summary>窗口位置（物理像素）和大小（逻辑像素），以及是否最大化。</summary>
+public sealed class WindowPlacement
+{
+    public int X { get; set; }
+    public int Y { get; set; }
+    public double Width { get; set; }
+    public double Height { get; set; }
+    public bool Maximized { get; set; }
 }

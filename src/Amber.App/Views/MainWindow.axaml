@@ -6,7 +6,7 @@
         x:DataType="vm:MainViewModel"
         Title="Amber 启动器"
         Icon="/Assets/amber.ico"
-        Width="1080" Height="700" MinWidth="900" MinHeight="560"
+        Width="1080" Height="700" MinWidth="760" MinHeight="440"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource PageBackground}">
 
@@ -114,18 +114,21 @@
   <Grid ColumnDefinitions="180,*">
     <!-- 侧边栏 -->
     <Border Background="{DynamicResource SidebarBackground}">
-      <DockPanel>
-        <StackPanel DockPanel.Dock="Top" Margin="20,24,20,18" Spacing="2">
+      <!-- 标题、导航、版本三行：导航放不下时自己滚动，版本那行永远在底部看得见 -->
+      <Grid RowDefinitions="Auto,*,Auto">
+        <StackPanel Margin="20,18,20,12" Spacing="2">
           <TextBlock Text="Amber" FontSize="26" FontWeight="Bold" Foreground="{DynamicResource AmberAccent}" />
           <TextBlock Text="Minecraft 启动器" FontSize="12" Foreground="#B0A89E" />
         </StackPanel>
-        <TextBlock DockPanel.Dock="Bottom" Text="{Binding VersionText}" FontSize="11" Foreground="#80786E" Margin="20,0,0,16" />
-        <ListBox Classes="nav" ItemsSource="{Binding Pages}" SelectedItem="{Binding CurrentPage}" Background="Transparent" Margin="8,0">
+        <TextBlock Grid.Row="2" Text="{Binding VersionText}" FontSize="11" Foreground="#80786E" Margin="20,6,8,12"
+                   TextWrapping="Wrap" />
+        <ListBox Grid.Row="1" Classes="nav" ItemsSource="{Binding Pages}" SelectedItem="{Binding CurrentPage}" Background="Transparent" Margin="8,0"
+                 ClipToBounds="True">
           <ListBox.Styles>
             <Style Selector="ListBoxItem">
               <Setter Property="CornerRadius" Value="8" />
               <Setter Property="Margin" Value="0,1" />
-              <Setter Property="Padding" Value="12,8" />
+              <Setter Property="Padding" Value="12,7" />
             </Style>
           </ListBox.Styles>
           <ListBox.ItemTemplate>
@@ -140,7 +143,7 @@
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>
-      </DockPanel>
+      </Grid>
     </Border>
 
     <!-- 内容区 -->
