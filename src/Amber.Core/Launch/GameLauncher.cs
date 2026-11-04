@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core;
 using System.Diagnostics;
 using System.IO.Compression;
@@ -125,7 +126,7 @@ public sealed class GameLauncher(GameDirectory dir)
         }
         args.AddRange(options.ExtraJvmArgs);
 
-        args.Add(version.MainClass ?? throw new InvalidDataException($"{options.VersionId} 没有 mainClass"));
+        args.Add(version.MainClass ?? throw new InvalidDataException(L.F("core.launch.game.missingmainclass", options.VersionId)));
 
         if (version.Arguments?.Game is { Count: > 0 } game)
             args.AddRange(Expand(game, rules).Select(a => Substitute(a, vars)));
@@ -223,10 +224,10 @@ public sealed class GameLauncher(GameDirectory dir)
         if (IsPreLaunchwrapperHome(version) && AsciiPaths.LegacyHome(realWorkDir, onOutput) is { } home)
         {
             psi.Environment["APPDATA"] = home;
-            onOutput?.Invoke($"[Amber] 旧版本：这次游戏的 APPDATA 指向 {home}（其中 .minecraft 就是实例目录），不会写到你自己的 .minecraft");
+            onOutput?.Invoke(L.F("core.launch.game.legacyappdata", home));
         }
 
-        var process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动 Java 进程");
+        var process = Process.Start(psi) ?? throw new InvalidOperationException(L.T("core.launch.game.javastartfailed"));
         if (onOutput is not null)
         {
             process.OutputDataReceived += (_, e) => { if (e.Data is not null) onOutput(e.Data); };

@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 namespace Amber.Core.Content;
 
 public enum ContentType { Mod, ResourcePack, Shader, Modpack, Datapack }
@@ -65,4 +66,4 @@ public sealed record IdentifiedFile(string LocalPath, ContentFile File);
 /// <summary>可更新的模组：Current 是本地文件，Latest 是远端的新版本。</summary>
 public sealed record ModUpdate(string LocalPath, ContentFile Latest);
 
-public sealed class MissingApiKeyException() : InvalidOperationException("CurseForge 需要你自己的 API Key，请到「设置」页填写（console.curseforge.com 可以申请）");
+public sealed class MissingApiKeyException() : InvalidOperationException(L.T("core.content.curseforge.missingapikey"));

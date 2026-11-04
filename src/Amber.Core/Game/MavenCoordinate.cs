@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 namespace Amber.Core.Game;
 
 /// <summary>Maven 坐标 group:artifact:version[:classifier][@ext]。</summary>
@@ -13,7 +14,7 @@ public readonly record struct MavenCoordinate(string Group, string Artifact, str
             name = name[..at];
         }
         var parts = name.Split(':');
-        if (parts.Length < 3) throw new FormatException($"不是合法的 Maven 坐标：{name}");
+        if (parts.Length < 3) throw new FormatException(L.F("core.game.maven.invalidcoordinate", name));
         return new MavenCoordinate(parts[0], parts[1], parts[2], parts.Length > 3 ? parts[3] : null, ext);
     }
 

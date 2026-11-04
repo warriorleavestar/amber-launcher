@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -63,25 +64,25 @@ public sealed class DirectSession : IAsyncDisposable
         _log = log;
     }
 
-    private void Log(string text) => _log.Add(IsHost ? "房主" : "加入方", text);
+    private void Log(string text) => _log.Add(IsHost ? L.T("core.mp.session.host") : L.T("core.mp.session.guest"), text);
 
     /// <summary>收集地址，建好直连桥，生成自己的码（房主是邀请码，加入方是回复码）。房主同时启动 EasyTier。</summary>
     public async Task<DirectCode> PrepareAsync(CancellationToken ct = default)
     {
         var socket = DirectBridge.CreateSocket();
-        Log($"直连套接字：UDP {((IPEndPoint)socket.LocalEndPoint!).Port}");
+        Log(L.F("core.mp.session.socket", ((IPEndPoint)socket.LocalEndPoint!).Port));
         if (Options.Simulated)
         {
             // 本机模拟：只用回环地址，不查 STUN、不改路由器。结果会标“模拟”。
             var port = ((IPEndPoint)socket.LocalEndPoint!).Port;
-            _gathered = new DirectGatherer.Gathered([new Candidate(PathKind.Lan, new IPEndPoint(IPAddress.Loopback, port))], NatKind.Cone, "本机模拟", null);
-            Log("模拟模式：只用 127.0.0.1，跳过 STUN 和路由器端口映射");
+            _gathered = new DirectGatherer.Gathered([new Candidate(PathKind.Lan, new IPEndPoint(IPAddress.Loopback, port))], NatKind.Cone, L.T("core.mp.session.simulated"), null);
+            Log(L.T("core.mp.session.simulation"));
         }
         else
         {
             _gathered = await DirectGatherer.GatherAsync(socket, Options.StunServers, Options.TryPortMapping, Log, ct);
         }
-        Log($"网络类型：{DirectText.Nat(_gathered.Nat)}");
+        Log(L.F("core.mp.session.nat", DirectText.Nat(_gathered.Nat)));
         if (IsHost)
         {
             _easyTierUdpPort = FreeUdpPort();
@@ -128,7 +129,7 @@ public sealed class DirectSession : IAsyncDisposable
     private async Task StartEasyTierAsync(EasyTierOptions options, CancellationToken ct)
     {
         if (_currentOptions is { } current && SameConfig(current, options) && EasyTier is { HasExited: false }) return;
-        Log("启动 EasyTier：" + string.Join(' ', EasyTierArgs.Build(options).Select(a => a == Room.Secret ? "<房间密钥>" : a)));
+        Log(L.T("core.mp.session.start") + string.Join(' ', EasyTierArgs.Build(options).Select(a => a == Room.Secret ? L.T("core.mp.diagnostics.secret") : a)));
         if (EasyTier is EasyTierElevatedSession elevated && !elevated.HasExited)
         {
             elevated.Restart(options);
@@ -157,7 +158,7 @@ public sealed class DirectSession : IAsyncDisposable
         _remote = invite;
         if (LocalCode is { } code) LocalCode = code with { Session = invite.Session };
         Bridge!.SetRemoteCandidates(invite.Candidates);
-        Log($"房主网络类型：{DirectText.Nat(invite.Nat)}；地址：{string.Join("、", invite.Candidates)}");
+        Log(L.F("core.mp.session.hostnat", DirectText.Nat(invite.Nat), string.Join(L.T("core.mp.format.listseparator"), invite.Candidates)));
         var peer = await Bridge.PunchAsync(invite.Candidates, invite.Nat, TimeSpan.FromSeconds(invite.DirectlyReachable ? 20 : 90), ct);
         if (peer is not null)
         {
@@ -165,10 +166,10 @@ public sealed class DirectSession : IAsyncDisposable
             return true;
         }
         var reason = FailureReason(invite.Nat, LocalNat, invite.Candidates, _gathered?.Candidates ?? []);
-        Log("直连失败：" + reason);
+        Log(L.T("core.mp.session.failed") + reason);
         if (Options.FallbackNodes.Count > 0)
         {
-            Log("改用联机节点：" + string.Join("、", Options.FallbackNodes));
+            Log(L.T("core.mp.session.fallback") + string.Join(L.T("core.mp.format.listseparator"), Options.FallbackNodes));
             UsingFallbackNode = true;
             await StartEasyTierAsync(GuestOptions(false, Options.FullLan, null), ct);
             return true;
@@ -179,12 +180,12 @@ public sealed class DirectSession : IAsyncDisposable
     /// <summary>房主：加入方的回复码到了，往它的地址打洞。</summary>
     public async Task<bool> AddReplyAsync(DirectCode reply, CancellationToken ct = default)
     {
-        if (reply.Room != Room) throw new DirectFailedException("这个回复码不是这个房间的");
+        if (reply.Room != Room) throw new DirectFailedException(L.T("core.mp.code.wrongroom"));
         _guestCandidates = reply.Candidates;
         _guestNat = reply.Nat;
         Bridge!.SetRemoteCandidates(reply.Candidates);
         var peer = await Bridge.PunchAsync(reply.Candidates, reply.Nat, TimeSpan.FromSeconds(60), ct);
-        if (peer is null) Log("没打通：" + FailureReason(LocalNat, reply.Nat, _gathered?.Candidates ?? [], reply.Candidates));
+        if (peer is null) Log(L.T("core.mp.session.punchfailed") + FailureReason(LocalNat, reply.Nat, _gathered?.Candidates ?? [], reply.Candidates));
         return peer is not null;
     }
 
@@ -193,10 +194,10 @@ public sealed class DirectSession : IAsyncDisposable
     {
         var noV6 = !aCands.Any(c => c.Kind == PathKind.IPv6) || !bCands.Any(c => c.Kind == PathKind.IPv6);
         if (a == NatKind.Symmetric && b == NatKind.Symmetric)
-            return "双方都是对称 NAT（严格）" + (noV6 ? "，而且至少一方没有 IPv6" : "") + "，基本没法直连。可以换一方用家里的宽带、开启路由器 UPnP，或者添加一个联机节点";
+            return L.T("core.mp.failure.symmetric") + (noV6 ? L.T("core.mp.failure.missingipv6") : "") + L.T("core.mp.failure.suggestions");
         if (a == NatKind.Unknown || b == NatKind.Unknown)
-            return "有一方查不到外部地址（STUN 没回应，可能 UDP 被网络拦了）" + (noV6 ? "，也没有 IPv6" : "");
-        return "打洞超时：可能是防火墙拦了 UDP，或者对方没有及时贴回复码" + (noV6 ? "（双方没有共同的 IPv6）" : "");
+            return L.T("core.mp.failure.unknown") + (noV6 ? L.T("core.mp.failure.noipv6") : "");
+        return L.T("core.mp.failure.timeout") + (noV6 ? L.T("core.mp.failure.nosharedipv6") : "");
     }
 
     private void OnConnected(DirectPeer peer)
@@ -222,7 +223,7 @@ public sealed class DirectSession : IAsyncDisposable
                 {
                     _guestCandidates = code.Candidates;
                     _guestNat = code.Nat;
-                    Log("收到加入方的地址：" + string.Join("、", code.Candidates));
+                    Log(L.T("core.mp.session.guestaddresses") + string.Join(L.T("core.mp.format.listseparator"), code.Candidates));
                 }
                 break;
             case "step" when !IsHost:
@@ -249,12 +250,12 @@ public sealed class DirectSession : IAsyncDisposable
         if (!IsHost)
         {
             var host = peers.FirstOrDefault(p => p.Ip == EasyTierArgs.HostIp && p.Cost != "Local");
-            if (host is null) return UsingFallbackNode ? "正在经联机节点连接房主……" : "正在连接……";
-            if (UsingFallbackNode || bridgePeer is null) return "经联机节点" + (host.Cost.StartsWith("relay", StringComparison.Ordinal) ? "中转" : "介绍后直连");
-            return $"直连：{DirectText.Path(bridgePeer.Path)}，延迟 {(bridgePeer.RttMs is { } r ? $"{r:F0} ms" : "-")}，丢包 {bridgePeer.LossPercent:F0}%";
+            if (host is null) return UsingFallbackNode ? L.T("core.mp.session.nodeconnecting") : L.T("core.mp.session.connecting");
+            if (UsingFallbackNode || bridgePeer is null) return L.T("core.mp.session.vianode") + (host.Cost.StartsWith("relay", StringComparison.Ordinal) ? L.T("core.mp.session.relay") : L.T("core.mp.session.introduced"));
+            return L.F("core.mp.session.path", DirectText.Path(bridgePeer.Path), bridgePeer.RttMs is { } r ? $"{r:F0} ms" : "-", bridgePeer.LossPercent);
         }
         var guests = Bridge?.Peers ?? [];
-        return guests.Count == 0 ? "等待加入……" : string.Join("；", guests.Select(g => $"{DirectText.Path(g.Path)} {(g.RttMs is { } r ? $"{r:F0} ms" : "")}"));
+        return guests.Count == 0 ? L.T("core.mp.session.waiting") : string.Join(L.T("core.mp.format.peerseparator"), guests.Select(g => $"{DirectText.Path(g.Path)} {(g.RttMs is { } r ? $"{r:F0} ms" : "")}"));
     }
 
     // ---------------- 全条件测试 ----------------
@@ -262,16 +263,16 @@ public sealed class DirectSession : IAsyncDisposable
     /// <summary>房主：先问双方能不能提权（完整局域网和出口要用），然后排出步骤依次执行。</summary>
     public async Task<List<MatrixResult>> RunMatrixAsync(bool wantFullLan, IProgress<MatrixResult>? progress, Func<MatrixStep, bool, CancellationToken, Task<bool?>>? chatProbe, CancellationToken ct)
     {
-        if (!IsHost || Bridge?.Peers.FirstOrDefault() is not { } peer) throw new InvalidOperationException("要先有人通过直连加入房间");
+        if (!IsHost || Bridge?.Peers.FirstOrDefault() is not { } peer) throw new InvalidOperationException(L.T("core.mp.matrix.peerrequired"));
         var fullLan = false;
         if (wantFullLan)
         {
             fullLan = await ElevateBothAsync(peer, ct);
-            Log(fullLan ? "双方都已提权，测试包含完整局域网和出口节点" : "有一方没有同意提权，跳过完整局域网和出口节点的步骤");
+            Log(fullLan ? L.T("core.mp.matrix.elevated") : L.T("core.mp.matrix.elevationdeclined"));
         }
         var members = (await (EasyTier?.PeersAsync(ct) ?? Task.FromResult(new List<PeerInfo>()))).Count(p => p.Ip.StartsWith(EasyTierArgs.Subnet, StringComparison.Ordinal));
         var plan = TestMatrix.Plan(new MatrixInputs(_gathered!.Candidates, _guestCandidates, members, Options.FallbackNodes.Count > 0, fullLan, Options.Simulated));
-        Log($"测试计划：{plan.Count} 步");
+        Log(L.F("core.mp.matrix.plan", plan.Count));
         _chatProbe = chatProbe;
         var results = await TestMatrix.RunAsync(plan, new HostRunner(this), TimeSpan.FromSeconds(120), progress, Options.Simulated, ct);
         // 恢复：所有路径、原来的模式。
@@ -317,7 +318,7 @@ public sealed class DirectSession : IAsyncDisposable
         catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
         {
             ok = false;
-            Log("没有提权：" + e.Message);
+            Log(L.T("core.mp.matrix.elevationfailed") + e.Message);
         }
         await Bridge!.SendControlAsync(peer, new JsonObject { ["op"] = "elevated", ["ok"] = ok });
     }
@@ -326,10 +327,10 @@ public sealed class DirectSession : IAsyncDisposable
     {
         public async Task<MatrixResult> RunAsync(MatrixStep step, CancellationToken ct)
         {
-            var peer = s.Bridge!.Peers.FirstOrDefault() ?? throw new InvalidOperationException("和加入方的控制连接断了");
+            var peer = s.Bridge!.Peers.FirstOrDefault() ?? throw new InvalidOperationException(L.T("core.mp.matrix.disconnected"));
             var reply = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (s._pending) s._pending[step.Index] = reply;
-            s.Log($"—— 第 {step.Index} 步：{step.Label} ——");
+            s.Log(L.F("core.mp.matrix.step", step.Index, step.Label));
             await s.Bridge.SendControlAsync(peer, new JsonObject
             {
                 ["op"] = "step",
@@ -401,7 +402,7 @@ public sealed class DirectSession : IAsyncDisposable
             message["fullLan"]!.GetValue<bool>(),
             message["exit"]!.GetValue<bool>());
         var hostIp = message["hostIp"]?.GetValue<string>();
-        Log($"—— 第 {step.Index} 步：{step.Label} ——");
+        Log(L.F("core.mp.matrix.step", step.Index, step.Label));
         var result = new JsonObject { ["op"] = "result", ["i"] = step.Index };
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(100));
         var watch = Stopwatch.StartNew();
@@ -411,7 +412,7 @@ public sealed class DirectSession : IAsyncDisposable
             if (step.Route == RouteKind.Direct)
             {
                 var punched = await Bridge!.PunchAsync(_remote!.Candidates, _remote.Nat, TimeSpan.FromSeconds(30), cts.Token);
-                if (punched is null) throw new DirectFailedException($"{DirectText.Path(step.Path!.Value)} 没打通");
+                if (punched is null) throw new DirectFailedException(L.F("core.mp.matrix.pathfailed", DirectText.Path(step.Path!.Value)));
             }
             // 等 EasyTier 看到房主。
             PeerInfo? host = null;
@@ -420,12 +421,12 @@ public sealed class DirectSession : IAsyncDisposable
                 await Task.Delay(500, cts.Token);
                 host = (await EasyTier!.PeersAsync(cts.Token)).FirstOrDefault(x => x.Ip == EasyTierArgs.HostIp && x.Cost != "Local");
             }
-            if (host is null) throw new DirectFailedException("EasyTier 30 秒内没连上房主");
+            if (host is null) throw new DirectFailedException(L.T("core.mp.matrix.hosttimeout"));
             result["connectMs"] = watch.ElapsedMilliseconds;
             if (step.Route == RouteKind.Relay)
             {
                 var other = (await EasyTier!.PeersAsync(cts.Token)).FirstOrDefault(x => x.Hostname == "amber-guest" && x.Cost.StartsWith("relay", StringComparison.Ordinal));
-                if (other is null) throw new DirectFailedException("没看到经房主中转的其他成员");
+                if (other is null) throw new DirectFailedException(L.T("core.mp.matrix.nootherpeer"));
                 result["latency"] = other.LatencyMs;
             }
             else
@@ -441,7 +442,7 @@ public sealed class DirectSession : IAsyncDisposable
                 }
                 catch (Exception e) when (e is IOException or SocketException or OperationCanceledException && !cts.IsCancellationRequested)
                 {
-                    Log("吞吐测试失败：" + e.Message);
+                    Log(L.T("core.mp.matrix.speedfailed") + e.Message);
                 }
             }
             if (GuestChatProbe is { } chat) result["chat"] = await chat(step, cts.Token);
@@ -450,15 +451,15 @@ public sealed class DirectSession : IAsyncDisposable
                 if (Options.Simulated || hostIp is null)
                 {
                     result["exit"] = null;
-                    result["reason"] = "模拟时验证不了出口";
+                    result["reason"] = L.T("core.mp.matrix.simulatedexit");
                 }
                 else
                 {
                     using var probe = DirectBridge.CreateSocket();
                     var mapped = await Stun.QueryAsync(probe, Options.StunServers.FirstOrDefault() ?? Stun.DefaultServers[0], TimeSpan.FromSeconds(4), cts.Token);
                     result["exit"] = mapped?.Address.ToString() == hostIp;
-                    if (mapped is null) result["reason"] = "开出口后 STUN 没回应";
-                    else if (mapped.Address.ToString() != hostIp) result["reason"] = "外部地址不是房主的，出口没生效";
+                    if (mapped is null) result["reason"] = L.T("core.mp.matrix.exitnostun");
+                    else if (mapped.Address.ToString() != hostIp) result["reason"] = L.T("core.mp.matrix.exitwrongip");
                 }
             }
             result["passed"] = result["exit"]?.GetValue<bool?>() != false;
@@ -466,8 +467,8 @@ public sealed class DirectSession : IAsyncDisposable
         catch (Exception e) when (e is DirectFailedException or OperationCanceledException or IOException or SocketException or InvalidOperationException)
         {
             result["passed"] = false;
-            result["reason"] = e is OperationCanceledException ? "超时" : e.Message;
-            Log($"第 {step.Index} 步失败：{result["reason"]}");
+            result["reason"] = e is OperationCanceledException ? L.T("core.mp.matrix.steptimeout") : e.Message;
+            Log(L.F("core.mp.matrix.stepfailed", step.Index, result["reason"]));
         }
         // 恢复全部路径，确保能把结果发回去。
         var bridge = Bridge!;
@@ -475,7 +476,7 @@ public sealed class DirectSession : IAsyncDisposable
         bridge.SprayPorts = 256;
         if (bridge.Peers.Count == 0) await bridge.PunchAsync(_remote!.Candidates, _remote.Nat, TimeSpan.FromSeconds(60));
         if (bridge.Peers.FirstOrDefault() is { } back) await bridge.SendControlAsync(back, result);
-        else Log("恢复连接失败，第 " + step.Index + " 步的结果发不回去");
+        else Log(L.F("core.mp.matrix.restorefailed", step.Index));
     }
 
     public async ValueTask DisposeAsync()
@@ -488,7 +489,7 @@ public sealed class DirectSession : IAsyncDisposable
             try
             {
                 await remove().WaitAsync(TimeSpan.FromSeconds(3));
-                Log("已删除路由器端口映射");
+                Log(L.T("core.mp.mapping.removed"));
             }
             catch (Exception e) when (e is HttpRequestException or SocketException or TimeoutException or OperationCanceledException) { }
         }

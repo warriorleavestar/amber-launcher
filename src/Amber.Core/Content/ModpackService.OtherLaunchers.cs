@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.IO.Compression;
 using System.Text.Json.Nodes;
 using Amber.Core.Install;
@@ -34,8 +35,8 @@ public sealed partial class ModpackService
         {
             var meta = ReadJson(mcbbs);
             var (mc, loader, version) = FromAddons(meta["addons"] as JsonArray);
-            return new ModpackInfo(Mcbbs, Str(meta, "name") ?? "整合包", Str(meta, "version"),
-                mc ?? throw new InvalidDataException("MCBBS 整合包没有写游戏版本"), loader, version,
+            return new ModpackInfo(Mcbbs, Str(meta, "name") ?? L.T("core.content.modpack.defaultname"), Str(meta, "version"),
+                mc ?? throw new InvalidDataException(L.T("core.content.modpack.mcbbsnoversion")), loader, version,
                 (meta["files"] as JsonArray)?.Count ?? 0, "overrides/");
         }
 
@@ -50,8 +51,8 @@ public sealed partial class ModpackService
                 mc ??= Str(json, "inheritsFrom") ?? Str(json, "jar");
             }
             mc = Str(meta, "gameVersion") ?? mc;
-            return new ModpackInfo(Hmcl, Str(meta, "name") ?? "整合包", Str(meta, "version"),
-                mc ?? throw new InvalidDataException("HMCL 整合包没有写游戏版本"), loader, version, 0, "minecraft/");
+            return new ModpackInfo(Hmcl, Str(meta, "name") ?? L.T("core.content.modpack.defaultname"), Str(meta, "version"),
+                mc ?? throw new InvalidDataException(L.T("core.content.modpack.hmclnoversion")), loader, version, 0, "minecraft/");
         }
 
         var mmcPack = FindEntry(zip, "mmc-pack.json");
@@ -76,7 +77,7 @@ public sealed partial class ModpackService
                     "org.quiltmc.quilt-loader" => LoaderKind.Quilt,
                     "net.minecraftforge" => LoaderKind.Forge,
                     "net.neoforged" => LoaderKind.NeoForge,
-                    "com.mumfrey.liteloader" => throw new InvalidDataException("这个实例用的是 LiteLoader，Amber 还不支持"),
+                    "com.mumfrey.liteloader" => throw new InvalidDataException(L.T("core.content.modpack.liteloaderunsupported")),
                     // LWJGL、intermediary 这类组件安装加载器时会自动带上。
                     _ => null,
                 };
@@ -86,8 +87,8 @@ public sealed partial class ModpackService
         }
         game ??= settings.GetValueOrDefault("IntendedVersion");
         var gameRoot = zip.Entries.Any(e => e.FullName.StartsWith(root + ".minecraft/", StringComparison.Ordinal)) ? root + ".minecraft/" : root + "minecraft/";
-        return new ModpackInfo(MultiMc, settings.GetValueOrDefault("name") ?? (root.Length > 0 ? root.TrimEnd('/') : "实例"), null,
-            game ?? throw new InvalidDataException("实例没有写游戏版本（mmc-pack.json 里缺少 net.minecraft）"), kind, loaderVersion, 0, gameRoot);
+        return new ModpackInfo(MultiMc, settings.GetValueOrDefault("name") ?? (root.Length > 0 ? root.TrimEnd('/') : L.T("core.content.modpack.defaultinstancename")), null,
+            game ?? throw new InvalidDataException(L.T("core.content.modpack.multimcnoversion")), kind, loaderVersion, 0, gameRoot);
     }
 
     /// <summary>HMCL 和 MCBBS 的 addons：[{id: game|forge|neoforge|fabric|quilt|optifine, version}]。</summary>
@@ -110,7 +111,7 @@ public sealed partial class ModpackService
                 case "quilt": (loader, version) = (LoaderKind.Quilt, v); break;
                 case "optifine": (optifine, optifineVersion) = (LoaderKind.OptiFine, v); break;
                 case var other when other is not null && other != "game":
-                    throw new InvalidDataException($"不支持的加载器：{other}");
+                    throw new InvalidDataException(L.F("core.content.modpack.unsupportedloader", other));
             }
         }
         // 只有 OptiFine 时装 OptiFine；和别的加载器同时出现时以那个加载器为准，OptiFine 要作为模组自己放进 mods。
@@ -174,7 +175,7 @@ public sealed partial class ModpackService
 
     private async Task ImportOtherLauncherFilesAsync(ZipArchive zip, ModpackInfo info, string id, string workDir, IProgress<LoaderProgress>? progress, CancellationToken ct)
     {
-        progress?.Report(new("释放游戏文件"));
+        progress?.Report(new(L.T("core.content.modpack.extractgamefiles")));
         ExtractPrefix(zip, info.Overrides!, workDir, skip: info.Format == Hmcl ? ["pack.json"] : []);
 
         switch (info.Format)
@@ -202,7 +203,7 @@ public sealed partial class ModpackService
         if (optifine is null || info.Loader != LoaderKind.Forge) return;
         var mods = Path.Combine(workDir, "mods");
         if (Directory.Exists(mods) && Directory.EnumerateFiles(mods, "*OptiFine*.jar").Any()) return;
-        progress?.Report(new("下载 OptiFine"));
+        progress?.Report(new(L.T("core.install.optifine.download")));
         Directory.CreateDirectory(mods);
         await new OptiFineInstaller(ctx).DownloadJarAsync(new LoaderVersion(LoaderKind.OptiFine, info.McVersion, optifine),
             Path.Combine(mods, $"OptiFine_{info.McVersion}_{optifine}.jar"), ct);
@@ -253,13 +254,13 @@ public sealed partial class ModpackService
         var curse = (meta["files"] as JsonArray ?? []).OfType<JsonObject>()
             .Where(f => Str(f, "type") == "curse" && f["fileID"] is not null).ToList();
         if (curse.Count == 0) return;
-        progress?.Report(new("查询模组信息"));
+        progress?.Report(new(L.T("core.content.modpack.querymods")));
         var ids = curse.Select(f => f["fileID"]!.GetValue<long>()).ToList();
         var files = await curseForge.GetFilesByIdAsync(ids, ct);
         var folders = await curseForge.GetProjectFoldersAsync(files.Select(f => long.Parse(f.ProjectId)).Distinct().ToList(), ct);
         var items = files.Select(f => ContentInstaller.ToItem(f, Path.Combine(workDir, folders.GetValueOrDefault(f.ProjectId, "mods")))).ToList();
-        await ctx.Downloader.DownloadAllAsync(items, new Progress<Net.DownloadProgress>(p => progress?.Report(new($"下载整合包文件 {p.CompletedFiles}/{p.TotalFiles}", 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
-        if (ids.Count > files.Count) throw new InvalidDataException($"整合包有 {ids.Count - files.Count} 个文件在 CurseForge 上查不到，其余已安装");
+        await ctx.Downloader.DownloadAllAsync(items, new Progress<Net.DownloadProgress>(p => progress?.Report(new(L.F("core.content.modpack.downloadprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
+        if (ids.Count > files.Count) throw new InvalidDataException(L.F("core.content.modpack.missingcursefiles", ids.Count - files.Count));
     }
 
     private static string? Str(JsonNode? node, string key) =>

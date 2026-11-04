@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 namespace Amber.Core.Net;
 
 /// <summary>把官方地址改写成某个镜像的地址。返回 null 表示该镜像不提供这个文件。</summary>
@@ -13,7 +14,7 @@ public interface IDownloadSource
 /// <summary>官方源：原样返回。</summary>
 public sealed class OfficialSource : IDownloadSource
 {
-    public string Name => "官方";
+    public string Name => L.T("core.net.source.official");
     public string? Rewrite(string officialUrl) => officialUrl;
 }
 

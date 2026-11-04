@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
@@ -42,15 +43,15 @@ public sealed class OptiFineInstaller(LoaderContext ctx) : ILoaderInstaller
     {
         var id = string.IsNullOrWhiteSpace(customId) ? version.DefaultId : customId.Trim();
         var dir = ctx.Dir;
-        progress?.Report(new($"安装原版 {version.McVersion}"));
-        await ctx.Vanilla.InstallAsync(version.McVersion, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, "下载原版文件", p)), ct);
+        progress?.Report(new(L.F("core.install.loader.installvanilla", version.McVersion)));
+        await ctx.Vanilla.InstallAsync(version.McVersion, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, L.T("core.install.loader.downloadvanilla"), p)), ct);
         var vanilla = dir.ResolveVersion(version.McVersion);
 
         var work = Path.Combine(Path.GetTempPath(), "amber-optifine-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(work);
         try
         {
-            progress?.Report(new("下载 OptiFine"));
+            progress?.Report(new(L.T("core.install.optifine.download")));
             var installer = Path.Combine(work, "OptiFine.jar");
             await DownloadJarAsync(version, installer, ct);
 
@@ -63,7 +64,7 @@ public sealed class OptiFineInstaller(LoaderContext ctx) : ILoaderInstaller
             {
                 if (zip.GetEntry("optifine/Patcher.class") is not null)
                 {
-                    progress?.Report(new("合成 OptiFine 库"));
+                    progress?.Report(new(L.T("core.install.optifine.mergelibrary")));
                     var java = await ctx.JavaFor(Math.Max(vanilla.JavaVersion?.MajorVersion ?? 8, 8), ct);
                     await RunPatcherAsync(java, installer, dir.VersionJarPath(vanilla.Jar ?? version.McVersion), library, ct);
                 }
@@ -114,7 +115,7 @@ public sealed class OptiFineInstaller(LoaderContext ctx) : ILoaderInstaller
             try { Directory.Delete(work, true); } catch { /* 清理失败不影响结果 */ }
         }
 
-        await ctx.Vanilla.CompleteAsync(id, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, "下载库", p)), ct);
+        await ctx.Vanilla.CompleteAsync(id, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, L.T("core.install.optifine.downloadlibraries"), p)), ct);
         return id;
     }
 
@@ -128,11 +129,11 @@ public sealed class OptiFineInstaller(LoaderContext ctx) : ILoaderInstaller
             CreateNoWindow = true,
         };
         foreach (var a in new[] { "-cp", installer, "optifine.Patcher", vanillaJar, installer, output }) psi.ArgumentList.Add(a);
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动 OptiFine 补丁工具");
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException(L.T("core.install.optifine.patchstartfailed"));
         var stdout = process.StandardOutput.ReadToEndAsync(ct);
         var stderr = process.StandardError.ReadToEndAsync(ct);
         await process.WaitForExitAsync(ct);
         if (process.ExitCode != 0 || !File.Exists(output))
-            throw new InvalidOperationException($"OptiFine 补丁失败（退出代码 {process.ExitCode}）：{await stderr}{await stdout}");
+            throw new InvalidOperationException(L.F("core.install.optifine.patchfailed", process.ExitCode, await stderr, await stdout));
     }
 }

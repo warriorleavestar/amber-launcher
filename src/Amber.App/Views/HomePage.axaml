@@ -16,7 +16,7 @@
                       HorizontalAlignment="Stretch" PlaceholderText="{l:T home.version.empty}" />
             <TextBlock Grid.Row="1" Grid.Column="1" Classes="hint" FontSize="12" Text="{Binding VersionInfo}" Margin="2,4,0,0" />
 
-            <TextBlock Grid.Row="2" Text="{l:T accounts.title}" VerticalAlignment="Center" Margin="0,12,0,0" />
+            <TextBlock Grid.Row="2" Text="{l:T home.account.label}" VerticalAlignment="Center" Margin="0,12,0,0" />
             <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding Accounts}" SelectedItem="{Binding SelectedAccount}"
                       HorizontalAlignment="Stretch" Margin="0,12,0,0" PlaceholderText="{l:T home.account.empty}" />
 

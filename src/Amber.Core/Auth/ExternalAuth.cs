@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
@@ -52,7 +53,7 @@ public sealed class ExternalAuth(HttpClient http)
 
         var profiles = (json["availableProfiles"] as JsonArray ?? [])
             .Select(p => new ExternalProfile(p!["id"]!.GetValue<string>(), p["name"]!.GetValue<string>())).ToList();
-        if (profiles.Count == 0) throw new InvalidOperationException("这个账号下没有角色，请先到皮肤站创建角色");
+        if (profiles.Count == 0) throw new InvalidOperationException(L.T("core.auth.external.noprofiles"));
 
         var account = new Account
         {
@@ -85,7 +86,7 @@ public sealed class ExternalAuth(HttpClient http)
     /// <summary>启动前确认令牌有效，失效就刷新；刷新也失败时要求重新输入密码。</summary>
     public async Task EnsureValidAsync(Account account, CancellationToken ct = default)
     {
-        if (account.AccessToken is null) throw new LoginRequiredException($"{account.Name} 的登录已失效，请重新登录");
+        if (account.AccessToken is null) throw new LoginRequiredException(L.F("core.auth.account.expired", account.Name));
         using var validate = await http.PostAsync(account.ServerUrl + "/authserver/validate", AmberJson.Body(new JsonObject
         {
             ["accessToken"] = account.AccessToken,
@@ -104,7 +105,7 @@ public sealed class ExternalAuth(HttpClient http)
         }
         catch (InvalidOperationException e)
         {
-            throw new LoginRequiredException($"{account.Name} 的登录已失效，请重新登录（{e.Message}）");
+            throw new LoginRequiredException(L.F("core.auth.account.expireddetail", account.Name, e.Message));
         }
     }
 
@@ -134,7 +135,7 @@ public sealed class ExternalAuth(HttpClient http)
         try { json = string.IsNullOrWhiteSpace(text) ? [] : JsonNode.Parse(text) as JsonObject ?? []; }
         catch (JsonException) { json = []; }
         if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(json["errorMessage"]?.GetValue<string>() ?? $"服务器返回 {(int)response.StatusCode}");
+            throw new InvalidOperationException(json["errorMessage"]?.GetValue<string>() ?? L.F("core.auth.external.serverstatus", (int)response.StatusCode));
         return json;
     }
 }
@@ -163,7 +164,7 @@ public sealed class AuthlibInjector(HttpClient http, string cacheDir)
         if (latest is null)
         {
             // 联不上更新地址时，手里有哪个版本就用哪个。
-            return existing ?? throw new InvalidOperationException("无法下载 authlib-injector，请检查网络");
+            return existing ?? throw new InvalidOperationException(L.T("core.auth.injector.downloadfailed"));
         }
 
         var version = latest["version"]!.GetValue<string>();
@@ -173,7 +174,7 @@ public sealed class AuthlibInjector(HttpClient http, string cacheDir)
         var bytes = await http.GetByteArrayAsync(latest["download_url"]!.GetValue<string>(), ct);
         var expected = latest["checksums"]?["sha256"]?.GetValue<string>();
         if (expected is not null && !Convert.ToHexStringLower(SHA256.HashData(bytes)).Equals(expected, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("authlib-injector 校验失败");
+            throw new InvalidDataException(L.T("core.auth.injector.checksumfailed"));
         await File.WriteAllBytesAsync(target, bytes, ct);
         return target;
     }

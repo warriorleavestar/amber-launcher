@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
@@ -51,10 +52,10 @@ public sealed class EasyTierInstaller(Downloader downloader, string dataDir)
             {
                 var hash = Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, ct));
                 if (hash != EasyTierRelease.Sha256)
-                    throw new InvalidDataException($"EasyTier 安装包校验失败（SHA-256 {hash}），已丢弃。可能是下载被篡改或损坏，请重试。");
+                    throw new InvalidDataException(L.F("core.mp.component.hashfailed", hash));
             }
             Extract(zip, InstallDir);
-            if (!IsInstalled) throw new InvalidDataException("EasyTier 安装包里没有 easytier-core.exe");
+            if (!IsInstalled) throw new InvalidDataException(L.T("core.mp.component.missingexecutable"));
         }
         finally
         {
@@ -134,8 +135,8 @@ public static class EasyTierArgs
         if (o.AllowExit) args.Add("--enable-exit-node");
         if (o.ExitNode is { } exit)
         {
-            if (!o.Tun) throw new ArgumentException("经别人的电脑上网需要完整局域网模式");
-            if (!System.Net.IPAddress.TryParse(exit, out var ip) || !exit.StartsWith(Subnet, StringComparison.Ordinal)) throw new ArgumentException($"出口必须是房间里成员的虚拟 IP：{exit}");
+            if (!o.Tun) throw new ArgumentException(L.T("core.mp.component.exitrequireslan"));
+            if (!System.Net.IPAddress.TryParse(exit, out var ip) || !exit.StartsWith(Subnet, StringComparison.Ordinal)) throw new ArgumentException(L.F("core.mp.component.invalidexit", exit));
             args.AddRange(["--exit-nodes", ip.ToString()]);
         }
         if (o.MachineId is { } id) args.AddRange(["--machine-id", id]);
@@ -147,7 +148,7 @@ public static class EasyTierArgs
         if (o.ExtraArgs is { } extra) args.AddRange(extra);
         if (!o.IsHost && !o.Tun)
         {
-            var local = o.LocalForwardPort ?? throw new ArgumentException("加入方需要本机转发端口");
+            var local = o.LocalForwardPort ?? throw new ArgumentException(L.T("core.mp.component.forwardrequired"));
             args.AddRange(["--port-forward", $"tcp://127.0.0.1:{local}/{HostIp}:{o.Room.Port}"]);
             // 房间聊天：本机另一个端口转发到房主的聊天服务。
             if (o.LocalChatPort is { } chat) args.AddRange(["--port-forward", $"tcp://127.0.0.1:{chat}/{HostIp}:{RoomChat.Port}"]);
@@ -228,7 +229,7 @@ public sealed class EasyTierSession : IEasyTierSession
             RedirectStandardError = true,
         };
         foreach (var a in EasyTierArgs.Build(options)) info.ArgumentList.Add(a);
-        var process = Process.Start(info) ?? throw new InvalidOperationException("easytier-core 启动失败");
+        var process = Process.Start(info) ?? throw new InvalidOperationException(L.T("core.mp.component.startfailed"));
         ProcessJob? job = null;
         if (OperatingSystem.IsWindows())
         {

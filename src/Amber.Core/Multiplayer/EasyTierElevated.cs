@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -55,8 +56,8 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
     /// <summary>弹出 UAC 确认。用户拒绝时抛 <see cref="OperationCanceledException"/>。</summary>
     public static EasyTierElevatedSession Start(EasyTierInstaller installer, EasyTierOptions options, string workDir)
     {
-        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("完整局域网模式目前只支持 Windows");
-        if (!options.Tun) throw new ArgumentException("完整局域网模式要用 Tun 选项");
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException(L.T("core.mp.component.windowsonly"));
+        if (!options.Tun) throw new ArgumentException(L.T("core.mp.component.tunrequired"));
         // 每次一个新目录：换出口时旧的守护脚本可能还没退出。
         workDir = Path.Combine(workDir, Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(workDir);
@@ -90,7 +91,7 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
         }
         catch (Win32Exception e) when (e.NativeErrorCode == 1223)
         {
-            throw new OperationCanceledException("你在 Windows 的权限确认里选了“否”，没有开启完整局域网模式");
+            throw new OperationCanceledException(L.T("core.mp.component.elevationdeclined"));
         }
         return session;
     }

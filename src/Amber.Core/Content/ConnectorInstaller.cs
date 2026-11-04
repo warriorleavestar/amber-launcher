@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 namespace Amber.Core.Content;
 
 /// <summary>
@@ -33,7 +34,7 @@ public static class ConnectorInstaller
         if (!connectorInstalled)
         {
             var connector = await PlanAsync(instance, modrinth, installer, installedProjects, ct)
-                            ?? throw new InvalidOperationException($"Modrinth 上没有适合 {instance.McVersion} {instance.Loader} 的 Sinytra Connector，这个 Fabric 模组用不了");
+                            ?? throw new InvalidOperationException(L.F("core.content.connector.unavailable", instance.McVersion, instance.Loader));
             files.AddRange(connector.Files);
             problems.AddRange(connector.Problems);
         }
@@ -43,7 +44,7 @@ public static class ConnectorInstaller
         var mod = await installer.ResolveAsync(fabricFile, instance, skip, ct, [instance.Loader, "fabric"]);
         files.AddRange(mod.Files.Where(f => files.All(x => x.ProjectId != f.ProjectId)));
         problems.AddRange(mod.Problems);
-        problems.Add("Fabric 模组经 Sinytra Connector 运行，不是每个都能用；进不去游戏时先禁用它");
+        problems.Add(L.T("core.content.connector.warning"));
         return new InstallPlan(files, problems);
     }
 

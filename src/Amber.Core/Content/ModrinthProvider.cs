@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -62,7 +63,7 @@ public sealed class ModrinthProvider(HttpClient http, string apiRoot = "https://
     public async Task<ContentFile> GetFileAsync(string projectId, string fileId, CancellationToken ct = default)
     {
         using var doc = JsonDocument.Parse(await http.GetStringAsync($"{apiRoot}/version/{fileId}", ct));
-        return ParseVersion(doc.RootElement) ?? throw new InvalidDataException($"版本 {fileId} 没有可下载文件");
+        return ParseVersion(doc.RootElement) ?? throw new InvalidDataException(L.F("core.content.modrinth.nofiles", fileId));
     }
 
     /// <summary>按 SHA1 批量识别本地文件。没有匹配的文件不在结果里。</summary>

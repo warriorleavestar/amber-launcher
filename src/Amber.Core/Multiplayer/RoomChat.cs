@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
@@ -101,7 +102,7 @@ public static class RoomChat
 
     internal static async Task WriteFrameAsync(Stream stream, byte[] payload, CancellationToken ct)
     {
-        if (payload.Length > MaxFrameBytes) throw new InvalidDataException("消息太长");
+        if (payload.Length > MaxFrameBytes) throw new InvalidDataException(L.T("core.mp.chat.toolong"));
         var header = new byte[4];
         BinaryPrimitives.WriteInt32BigEndian(header, payload.Length);
         await stream.WriteAsync(header, ct);
@@ -122,7 +123,7 @@ public static class RoomChat
             return null;
         }
         var length = BinaryPrimitives.ReadInt32BigEndian(header);
-        if (length is <= 0 or > MaxFrameBytes) throw new InvalidDataException($"消息长度 {length} 超出限制");
+        if (length is <= 0 or > MaxFrameBytes) throw new InvalidDataException(L.F("core.mp.chat.invalidlength", length));
         var payload = new byte[length];
         await stream.ReadExactlyAsync(payload, ct);
         return payload;
@@ -313,7 +314,7 @@ public sealed class ChatClient : IAsyncDisposable
     public ChatClient(RoomCode room, string name)
     {
         _cipher = new ChatCipher(room);
-        Name = RoomChat.Clean(name, RoomChat.MaxNameLength) is { Length: > 0 } n ? n : "玩家";
+        Name = RoomChat.Clean(name, RoomChat.MaxNameLength) is { Length: > 0 } n ? n : L.T("core.mp.chat.player");
     }
 
     public async Task ConnectAsync(string host, int port, CancellationToken ct = default)

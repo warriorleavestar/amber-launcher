@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.IO.Compression;
 using System.Net.Sockets;
 using System.Text;
@@ -31,23 +32,23 @@ public static class WorldManager
         {
             var root = Nbt.ReadFile(levelDat);
             if (root.GetValueOrDefault("Data") is not Dictionary<string, object> data)
-                return new WorldInfo(folderName, folder, folderName, "未知", null, null);
+                return new WorldInfo(folderName, folder, folderName, L.T("core.game.world.unknownmode"), null, null);
             var last = data.GetValueOrDefault("LastPlayed") is long ms ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : (DateTimeOffset?)null;
             var version = data.GetValueOrDefault("Version") is Dictionary<string, object> v ? v.GetValueOrDefault("Name") as string : null;
             var hardcore = data.GetValueOrDefault("hardcore") is byte and not (byte)0;
-            var mode = hardcore ? "极限" : (data.GetValueOrDefault("GameType") as int? ?? 0) switch
+            var mode = hardcore ? L.T("core.game.world.hardcore") : (data.GetValueOrDefault("GameType") as int? ?? 0) switch
             {
-                0 => "生存",
-                1 => "创造",
-                2 => "冒险",
-                3 => "旁观",
-                _ => "未知",
+                0 => L.T("core.game.world.survival"),
+                1 => L.T("core.game.world.creative"),
+                2 => L.T("core.game.world.adventure"),
+                3 => L.T("core.game.world.spectator"),
+                _ => L.T("core.game.world.unknownmode"),
             };
             return new WorldInfo(folderName, folder, data.GetValueOrDefault("LevelName") as string ?? folderName, mode, last, version);
         }
         catch (Exception e) when (e is InvalidDataException or IOException or EndOfStreamException or ArgumentException or IndexOutOfRangeException)
         {
-            return new WorldInfo(folderName, folder, folderName + "（level.dat 损坏）", "未知", null, null);
+            return new WorldInfo(folderName, folder, L.F("core.game.world.corruptlevel", folderName), L.T("core.game.world.unknownmode"), null, null);
         }
     }
 
@@ -75,7 +76,7 @@ public static class WorldManager
     {
         using var zip = ZipFile.OpenRead(zipPath);
         var level = zip.Entries.Where(e => e.Name == "level.dat").OrderBy(e => e.FullName.Length).FirstOrDefault()
-                    ?? throw new InvalidDataException("压缩包里没有 level.dat，不是存档");
+                    ?? throw new InvalidDataException(L.T("core.game.world.missinglevel"));
         var prefix = level.FullName[..^"level.dat".Length];
         var baseName = prefix.TrimEnd('/').Split('/').LastOrDefault(s => s.Length > 0) ?? Path.GetFileNameWithoutExtension(zipPath);
         var folder = baseName;
@@ -87,7 +88,7 @@ public static class WorldManager
         {
             if (!entry.FullName.StartsWith(prefix, StringComparison.Ordinal) || entry.FullName.EndsWith('/')) continue;
             var path = Path.GetFullPath(Path.Combine(target, entry.FullName[prefix.Length..].Replace('/', Path.DirectorySeparatorChar)));
-            if (!path.StartsWith(targetPrefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"压缩包里有不安全的路径：{entry.FullName}");
+            if (!path.StartsWith(targetPrefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException(L.F("core.game.world.unsafepath", entry.FullName));
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             entry.ExtractToFile(path, true);
         }
@@ -212,7 +213,7 @@ public static class ServerList
         catch (Exception e) when (e is SocketException or IOException or OperationCanceledException or JsonException or EndOfStreamException or InvalidDataException)
         {
             if (ct.IsCancellationRequested) throw;
-            return new ServerStatus(false, null, null, null, null, null, e is OperationCanceledException ? "连接超时" : e.Message);
+            return new ServerStatus(false, null, null, null, null, null, e is OperationCanceledException ? L.T("core.mp.server.timeout") : e.Message);
         }
     }
 
@@ -261,6 +262,6 @@ public static class ServerList
             result |= (buffer[0] & 0x7f) << shift;
             if ((buffer[0] & 0x80) == 0) return result;
         }
-        throw new InvalidDataException("VarInt 太长");
+        throw new InvalidDataException(L.T("core.mp.server.varinttoolong"));
     }
 }

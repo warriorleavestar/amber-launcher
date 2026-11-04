@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -199,30 +200,30 @@ public static partial class ModCompat
     /// </summary>
     public static CompatResult Check(ModRequirements? mod, string? instanceLoader, string mcVersion, IReadOnlySet<string> installedIds, bool hasConnector)
     {
-        if (mod is null) return new CompatResult(CompatLevel.Unknown, "读不到模组信息");
+        if (mod is null) return new CompatResult(CompatLevel.Unknown, L.T("core.compat.mod.unreadable"));
         var loader = instanceLoader ?? "vanilla";
         var nativeOk = IsNative(mod, loader);
         var viaConnector = RunsViaConnector(mod, loader);
 
-        if (loader == "vanilla") return new CompatResult(CompatLevel.WrongLoader, "这个版本没装加载器，模组不会生效");
+        if (loader == "vanilla") return new CompatResult(CompatLevel.WrongLoader, L.T("core.compat.mod.noloader"));
         if (!nativeOk && !viaConnector)
         {
             var forgeOnFabric = loader is "fabric" or "quilt" && (mod.Loaders.Contains("forge") || mod.Loaders.Contains("neoforge") || mod.Loaders.Contains("forge-legacy"));
             return new CompatResult(CompatLevel.WrongLoader, forgeOnFabric
-                ? $"这是 {LoaderNames(mod)} 模组，Fabric / Quilt 上没有可靠的办法运行 Forge 模组"
-                : $"这是 {LoaderNames(mod)} 模组，和这个实例的 {loader} 不匹配");
+                ? L.F("core.compat.mod.forgeonfabric", LoaderNames(mod))
+                : L.F("core.compat.mod.wrongloader", LoaderNames(mod), loader));
         }
         // 只看实例实际会用的那份元数据（同一个 jar 里 Fabric 和 Forge 的要求可能不同）。
         var req = mod.For(viaConnector ? "fabric" : loader);
         if (req?.MinecraftRange is { } range && !VersionMatches(mcVersion, range, req.Syntax))
-            return new CompatResult(CompatLevel.WrongVersion, $"需要游戏版本 {range}，这个实例是 {mcVersion}");
+            return new CompatResult(CompatLevel.WrongVersion, L.F("core.compat.mod.wrongversion", range, mcVersion));
         var missing = (req?.RequiredDeps ?? []).Where(d => !installedIds.Contains(d) && !(viaConnector && (d is "fabric-api" or "fabric" || HasNativeAlias(d, installedIds)))).ToList();
-        if (missing.Count > 0) return new CompatResult(CompatLevel.MissingDeps, "缺少前置：" + string.Join("、", missing));
+        if (missing.Count > 0) return new CompatResult(CompatLevel.MissingDeps, L.F("core.compat.mod.missingdependencies", string.Join("、", missing)));
         if (viaConnector)
             return hasConnector
-                ? new CompatResult(CompatLevel.ViaConnector, "Fabric 模组，经 Sinytra Connector 运行（不是每个都能用）")
-                : new CompatResult(CompatLevel.NeedsConnector, "这是 Fabric 模组，要装 Sinytra Connector 才能在 " + loader + " 上运行");
-        if (loader == "quilt" && !mod.Loaders.Contains("quilt")) return new CompatResult(CompatLevel.Ok, "Fabric 模组，Quilt 直接支持");
+                ? new CompatResult(CompatLevel.ViaConnector, L.T("core.compat.mod.viaconnector"))
+                : new CompatResult(CompatLevel.NeedsConnector, L.F("core.compat.mod.needsconnector", loader));
+        if (loader == "quilt" && !mod.Loaders.Contains("quilt")) return new CompatResult(CompatLevel.Ok, L.T("core.compat.mod.quiltsupport"));
         return new CompatResult(CompatLevel.Ok, CompatResult.MatchText);
     }
 
@@ -259,7 +260,7 @@ public static partial class ModCompat
         "quilt" => "Quilt",
         "forge" => "Forge",
         "neoforge" => "NeoForge",
-        "forge-legacy" => "老 Forge",
+        "forge-legacy" => L.T("core.compat.loader.legacyforge"),
         _ => l,
     }));
 

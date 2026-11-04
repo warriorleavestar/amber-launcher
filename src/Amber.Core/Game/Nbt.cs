@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
@@ -28,7 +29,7 @@ public static class Nbt
         }
         var reader = new Reader(bytes);
         var type = reader.U8();
-        if (type != Compound) throw new InvalidDataException("NBT 根标签不是复合标签");
+        if (type != Compound) throw new InvalidDataException(L.T("core.game.nbt.invalidroot"));
         reader.Str();
         return reader.ReadCompound();
     }
@@ -215,7 +216,7 @@ public static class Nbt
                     return v;
                 }
                 default:
-                    throw new InvalidDataException($"未知 NBT 类型 {type}");
+                    throw new InvalidDataException(L.F("core.game.nbt.unknowntype", type));
             }
         }
     }
@@ -248,7 +249,7 @@ public static class Nbt
         public void Str(string s)
         {
             var bytes = EncodeModifiedUtf8(s);
-            if (bytes.Length > ushort.MaxValue) throw new InvalidDataException("NBT 字符串太长");
+            if (bytes.Length > ushort.MaxValue) throw new InvalidDataException(L.T("core.game.nbt.stringtoolong"));
             I16((short)bytes.Length);
             stream.Write(bytes);
         }
@@ -278,7 +279,7 @@ public static class Nbt
             Dictionary<string, object> => Compound,
             int[] => IntArray,
             long[] => LongArray,
-            _ => throw new InvalidDataException($"不能写入 NBT 的类型 {value.GetType()}"),
+            _ => throw new InvalidDataException(L.F("core.game.nbt.unsupportedtype", value.GetType())),
         };
 
         private void WriteValue(object value)

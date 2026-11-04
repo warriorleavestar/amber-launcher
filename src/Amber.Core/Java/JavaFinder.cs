@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 
@@ -6,7 +7,7 @@ namespace Amber.Core.Java;
 /// <summary>一个本机 Java 安装。</summary>
 public sealed record JavaInstall(string JavaPath, string Version, int MajorVersion, bool Is64Bit)
 {
-    public override string ToString() => $"Java {Version} ({(Is64Bit ? "64" : "32")} 位) - {JavaPath}";
+    public override string ToString() => L.F("core.java.runtime.description", Version, (Is64Bit ? "64" : "32"), JavaPath);
 }
 
 /// <summary>扫描本机已安装的 Java。</summary>

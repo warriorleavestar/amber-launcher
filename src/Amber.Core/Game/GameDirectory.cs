@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core;
 using System.Text.Json;
 
@@ -44,7 +45,7 @@ public sealed class GameDirectory(string root)
         var path = VersionJsonPath(id);
         using var stream = File.OpenRead(path);
         return JsonSerializer.Deserialize(stream, Json.Options.Info<VersionJson>())
-               ?? throw new InvalidDataException($"无法解析 {path}");
+               ?? throw new InvalidDataException(L.F("core.game.directory.parsefailed", path));
     }
 
     /// <summary>读取版本并沿 inheritsFrom 链合并成一个完整版本（加载器版本依赖原版时需要）。</summary>
@@ -54,7 +55,7 @@ public sealed class GameDirectory(string root)
         var seen = new HashSet<string>();
         for (string? current = id; current is not null; current = chain[^1].InheritsFrom)
         {
-            if (!seen.Add(current)) throw new InvalidDataException($"版本继承出现循环：{current}");
+            if (!seen.Add(current)) throw new InvalidDataException(L.F("core.game.directory.inheritancecycle", current));
             chain.Add(ReadVersion(current));
         }
 

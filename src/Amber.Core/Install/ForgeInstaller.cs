@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using Amber.Core;
 using System.Diagnostics;
 using System.IO.Compression;
@@ -28,24 +29,24 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
         if (Kind == LoaderKind.Forge && LegacyForge.IsJarModEra(version.McVersion))
         {
             await LegacyForge.InstallAsync(Ctx, version, id, progress, ct);
-            await Ctx.Vanilla.CompleteAsync(id, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, "补全文件", p)), ct);
+            await Ctx.Vanilla.CompleteAsync(id, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, L.T("core.install.forge.completefiles"), p)), ct);
             return id;
         }
 
-        progress?.Report(new($"安装原版 {version.McVersion}"));
-        await Ctx.Vanilla.InstallAsync(version.McVersion, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, "下载原版文件", p)), ct);
+        progress?.Report(new(L.F("core.install.loader.installvanilla", version.McVersion)));
+        await Ctx.Vanilla.InstallAsync(version.McVersion, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, L.T("core.install.loader.downloadvanilla"), p)), ct);
 
         var work = Path.Combine(Path.GetTempPath(), "amber-forge-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(work);
         try
         {
-            progress?.Report(new($"下载 {Kind} 安装包"));
+            progress?.Report(new(L.F("core.install.forge.downloadinstaller", Kind)));
             var installerPath = Path.Combine(work, "installer.jar");
             await Ctx.Downloader.DownloadOneAsync(new DownloadItem(InstallerUrl(version), installerPath), ct);
 
             using var zip = ZipFile.OpenRead(installerPath);
             var profile = ReadJson(zip, "install_profile.json")
-                          ?? throw new InvalidDataException("安装包里没有 install_profile.json（这个版本太旧，官方没有提供安装器）");
+                          ?? throw new InvalidDataException(L.T("core.install.forge.missingprofile"));
 
             if (profile["install"] is JsonObject install && profile["versionInfo"] is JsonObject info)
             {
@@ -54,7 +55,7 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
             else
             {
                 var versionPath = (profile["json"]?.GetValue<string>() ?? "/version.json").TrimStart('/');
-                var versionJson = ReadJson(zip, versionPath) ?? throw new InvalidDataException($"安装包里没有 {versionPath}");
+                var versionJson = ReadJson(zip, versionPath) ?? throw new InvalidDataException(L.F("core.install.forge.missingentry", versionPath));
                 versionJson["inheritsFrom"] ??= version.McVersion;
                 LoaderInstallers.WriteVersionJson(dir, id, versionJson);
                 ExtractMaven(zip);
@@ -72,7 +73,7 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
             TryDeleteDir(work);
         }
 
-        await Ctx.Vanilla.CompleteAsync(id, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, "下载加载器库", p)), ct);
+        await Ctx.Vanilla.CompleteAsync(id, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, L.T("core.install.loader.downloadlibraries"), p)), ct);
         return id;
     }
 
@@ -83,7 +84,7 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
         var coordinate = install["path"]!.GetValue<string>();
         var target = Ctx.Dir.LibraryPath(MavenCoordinate.Parse(coordinate).RelativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        (zip.GetEntry(entryName) ?? throw new InvalidDataException($"安装包里没有 {entryName}")).ExtractToFile(target, true);
+        (zip.GetEntry(entryName) ?? throw new InvalidDataException(L.F("core.install.forge.missingentry", entryName))).ExtractToFile(target, true);
 
         // 只给服务端用的库不下载；clientreq 明确为 false 的就是这类。
         if (info["libraries"] is JsonArray libs)
@@ -118,8 +119,8 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
         var items = LibraryResolver.Resolve(profileVersion, dir, RuleEvaluator.Current)
             .Where(l => !string.IsNullOrEmpty(l.Url))
             .Select(l => new DownloadItem(l.Url!, l.LocalPath, l.Sha1, l.Size)).ToList();
-        progress?.Report(new("下载处理器"));
-        await Ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new($"下载处理器 {p.CompletedFiles}/{p.TotalFiles}", 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
+        progress?.Report(new(L.T("core.install.forge.downloadprocessors")));
+        await Ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.install.forge.processorprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
         var data = new Dictionary<string, string>
         {
@@ -144,14 +145,14 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
         if (processors.Count == 0) return;
 
         var required = Math.Max(vanilla.JavaVersion?.MajorVersion ?? 8, 8);
-        progress?.Report(new($"准备 Java {required}"));
+        progress?.Report(new(L.F("core.install.forge.preparejava", required)));
         var java = await Ctx.JavaFor(required, ct);
 
         for (var i = 0; i < processors.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
             var name = processors[i]["jar"]!.GetValue<string>();
-            progress?.Report(new($"运行处理器 {i + 1}/{processors.Count}：{MavenCoordinate.Parse(name).Artifact}", 100.0 * i / processors.Count));
+            progress?.Report(new(L.F("core.install.forge.runprocessor", i + 1, processors.Count, MavenCoordinate.Parse(name).Artifact), 100.0 * i / processors.Count));
             await RunProcessorAsync(processors[i], data, java, vanilla, ct);
         }
     }
@@ -197,7 +198,7 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
         psi.ArgumentList.Add(ReadMainClass(jar));
         foreach (var arg in args) psi.ArgumentList.Add(arg);
 
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动处理器");
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException(L.T("core.install.forge.processorstartfailed"));
         await using var cancel = ct.Register(() => { try { process.Kill(true); } catch { /* 已退出 */ } });
         var stdout = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
@@ -205,10 +206,10 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
         ct.ThrowIfCancellationRequested();
         var output = await stdout + await stderr;
         if (process.ExitCode != 0)
-            throw new InvalidOperationException($"处理器 {Path.GetFileName(jar)} 失败（退出代码 {process.ExitCode}）：{Tail(output)}");
+            throw new InvalidOperationException(L.F("core.install.forge.processorfailed", Path.GetFileName(jar), process.ExitCode, Tail(output)));
 
         if (outputs.Count > 0 && !await AllValidAsync(outputs, ct))
-            throw new InvalidDataException($"处理器 {Path.GetFileName(jar)} 的输出校验不通过");
+            throw new InvalidDataException(L.F("core.install.forge.processorchecksumfailed", Path.GetFileName(jar)));
     }
 
     private static async Task<bool> AllValidAsync(List<(string Path, string? Sha1)> outputs, CancellationToken ct)
@@ -224,13 +225,13 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
     private static string ReadMainClass(string jar)
     {
         using var zip = ZipFile.OpenRead(jar);
-        var manifest = zip.GetEntry("META-INF/MANIFEST.MF") ?? throw new InvalidDataException($"{jar} 没有 MANIFEST");
+        var manifest = zip.GetEntry("META-INF/MANIFEST.MF") ?? throw new InvalidDataException(L.F("core.install.forge.missingmanifest", jar));
         using var reader = new StreamReader(manifest.Open());
         while (reader.ReadLine() is { } line)
         {
             if (line.StartsWith("Main-Class:", StringComparison.OrdinalIgnoreCase)) return line["Main-Class:".Length..].Trim();
         }
-        throw new InvalidDataException($"{jar} 没有 Main-Class");
+        throw new InvalidDataException(L.F("core.install.forge.missingmainclass", jar));
     }
 
     /// <summary>data 的值：[坐标] 是库路径，'x' 是字面量，/x 是安装包里的文件（解到临时目录）。</summary>
@@ -241,7 +242,7 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
         if (value.Length > 1 && value[0] == '\'' && value[^1] == '\'') return value[1..^1];
         if (value.StartsWith('/'))
         {
-            var entry = zip.GetEntry(value.TrimStart('/')) ?? throw new InvalidDataException($"安装包里没有 {value}");
+            var entry = zip.GetEntry(value.TrimStart('/')) ?? throw new InvalidDataException(L.F("core.install.forge.missingentry", value));
             var target = Path.Combine(work, value.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             entry.ExtractToFile(target, true);
@@ -302,7 +303,7 @@ public sealed class ForgeInstaller(LoaderContext ctx) : ForgeLikeInstaller(ctx)
             foreach (var p in promos.RootElement.GetProperty("promos").EnumerateObject())
             {
                 if (!p.Name.StartsWith(mcVersion + "-", StringComparison.Ordinal)) continue;
-                notes[p.Value.GetString()!] = p.Name.EndsWith("recommended", StringComparison.Ordinal) ? RecommendedNote : "最新";
+                notes[p.Value.GetString()!] = p.Name.EndsWith("recommended", StringComparison.Ordinal) ? RecommendedNote : L.T("core.install.forge.latest");
             }
         }
         catch (Exception e) when (e is HttpRequestException or JsonException or KeyNotFoundException) { }

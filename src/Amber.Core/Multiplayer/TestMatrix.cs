@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -12,9 +13,9 @@ public sealed record MatrixStep(int Index, RouteKind Route, PathKind? Path, bool
     public string Label => (Route switch
     {
         RouteKind.Direct => DirectText.Path(Path!.Value),
-        RouteKind.Relay => "经第三人中转",
-        _ => "经联机节点",
-    }) + (FullLan ? " · 完整局域网" : " · 默认模式") + (Exit ? " · 出口开" : "");
+        RouteKind.Relay => L.T("core.mp.matrix.relay"),
+        _ => L.T("core.mp.matrix.node"),
+    }) + (FullLan ? L.T("core.mp.matrix.fulllan") : L.T("core.mp.matrix.defaultmode")) + (Exit ? L.T("core.mp.matrix.exiton") : "");
 }
 
 public sealed record MatrixResult(
@@ -94,7 +95,7 @@ public static class TestMatrix
             var prerequisite = step.Exit ? results.LastOrDefault(r => r.Step.Route == step.Route && r.Step.Path == step.Path && r.Step.FullLan && !r.Step.Exit) : null;
             if (prerequisite is { Passed: not true })
             {
-                result = new MatrixResult(step, null, Reason: "跳过：这条路的完整局域网模式没通", Simulated: simulated);
+                result = new MatrixResult(step, null, Reason: L.T("core.mp.matrix.prerequisitefailed"), Simulated: simulated);
             }
             else
             {
@@ -108,11 +109,11 @@ public static class TestMatrix
                 }
                 catch (Exception e) when (e is OperationCanceledException or TimeoutException && !ct.IsCancellationRequested)
                 {
-                    result = new MatrixResult(step, false, Reason: $"超时（{stepTimeout.TotalSeconds:F0} 秒）", Simulated: simulated);
+                    result = new MatrixResult(step, false, Reason: L.F("core.mp.matrix.timeout", stepTimeout.TotalSeconds), Simulated: simulated);
                 }
                 catch (Exception e) when (!ct.IsCancellationRequested && e is not OperationCanceledException)
                 {
-                    result = new MatrixResult(step, false, Reason: "出错：" + e.Message, Simulated: simulated);
+                    result = new MatrixResult(step, false, Reason: L.T("core.mp.matrix.error") + e.Message, Simulated: simulated);
                 }
             }
             results.Add(result);
@@ -123,14 +124,14 @@ public static class TestMatrix
 
     public static List<string> FormatTable(IEnumerable<MatrixResult> results)
     {
-        var lines = new List<string> { "序号 | 组合 | 结果 | 连接用时 | 延迟 | 吞吐 | 聊天 | 出口 | 说明" };
+        var lines = new List<string> { L.T("core.mp.matrix.header") };
         foreach (var r in results)
         {
-            static string Flag(bool? v) => v switch { true => "通", false => "不通", _ => "-" };
+            static string Flag(bool? v) => v switch { true => L.T("core.mp.matrix.connected"), false => L.T("core.mp.matrix.unreachable"), _ => "-" };
             lines.Add(string.Join(" | ",
                 r.Step.Index,
-                r.Step.Label + (r.Simulated ? "（模拟）" : ""),
-                r.Passed switch { true => "通过", false => "失败", _ => "跳过" },
+                r.Step.Label + (r.Simulated ? L.T("core.mp.matrix.simulated") : ""),
+                r.Passed switch { true => L.T("core.mp.matrix.passed"), false => L.T("core.mp.matrix.failed"), _ => L.T("core.mp.matrix.skipped") },
                 r.ConnectMs is { } c ? $"{c} ms" : "-",
                 r.LatencyMs is { } l ? $"{l:F1} ms" : "-",
                 r.ThroughputMbps is { } t ? $"{t:F1} Mbps" : "-",
@@ -237,7 +238,7 @@ public sealed class SpeedTestServer : IAsyncDisposable
         var ack = new byte[8];
         await stream.ReadExactlyAsync(ack, ct);
         var received = BitConverter.ToInt64(ack);
-        if (received != bytes) throw new IOException($"只收到 {received}/{bytes} 字节");
+        if (received != bytes) throw new IOException(L.F("core.mp.speed.incomplete", received, bytes));
         return bytes * 8 / 1_000_000.0 / Math.Max(watch.Elapsed.TotalSeconds, 0.001);
     }
 }

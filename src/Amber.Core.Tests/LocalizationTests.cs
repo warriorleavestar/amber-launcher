@@ -54,6 +54,33 @@ public partial class LocalizationTests
         Assert.True(offenders.Count == 0, "界面里还有写死的中文：\n" + string.Join("\n", offenders.Take(40)));
     }
 
+    /// <summary>Core 里故意保留的中文：和游戏日志、比较用的常量对得上的文字。</summary>
+    private static readonly string[] CoreAllowed =
+    [
+        "public const string MatchText = \"匹配\";",
+        "public const string RecommendedNote = \"推荐\";",
+        "在端口",
+        // 语言选单里每种语言用它自己的写法显示。
+        "(\"zh-Hans\", \"简体中文\")",
+        "(\"zh-Hant\", \"繁體中文\")",
+        "(\"ja\", \"日本語\")",
+    ];
+
+    [Fact]
+    public void NoHardCodedChineseInCore()
+    {
+        var offenders = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(Src, "Amber.Core"), "*.cs", SearchOption.AllDirectories)
+                     .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")))
+        {
+            var lines = StripComments(file, File.ReadAllText(file)).Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+                if (Cjk().IsMatch(lines[i]) && !CoreAllowed.Any(a => lines[i].Contains(a, StringComparison.Ordinal)))
+                    offenders.Add($"{Path.GetRelativePath(Src, file)}:{i + 1}: {lines[i].Trim()}");
+        }
+        Assert.True(offenders.Count == 0, "Core 里还有写死的中文：\n" + string.Join("\n", offenders.Take(40)));
+    }
+
     [Fact]
     public void EveryUsedKeyExists()
     {

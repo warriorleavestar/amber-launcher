@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -34,20 +35,20 @@ public static class DirectText
 {
     public static string Path(PathKind kind) => kind switch
     {
-        PathKind.IPv6 => "IPv6 直连",
-        PathKind.Mapped => "路由器映射端口",
-        PathKind.Lan => "同一局域网",
-        PathKind.Punch => "IPv4 打洞",
-        PathKind.PunchSpray => "IPv4 打洞（喷洒）",
+        PathKind.IPv6 => L.T("core.mp.path.ipv6"),
+        PathKind.Mapped => L.T("core.mp.path.mapped"),
+        PathKind.Lan => L.T("core.mp.path.lan"),
+        PathKind.Punch => L.T("core.mp.path.punch"),
+        PathKind.PunchSpray => L.T("core.mp.path.spray"),
         _ => kind.ToString(),
     };
 
     public static string Nat(NatKind kind) => kind switch
     {
-        NatKind.Open => "有公网地址（很好连）",
-        NatKind.Cone => "锥形 NAT（容易打洞）",
-        NatKind.Symmetric => "对称 NAT（严格，不容易打洞）",
-        _ => "未知",
+        NatKind.Open => L.T("core.mp.nat.open"),
+        NatKind.Cone => L.T("core.mp.nat.cone"),
+        NatKind.Symmetric => L.T("core.mp.nat.symmetric"),
+        _ => L.T("core.mp.nat.unknown"),
     };
 }
 
@@ -93,19 +94,19 @@ public sealed record DirectCode(bool IsReply, RoomCode Room, string Session, Nat
         }
         if (start < 0)
         {
-            error = "没认出直连码（应以 AMBDIRECT 或 AMBREPLY 开头）";
+            error = L.T("core.mp.code.unrecognized");
             return false;
         }
         var rest = text[(start + (isReply ? ReplyPrefix : InvitePrefix).Length)..];
         var dash = rest.IndexOf('-');
         if (dash <= 0 || !int.TryParse(rest[..dash], out var version))
         {
-            error = "直连码不完整";
+            error = L.T("core.mp.code.incomplete");
             return false;
         }
         if (version != Version)
         {
-            error = $"直连码是第 {version} 版，这个 Amber 只认第 {Version} 版：请双方用同一版本的 Amber";
+            error = L.F("core.mp.code.version", version, Version);
             return false;
         }
         var body = new string(rest[(dash + 1)..].TakeWhile(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_').ToArray());
@@ -130,7 +131,7 @@ public sealed record DirectCode(bool IsReply, RoomCode Room, string Session, Nat
         }
         catch (Exception e) when (e is FormatException or JsonException or InvalidOperationException or NullReferenceException)
         {
-            error = "直连码损坏了（可能复制时少了一截）";
+            error = L.T("core.mp.code.corrupted");
             return false;
         }
     }
@@ -153,13 +154,13 @@ public static class DirectGatherer
                 list.Add(new Candidate(PathKind.Lan, new IPEndPoint(address, port)));
         }
         log(list.Any(c => c.Kind == PathKind.IPv6)
-            ? "IPv6：" + string.Join("、", list.Where(c => c.Kind == PathKind.IPv6).Select(c => c.EndPoint.Address))
-            : "IPv6：没有公网 IPv6 地址");
-        log("局域网地址：" + string.Join("、", list.Where(c => c.Kind == PathKind.Lan).Select(c => c.EndPoint.Address)));
+            ? L.T("core.mp.gather.ipv6") + string.Join(L.T("core.mp.format.listseparator"), list.Where(c => c.Kind == PathKind.IPv6).Select(c => c.EndPoint.Address))
+            : L.T("core.mp.gather.noipv6"));
+        log(L.T("core.mp.gather.lan") + string.Join(L.T("core.mp.format.listseparator"), list.Where(c => c.Kind == PathKind.Lan).Select(c => c.EndPoint.Address)));
 
         var watch = Stopwatch.StartNew();
         var stun = await Stun.DetectAsync(socket, stunServers, ct);
-        log($"STUN（{watch.ElapsedMilliseconds} ms）：{stun.Detail}{(stun.Mapped is { } m ? "，外部地址 " + m : "")}");
+        log(L.F("core.mp.gather.stun", watch.ElapsedMilliseconds, stun.Detail, stun.Mapped is { } m ? L.T("core.mp.gather.external") + m : ""));
         if (stun.Mapped is { } mapped && mapped.AddressFamily == AddressFamily.InterNetwork)
             list.Add(new Candidate(PathKind.Punch, mapped));
 
@@ -281,8 +282,8 @@ public sealed class DirectBridge : IAsyncDisposable
         var targets = remote.Where(c => AllowedPaths.Contains(c.Kind)).ToList();
         var spray = AllowedPaths.Contains(PathKind.PunchSpray) && remoteNat == NatKind.Symmetric
                     && remote.FirstOrDefault(c => c.Kind == PathKind.Punch) is { } punch ? punch.EndPoint : null;
-        _log($"开始打洞：{targets.Count} 个地址" + (spray is null ? "" : $"，对方是对称 NAT，另外往 {spray.Address} 的 {SprayPorts} 个端口喷洒"));
-        foreach (var t in targets) _log("  尝试 " + t);
+        _log(L.F("core.mp.punch.start", targets.Count) + (spray is null ? "" : L.F("core.mp.punch.spray", spray.Address, SprayPorts)));
+        foreach (var t in targets) _log(L.T("core.mp.punch.try") + t);
         var known = _peers.Count;
         var start = _clock.ElapsedMilliseconds;
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct, _cts.Token);
@@ -313,7 +314,7 @@ public sealed class DirectBridge : IAsyncDisposable
                 var newest = _peers.Values.Where(p => p.ConnectedMs >= start).OrderBy(p => p.ConnectedMs).FirstOrDefault();
                 if (newest is not null && (!_isHost || _peers.Count > known))
                 {
-                    _log($"打通：{DirectText.Path(newest.Path)} {newest.Remote}，用时 {newest.ConnectedMs - start} ms，共发探测包 {sent} 个");
+                    _log(L.F("core.mp.punch.success", DirectText.Path(newest.Path), newest.Remote, newest.ConnectedMs - start, sent));
                     return newest;
                 }
                 await Task.Delay(tick < 20 ? 100 : 300, limit.Token);
@@ -323,7 +324,7 @@ public sealed class DirectBridge : IAsyncDisposable
         {
             // 超时。
         }
-        _log($"打洞超时（{timeout.TotalSeconds:F0} 秒，共发探测包 {sent} 个）");
+        _log(L.F("core.mp.punch.timeout", timeout.TotalSeconds, sent));
         return null;
     }
 
@@ -436,7 +437,7 @@ public sealed class DirectBridge : IAsyncDisposable
         var peer = new DirectPeer { Remote = from, Path = Classify(from), ConnectedMs = _clock.ElapsedMilliseconds };
         if (!AllowedPaths.Contains(peer.Path) && !(peer.Path == PathKind.Punch && AllowedPaths.Contains(PathKind.PunchSpray)))
         {
-            _log($"收到 {from} 的回应，但这条路径（{DirectText.Path(peer.Path)}）被禁用了，忽略");
+            _log(L.F("core.mp.punch.disabled", from, DirectText.Path(peer.Path)));
             return;
         }
         if (!_peers.TryAdd(from, peer)) return;
@@ -449,7 +450,7 @@ public sealed class DirectBridge : IAsyncDisposable
             peer.Local = local;
             _loops.Add(HostLocalLoopAsync(peer));
         }
-        _log($"已连上 {from}（{DirectText.Path(peer.Path)}）");
+        _log(L.F("core.mp.punch.connected", from, DirectText.Path(peer.Path)));
         Connected?.Invoke(peer);
     }
 

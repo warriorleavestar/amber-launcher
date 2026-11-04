@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Buffers.Binary;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -26,7 +27,7 @@ public static partial class PortMapping
         catch (Exception e) when (e is SocketException or HttpRequestException or IOException or System.Xml.XmlException or OperationCanceledException or FormatException)
         {
             if (ct.IsCancellationRequested) throw;
-            log("UPnP 失败：" + e.Message);
+            log(L.T("core.mp.upnp.failed") + e.Message);
         }
         try
         {
@@ -35,9 +36,9 @@ public static partial class PortMapping
         catch (Exception e) when (e is SocketException or OperationCanceledException)
         {
             if (ct.IsCancellationRequested) throw;
-            log("NAT-PMP 失败：" + e.Message);
+            log(L.T("core.mp.natpmp.failed") + e.Message);
         }
-        log("PCP：没有尝试（家用路由器很少支持）");
+        log(L.T("core.mp.pcp.skipped"));
         return null;
     }
 
@@ -57,10 +58,10 @@ public static partial class PortMapping
         var location = await DiscoverAsync(ct);
         if (location is null)
         {
-            log("UPnP：没有发现支持的路由器（可能没开 UPnP）");
+            log(L.T("core.mp.upnp.notfound"));
             return null;
         }
-        log("UPnP：发现网关 " + location.Host);
+        log(L.T("core.mp.upnp.gateway") + location.Host);
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
         var xml = XDocument.Parse(await http.GetStringAsync(location, ct));
         XNamespace ns = "urn:schemas-upnp-org:device-1-0";
@@ -68,7 +69,7 @@ public static partial class PortMapping
             (string?)s.Element(ns + "serviceType") is { } t && (t.Contains("WANIPConnection") || t.Contains("WANPPPConnection")));
         if (service is null)
         {
-            log("UPnP：网关没有 WANIPConnection 服务");
+            log(L.T("core.mp.upnp.noservice"));
             return null;
         }
         var type = (string)service.Element(ns + "serviceType")!;
@@ -78,17 +79,17 @@ public static partial class PortMapping
         var external = ExtractTag(await SoapAsync(http, control, type, "GetExternalIPAddress", "", ct), "NewExternalIPAddress");
         if (external is null || !IPAddress.TryParse(external, out var externalIp))
         {
-            log("UPnP：拿不到路由器的外网地址");
+            log(L.T("core.mp.upnp.noexternal"));
             return null;
         }
-        log($"UPnP：路由器外网地址 {externalIp}{(IsPublic(externalIp) ? "" : "（不是公网地址，路由器在运营商 NAT 后面，映射没用）")}");
+        log(L.F("core.mp.upnp.external", externalIp, IsPublic(externalIp) ? "" : L.T("core.mp.upnp.privateaddress")));
         if (!IsPublic(externalIp)) return null;
 
         var args = $"<NewRemoteHost></NewRemoteHost><NewExternalPort>{localPort}</NewExternalPort><NewProtocol>UDP</NewProtocol>" +
                    $"<NewInternalPort>{localPort}</NewInternalPort><NewInternalClient>{localIp}</NewInternalClient><NewEnabled>1</NewEnabled>" +
                    $"<NewPortMappingDescription>Amber</NewPortMappingDescription><NewLeaseDuration>7200</NewLeaseDuration>";
         await SoapAsync(http, control, type, "AddPortMapping", args, ct);
-        log($"UPnP：已映射外部 UDP {localPort} → 本机 {localIp}:{localPort}（租期 2 小时）");
+        log(L.F("core.mp.upnp.mapped", localPort, localIp, localPort));
         return new PortMappingResult("UPnP", new IPEndPoint(externalIp, localPort), async () =>
         {
             using var h = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
@@ -130,7 +131,7 @@ public static partial class PortMapping
         request.Headers.TryAddWithoutValidation("SOAPAction", $"\"{serviceType}#{action}\"");
         using var response = await http.SendAsync(request, ct);
         var text = await response.Content.ReadAsStringAsync(ct);
-        if (!response.IsSuccessStatusCode) throw new HttpRequestException($"{action} 被路由器拒绝：{ExtractTag(text, "errorDescription") ?? response.StatusCode.ToString()}");
+        if (!response.IsSuccessStatusCode) throw new HttpRequestException(L.F("core.mp.upnp.rejected", action, ExtractTag(text, "errorDescription") ?? response.StatusCode.ToString()));
         return text;
     }
 
@@ -147,7 +148,7 @@ public static partial class PortMapping
         var gateway = DefaultGateway();
         if (gateway is null)
         {
-            log("NAT-PMP：找不到默认网关");
+            log(L.T("core.mp.natpmp.nogateway"));
             return null;
         }
         using var udp = new UdpClient(AddressFamily.InterNetwork);
@@ -155,11 +156,11 @@ public static partial class PortMapping
         var address = await PmpRequestAsync(udp, target, [0, 0], 12, ct);
         if (address is null)
         {
-            log("NAT-PMP：网关没有回应（多数路由器不支持）");
+            log(L.T("core.mp.natpmp.noresponse"));
             return null;
         }
         var externalIp = new IPAddress(address.AsSpan(8, 4).ToArray());
-        log($"NAT-PMP：网关外网地址 {externalIp}");
+        log(L.F("core.mp.natpmp.external", externalIp));
         if (!IsPublic(externalIp)) return null;
         var mapRequest = new byte[12];
         mapRequest[1] = 1;
@@ -169,7 +170,7 @@ public static partial class PortMapping
         var mapped = await PmpRequestAsync(udp, target, mapRequest, 16, ct);
         if (mapped is null || BinaryPrimitives.ReadUInt16BigEndian(mapped.AsSpan(2)) != 0) return null;
         var externalPort = BinaryPrimitives.ReadUInt16BigEndian(mapped.AsSpan(10));
-        log($"NAT-PMP：已映射外部 UDP {externalPort} → 本机 {localPort}");
+        log(L.F("core.mp.natpmp.mapped", externalPort, localPort));
         return new PortMappingResult("NAT-PMP", new IPEndPoint(externalIp, externalPort), async () =>
         {
             using var u = new UdpClient(AddressFamily.InterNetwork);

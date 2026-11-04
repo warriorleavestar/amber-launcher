@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -22,22 +23,22 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
             var index = ReadJson(mr);
             var deps = index["dependencies"]?.AsObject() ?? [];
             var (loader, version) = MrpackLoader(deps);
-            return new ModpackInfo("Modrinth", index["name"]?.GetValue<string>() ?? "整合包", index["versionId"]?.GetValue<string>(),
-                deps["minecraft"]?.GetValue<string>() ?? throw new InvalidDataException("整合包没有指定游戏版本"), loader, version, (index["files"] as JsonArray)?.Count ?? 0);
+            return new ModpackInfo("Modrinth", index["name"]?.GetValue<string>() ?? L.T("core.content.modpack.defaultname"), index["versionId"]?.GetValue<string>(),
+                deps["minecraft"]?.GetValue<string>() ?? throw new InvalidDataException(L.T("core.content.modpack.nogameversion")), loader, version, (index["files"] as JsonArray)?.Count ?? 0);
         }
         // MCBBS 整合包常常同时带一份 CurseForge 格式的 manifest.json，以 packmeta 为准。
         if (zip.GetEntry("mcbbs.packmeta") is not null) return InspectOtherLaunchers(zip)!;
         if (zip.GetEntry("manifest.json") is { } cf)
         {
             var manifest = ReadJson(cf);
-            if (manifest["manifestType"]?.GetValue<string>() != "minecraftModpack") throw new InvalidDataException("不是 CurseForge 整合包");
+            if (manifest["manifestType"]?.GetValue<string>() != "minecraftModpack") throw new InvalidDataException(L.T("core.content.modpack.notcurseforge"));
             var mc = manifest["minecraft"]!;
             var (loader, version) = CurseForgeLoader(mc);
-            return new ModpackInfo("CurseForge", manifest["name"]?.GetValue<string>() ?? "整合包", manifest["version"]?.GetValue<string>(),
+            return new ModpackInfo("CurseForge", manifest["name"]?.GetValue<string>() ?? L.T("core.content.modpack.defaultname"), manifest["version"]?.GetValue<string>(),
                 mc["version"]!.GetValue<string>(), loader, version, (manifest["files"] as JsonArray)?.Count ?? 0);
         }
         return InspectOtherLaunchers(zip)
-               ?? throw new InvalidDataException("不认识这个整合包：支持 Modrinth（mrpack）、CurseForge、MultiMC / Prism 实例、HMCL 和 MCBBS 整合包");
+               ?? throw new InvalidDataException(L.T("core.content.modpack.unrecognized"));
     }
 
     /// <summary>安装整合包：先装加载器（版本名字用 name），再下载文件、释放 overrides 到版本隔离目录。</summary>
@@ -45,7 +46,7 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
     {
         var info = Inspect(packPath);
         name = name.Trim();
-        if (string.IsNullOrEmpty(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new ArgumentException($"不能用这个名字：{name}");
+        if (string.IsNullOrEmpty(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new ArgumentException(L.F("core.content.modpack.invalidname", name));
 
         var id = await InstallBaseAsync(info, name, progress, ct);
         var workDir = workDirForVersion(id);
@@ -65,7 +66,7 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
     {
         if (info.Loader is not { } kind)
         {
-            await ctx.Vanilla.InstallAsync(info.McVersion, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, "下载游戏文件", p)), ct);
+            await ctx.Vanilla.InstallAsync(info.McVersion, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, L.T("core.content.modpack.downloadgamefiles"), p)), ct);
             // 没有加载器的整合包也要一个独立版本，避免和原版共用目录。
             var json = new JsonObject { ["inheritsFrom"] = info.McVersion, ["type"] = "release" };
             LoaderInstallers.WriteVersionJson(ctx.Dir, name, json);
@@ -77,7 +78,7 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
 
     private static string PackLoaderVersion(LoaderKind kind, ModpackInfo info)
     {
-        var version = info.LoaderVersion ?? throw new InvalidDataException("整合包没有指定加载器版本");
+        var version = info.LoaderVersion ?? throw new InvalidDataException(L.T("core.content.modpack.noloaderversion"));
         // 整合包里的 Forge 版本是 47.2.0，安装包路径要 1.20.1-47.2.0。
         if (kind == LoaderKind.Forge && !version.StartsWith(info.McVersion + "-", StringComparison.Ordinal))
             return $"{info.McVersion}-{version}";
@@ -92,15 +93,15 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         {
             if (file["env"]?["client"]?.GetValue<string>() == "unsupported") continue;
             var target = SafeJoin(workDir, file["path"]!.GetValue<string>());
-            var sha1 = file["hashes"]?["sha1"]?.GetValue<string>() ?? throw new InvalidDataException($"{file["path"]} 没有 SHA1，mrpack 规范要求必须有");
+            var sha1 = file["hashes"]?["sha1"]?.GetValue<string>() ?? throw new InvalidDataException(L.F("core.content.modpack.missingsha1", file["path"]));
             var url = (file["downloads"] as JsonArray)?.Select(u => u?.GetValue<string>()).FirstOrDefault(u => u is not null && u.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                      ?? throw new InvalidDataException($"{file["path"]} 没有可用的 https 下载地址");
+                      ?? throw new InvalidDataException(L.F("core.content.modpack.nohttpsurl", file["path"]));
             items.Add(new DownloadItem(url, target, sha1, file["fileSize"]?.GetValue<long>()));
         }
-        progress?.Report(new("下载整合包文件"));
-        await ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new($"下载整合包文件 {p.CompletedFiles}/{p.TotalFiles}", 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
+        progress?.Report(new(L.T("core.content.modpack.downloadfiles")));
+        await ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.content.modpack.downloadprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
-        progress?.Report(new("释放配置文件"));
+        progress?.Report(new(L.T("core.content.modpack.extractconfig")));
         ExtractPrefix(zip, "overrides/", workDir);
         ExtractPrefix(zip, "client-overrides/", workDir);
     }
@@ -109,17 +110,17 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
     {
         var manifest = ReadJson(zip.GetEntry("manifest.json")!);
         var ids = (manifest["files"] as JsonArray ?? []).OfType<JsonObject>().Select(f => f["fileID"]!.GetValue<long>()).ToList();
-        progress?.Report(new("查询模组信息"));
+        progress?.Report(new(L.T("core.content.modpack.querymods")));
         var files = await curseForge.GetFilesByIdAsync(ids, ct);
         var missing = ids.Count - files.Count;
 
         var folders = await curseForge.GetProjectFoldersAsync(files.Select(f => long.Parse(f.ProjectId)).Distinct().ToList(), ct);
         var items = files.Select(f => ContentInstaller.ToItem(f, Path.Combine(workDir, folders.GetValueOrDefault(f.ProjectId, "mods")))).ToList();
-        await ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new($"下载整合包文件 {p.CompletedFiles}/{p.TotalFiles}", 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
+        await ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.content.modpack.downloadprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
         var overrides = manifest["overrides"]?.GetValue<string>() ?? "overrides";
         ExtractPrefix(zip, overrides.TrimEnd('/') + "/", workDir);
-        if (missing > 0) throw new InvalidDataException($"整合包有 {missing} 个文件在 CurseForge 上查不到，其余已安装");
+        if (missing > 0) throw new InvalidDataException(L.F("core.content.modpack.missingcursefiles", missing));
     }
 
     /// <summary>导出 mrpack：能在 Modrinth 上按哈希识别的模组写成下载项，其余放进 overrides。</summary>
@@ -308,7 +309,7 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
             "neoforge" => (LoaderKind.NeoForge, version),
             "fabric" => (LoaderKind.Fabric, version),
             "quilt" => (LoaderKind.Quilt, version),
-            var other => throw new InvalidDataException($"不支持的加载器：{other}"),
+            var other => throw new InvalidDataException(L.F("core.content.modpack.unsupportedloader", other)),
         };
     }
 
@@ -332,13 +333,13 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         var full = Path.GetFullPath(Path.Combine(rootFull, relative.Replace('/', Path.DirectorySeparatorChar)));
         var prefix = rootFull.EndsWith(Path.DirectorySeparatorChar) ? rootFull : rootFull + Path.DirectorySeparatorChar;
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException($"整合包里有不安全的路径：{relative}");
+            throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
         return full;
     }
 
     private static JsonObject ReadJson(ZipArchiveEntry entry)
     {
         using var stream = entry.Open();
-        return JsonNode.Parse(stream)?.AsObject() ?? throw new InvalidDataException($"{entry.FullName} 解析失败");
+        return JsonNode.Parse(stream)?.AsObject() ?? throw new InvalidDataException(L.F("core.content.modpack.parsefailed", entry.FullName));
     }
 }

@@ -63,6 +63,20 @@ public sealed partial class HomeViewModel : PageViewModel
     [ObservableProperty]
     public partial string Status { get; set; } = L.T("home.status.ready");
 
+    /// <summary>空闲时的状态文字对应的翻译键；换语言时按它重新取文字。显示的是别的内容（进度、错误）时为 null。</summary>
+    private string? _statusKey = "home.status.ready";
+
+    private void SetIdleStatus(string key)
+    {
+        _statusKey = key;
+        Status = L.T(key);
+    }
+
+    partial void OnStatusChanged(string value)
+    {
+        if (_statusKey is not null && value != L.T(_statusKey)) _statusKey = null;
+    }
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasCrash))]
     public partial CrashAnalysis? Crash { get; set; }
@@ -82,6 +96,11 @@ public sealed partial class HomeViewModel : PageViewModel
         service.LaunchRequested += request => Dispatcher.UIThread.Post(() => _ = RunAsync(request));
         RefreshVersions();
         RefreshAccounts();
+        L.Changed += () => Dispatcher.UIThread.Post(() =>
+        {
+            OnSelectedVersionChanged(SelectedVersion);
+            if (_statusKey is { } key) Status = L.T(key);
+        });
     }
 
     private void RefreshAccounts()
@@ -107,7 +126,7 @@ public sealed partial class HomeViewModel : PageViewModel
         Versions.Clear();
         foreach (var v in _service.InstalledVersions()) Versions.Add(v);
         SelectedVersion = keep is not null && Versions.Contains(keep) ? keep : Versions.FirstOrDefault();
-        if (Versions.Count == 0) Status = L.T("home.status.no_versions");
+        if (Versions.Count == 0) SetIdleStatus("home.status.no_versions");
     }
 
     partial void OnSelectedVersionChanged(string? value)
@@ -119,7 +138,7 @@ public sealed partial class HomeViewModel : PageViewModel
             var instance = _service.GetInstance(value);
             var loader = instance.Loader is null ? L.T("home.version.vanilla") : $"{instance.Loader} {instance.LoaderVersion}";
             var mods = new ModManager(instance.ModsDir).CountEnabled();
-            VersionInfo = L.F("home.version.info", instance.McVersion, loader, mods > 0 ? L.F("home.version.mod_count", mods) : "");
+            VersionInfo = L.F("home.version.info", instance.McVersion, loader, mods switch { 0 => "", 1 => L.T("home.version.mod_count_one"), _ => L.F("home.version.mod_count", mods) });
         }
         catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException)
         {
