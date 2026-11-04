@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
@@ -55,7 +56,7 @@ public sealed class CipherState : IDisposable
         if (!hasKey) return plaintext.ToArray();
         ObjectDisposedException.ThrowIf(aead is null, this);
         // 2^64-1 留给 Rekey 用，不能拿来加密。
-        if (_n == ulong.MaxValue) throw new CryptographicException("nonce 用完了，必须换钥");
+        if (_n == ulong.MaxValue) throw new CryptographicException(L.T("core.mp.noise.nonceexhausted"));
         var output = new byte[plaintext.Length + TagLength];
         aead.Encrypt(NonceBytes(_n), plaintext, output.AsSpan(0, plaintext.Length), output.AsSpan(plaintext.Length), ad);
         _n++;
@@ -70,8 +71,8 @@ public sealed class CipherState : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!hasKey) return ciphertext.ToArray();
         ObjectDisposedException.ThrowIf(aead is null, this);
-        if (_n == ulong.MaxValue) throw new CryptographicException("nonce 用完了，必须换钥");
-        if (ciphertext.Length < TagLength) throw new CryptographicException("密文太短");
+        if (_n == ulong.MaxValue) throw new CryptographicException(L.T("core.mp.noise.nonceexhausted"));
+        if (ciphertext.Length < TagLength) throw new CryptographicException(L.T("core.mp.noise.ciphertextshort"));
         var plain = new byte[ciphertext.Length - TagLength];
         aead.Decrypt(NonceBytes(_n), ciphertext[..plain.Length], ciphertext[plain.Length..], plain, ad);
         _n++;
@@ -226,7 +227,7 @@ public sealed class X25519KeyPair : IDisposable
 
     public byte[] Dh(ReadOnlySpan<byte> remotePublic)
     {
-        if (remotePublic.Length != Length) throw new CryptographicException("X25519 公钥长度不对");
+        if (remotePublic.Length != Length) throw new CryptographicException(L.T("core.mp.noise.publickeylength"));
         byte[] shared;
         try
         {
@@ -236,10 +237,10 @@ public sealed class X25519KeyPair : IDisposable
         catch (PlatformNotSupportedException e)
         {
             // CNG 拒绝导入不合法的点（比如全零），统一当作握手失败。
-            throw new CryptographicException("对方的 X25519 公钥不合法", e);
+            throw new CryptographicException(L.T("core.mp.noise.invalidpublickey"), e);
         }
         // 全零结果说明对方给了小阶点，直接拒绝（RFC 7748 第 6.1 节建议的检查）。
-        if (shared.All(b => b == 0)) throw new CryptographicException("X25519 共享密钥是全零");
+        if (shared.All(b => b == 0)) throw new CryptographicException(L.T("core.mp.noise.zerosharedkey"));
         return shared;
     }
 
@@ -271,7 +272,7 @@ public sealed class NoiseHandshake : IDisposable
 
     public NoiseHandshake(NoisePattern pattern, bool initiator, ReadOnlySpan<byte> prologue, byte[] psk)
     {
-        if (psk.Length != 32) throw new ArgumentException("psk 必须是 32 字节");
+        if (psk.Length != 32) throw new ArgumentException(L.T("core.mp.noise.psklength"));
         _pattern = pattern;
         _initiator = initiator;
         _psk = psk.ToArray();
@@ -306,7 +307,7 @@ public sealed class NoiseHandshake : IDisposable
 
     private ReadOnlySpan<byte> ReadE(ReadOnlySpan<byte> message)
     {
-        if (message.Length < X25519KeyPair.Length) throw new CryptographicException("握手消息太短");
+        if (message.Length < X25519KeyPair.Length) throw new CryptographicException(L.T("core.mp.noise.handshakeshort"));
         _re = message[..X25519KeyPair.Length].ToArray();
         _ss.MixHash(_re);
         _ss.MixKey(_re);
@@ -323,7 +324,7 @@ public sealed class NoiseHandshake : IDisposable
         }
         catch (PlatformNotSupportedException e)
         {
-            throw new CryptographicException("这台电脑的系统不支持极端加密要用的 ML-KEM（需要较新的 Windows 11）", e);
+            throw new CryptographicException(L.T("core.mp.noise.hybridunsupported"), e);
         }
     }
 
@@ -337,14 +338,14 @@ public sealed class NoiseHandshake : IDisposable
         }
         catch (PlatformNotSupportedException e)
         {
-            throw new CryptographicException("这台电脑的系统不支持极端加密要用的 ML-KEM（需要较新的 Windows 11）", e);
+            throw new CryptographicException(L.T("core.mp.noise.hybridunsupported"), e);
         }
     }
 
     private void EnsureHybridSupported()
     {
         if (_pattern == NoisePattern.NNhfspsk0 && !HybridSupported)
-            throw new CryptographicException("这台电脑的系统不支持极端加密要用的 ML-KEM（需要较新的 Windows 11）");
+            throw new CryptographicException(L.T("core.mp.noise.hybridunsupported"));
     }
 
     private byte[] WriteMessageCore(ReadOnlySpan<byte> payload)
@@ -377,7 +378,7 @@ public sealed class NoiseHandshake : IDisposable
                 CryptographicOperations.ZeroMemory(shared);
             }
         }
-        else throw new InvalidOperationException("现在不该写握手消息");
+        else throw new InvalidOperationException(L.T("core.mp.noise.unexpectedwrite"));
         message.AddRange(_ss.EncryptAndHash(payload));
         _step++;
         return [.. message];
@@ -394,7 +395,7 @@ public sealed class NoiseHandshake : IDisposable
 #pragma warning disable SYSLIB5006
                 var length = MLKemAlgorithm.MLKem768.EncapsulationKeySizeInBytes + CipherState.TagLength;
 #pragma warning restore SYSLIB5006
-                if (message.Length < length) throw new CryptographicException("握手消息太短");
+                if (message.Length < length) throw new CryptographicException(L.T("core.mp.noise.handshakeshort"));
                 _re1 = _ss.DecryptAndHash(message[..length]);
                 message = message[length..];
             }
@@ -407,7 +408,7 @@ public sealed class NoiseHandshake : IDisposable
             {
 #pragma warning disable SYSLIB5006
                 var length = MLKemAlgorithm.MLKem768.CiphertextSizeInBytes + CipherState.TagLength;
-                if (message.Length < length) throw new CryptographicException("握手消息太短");
+                if (message.Length < length) throw new CryptographicException(L.T("core.mp.noise.handshakeshort"));
                 var ciphertext = _ss.DecryptAndHash(message[..length]);
                 var shared = _e1!.Decapsulate(ciphertext);
 #pragma warning restore SYSLIB5006
@@ -416,7 +417,7 @@ public sealed class NoiseHandshake : IDisposable
                 message = message[length..];
             }
         }
-        else throw new InvalidOperationException("现在不该读握手消息");
+        else throw new InvalidOperationException(L.T("core.mp.noise.unexpectedread"));
         var payload = _ss.DecryptAndHash(message);
         _step++;
         return payload;
@@ -425,7 +426,7 @@ public sealed class NoiseHandshake : IDisposable
     /// <summary>握手完成后分出两个方向的加密状态：(自己发用的, 自己收用的)。</summary>
     public (CipherState Send, CipherState Receive) Split()
     {
-        if (!IsComplete) throw new InvalidOperationException("握手还没完成");
+        if (!IsComplete) throw new InvalidOperationException(L.T("core.mp.noise.incomplete"));
         var (c1, c2) = _ss.Split();
         return _initiator ? (c1, c2) : (c2, c1);
     }

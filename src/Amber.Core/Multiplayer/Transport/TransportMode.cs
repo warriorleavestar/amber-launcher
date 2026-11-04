@@ -1,3 +1,5 @@
+using Amber.Core.Localization;
+
 namespace Amber.Core.Multiplayer.Transport;
 
 /// <summary>联机和聊天的数据流怎么封装。房主选，加入方跟着房间码里的设置走（两边必须一样）。</summary>
@@ -34,15 +36,15 @@ public sealed record TransportProfile(
         TransportMode.High => new(mode, NoisePattern.NNpsk0, 1L << 20, TimeSpan.FromMinutes(10), 64, null, null),
         TransportMode.Extreme => new(mode, NoisePattern.NNhfspsk0, 1L << 14, TimeSpan.FromMinutes(1), 1,
             [256, 1024, 4096, 16384, SecureStream.MaxPlaintext], TimeSpan.FromMilliseconds(250)),
-        _ => throw new ArgumentException("通用模式不封装"),
+        _ => throw new ArgumentException(L.T("core.mp.transport.general_unwrapped")),
     };
 
     public static string Describe(TransportMode mode) => mode switch
     {
-        TransportMode.General => "通用：不额外加密，只靠 EasyTier 自带的加密，开销最小",
-        TransportMode.Minecraft => "MC 专用：为游戏的小包和低延迟调优，加一层轻量认证加密",
-        TransportMode.High => "高加密：前向保密握手、ChaCha20-Poly1305、每 10 分钟换钥、长度对齐",
-        TransportMode.Extreme => "极端加密：再加抗量子的 ML-KEM-768、每分钟换钥、固定档位填充、掩护流量（流量会多不少）",
+        TransportMode.General => L.T("core.mp.transport.description.general"),
+        TransportMode.Minecraft => L.T("core.mp.transport.description.minecraft"),
+        TransportMode.High => L.T("core.mp.transport.description.high"),
+        TransportMode.Extreme => L.T("core.mp.transport.description.extreme"),
         _ => "",
     };
 }

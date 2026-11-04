@@ -173,7 +173,7 @@ public static class EasyTierArgs
         if (!o.IsHost && !o.Tun && o.Room.Tunnel.Wraps)
         {
             // 封装模式：游戏和聊天都由 Amber 先封装，再经这一个转发连到房主的封装端口。
-            var tunnel = o.LocalTunnelPort ?? throw new ArgumentException("加入方需要封装通道的本机转发端口");
+            var tunnel = o.LocalTunnelPort ?? throw new ArgumentException(L.T("core.mp.transport.join_port_required"));
             args.AddRange(["--port-forward", $"tcp://127.0.0.1:{tunnel}/{HostIp}:{Transport.TunnelSettings.Port}"]);
         }
         else if (!o.IsHost && !o.Tun)
@@ -185,8 +185,8 @@ public static class EasyTierArgs
         }
         if (!o.Tun && o.ProxyExit is { } proxyExit)
         {
-            if (!System.Net.IPAddress.TryParse(proxyExit, out _) || !proxyExit.StartsWith(Subnet, StringComparison.Ordinal)) throw new ArgumentException($"转发出口必须是房间里成员的虚拟 IP：{proxyExit}");
-            var exitLocal = o.LocalExitPort ?? throw new ArgumentException("转发需要出口的本机转发端口");
+            if (!System.Net.IPAddress.TryParse(proxyExit, out _) || !proxyExit.StartsWith(Subnet, StringComparison.Ordinal)) throw new ArgumentException(L.F("core.mp.exit.invalid_virtual_ip", proxyExit));
+            var exitLocal = o.LocalExitPort ?? throw new ArgumentException(L.T("core.mp.transport.exit_port_required"));
             var exitPort = o.Room.Tunnel.Wraps ? Transport.TunnelSettings.Port : Transport.TunnelSettings.PlainSocksPort;
             args.AddRange(["--port-forward", $"tcp://127.0.0.1:{exitLocal}/{proxyExit}:{exitPort}"]);
         }

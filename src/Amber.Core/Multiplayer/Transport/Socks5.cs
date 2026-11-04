@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
@@ -36,19 +37,19 @@ public static class Socks5
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                log?.Invoke("[转发] 断开了一个连接：握手太慢");
+                log?.Invoke(L.T("core.mp.socks.handshake_timeout"));
                 return;
             }
         }
         if (!ready || ensureReady is not null && !await ensureReady(ct))
         {
-            log?.Invoke("[转发] 拒绝了一个连接：还没确认自己的公网 IP");
+            log?.Invoke(L.T("core.mp.socks.public_ip_unconfirmed"));
             await ReplyAsync(client, 3, ct);
             return;
         }
         if (!allowPort(port))
         {
-            log?.Invoke("[转发] 拒绝了一个连接：发邮件的端口不能经别人转发");
+            log?.Invoke(L.T("core.mp.socks.mail_port_blocked"));
             await ReplyAsync(client, 2, ct);
             return;
         }
@@ -68,11 +69,11 @@ public static class Socks5
             // 只有 IPv6 地址（里面也没嵌 IPv4）：单独回“地址类型不支持”，加入方能看到“出口只转 IPv4”。
             if (addresses.Length > 0 && addresses.All(a => ExitPolicy.Normalize(a).AddressFamily == AddressFamily.InterNetworkV6))
             {
-                log?.Invoke("[转发] 拒绝了一个连接：目标只有 IPv6 地址，出口只转 IPv4");
+                log?.Invoke(L.T("core.mp.socks.ipv6_target_blocked"));
                 await ReplyAsync(client, 8, ct);
                 return;
             }
-            log?.Invoke("[转发] 拒绝了一个连接：目标是你的电脑、局域网或保留地址");
+            log?.Invoke(L.T("core.mp.socks.private_target_blocked"));
             await ReplyAsync(client, 2, ct);   // 规则不允许
             return;
         }
@@ -89,7 +90,7 @@ public static class Socks5
         Pump.Tune(remote);
         await ReplyAsync(client, 0, ct);
         // 只记有连接经过，不记别人连去了哪里（导出诊断报告时也不会带出成员的访问记录）。
-        log?.Invoke("[转发] 转发了一个连接");
+        log?.Invoke(L.T("core.mp.socks.connection_forwarded"));
         await Pump.RunAsync(client, remote.GetStream(), ct, () => Pump.Abort(remote));
     }
 
@@ -124,7 +125,7 @@ public static class Socks5
         await stream.WriteAsync(new byte[] { Version, 1, 0 }, ct);
         await stream.FlushAsync(ct);
         var choice = new byte[2];
-        if (!await SecureStream.ReadExactAsync(stream, choice, ct) || choice[1] != 0) throw new IOException("出口不接受这个代理请求");
+        if (!await SecureStream.ReadExactAsync(stream, choice, ct) || choice[1] != 0) throw new IOException(L.T("core.mp.socks.request_rejected"));
         var request = new List<byte> { Version, 1, 0 };
         if (IPAddress.TryParse(host, out var ip))
         {
@@ -134,7 +135,7 @@ public static class Socks5
         else
         {
             var name = Encoding.ASCII.GetBytes(host);
-            if (name.Length > 255) throw new ArgumentException("主机名太长");
+            if (name.Length > 255) throw new ArgumentException(L.T("core.mp.socks.hostname_too_long"));
             request.Add(3);
             request.Add((byte)name.Length);
             request.AddRange(name);
@@ -144,16 +145,16 @@ public static class Socks5
         await stream.WriteAsync(request.ToArray(), ct);
         await stream.FlushAsync(ct);
         var reply = new byte[4];
-        if (!await SecureStream.ReadExactAsync(stream, reply, ct)) throw new IOException("出口没有回应");
+        if (!await SecureStream.ReadExactAsync(stream, reply, ct)) throw new IOException(L.T("core.mp.socks.no_reply"));
         await ReadAddressAsync(stream, reply[3], ct);
         if (reply[1] != 0) throw new IOException(reply[1] switch
         {
-            2 => $"出口拒绝连接 {host}:{port}（本机、局域网、保留地址和发邮件的端口不能经别人转发）",
-            4 => $"出口那边找不到 {host}",
-            8 => $"出口只转 IPv4，{host} 只有 IPv6 地址，经出口进不去",
-            3 => "出口还没准备好（还在确认它的公网 IP，或者它查不到自己的公网 IP），稍后再试",
-            5 => $"{host}:{port} 拒绝连接",
-            _ => $"出口连不上 {host}:{port}（代码 {reply[1]}）",
+            2 => L.F("core.mp.socks.destination_rejected", host, port),
+            4 => L.F("core.mp.socks.host_not_found", host),
+            8 => L.F("core.mp.socks.ipv6_only", host),
+            3 => L.T("core.mp.socks.exit_not_ready"),
+            5 => L.F("core.mp.socks.connection_refused", host, port),
+            _ => L.F("core.mp.socks.connection_failed", host, port, reply[1]),
         });
     }
 
@@ -187,7 +188,7 @@ public static class Socks5
                 host = Encoding.ASCII.GetString(address);
                 break;
             default:
-                throw new InvalidDataException("SOCKS5 地址类型不认识");
+                throw new InvalidDataException(L.T("core.mp.socks.unknown_address_type"));
         }
         var port = new byte[2];
         if (!await SecureStream.ReadExactAsync(stream, port, ct)) throw new EndOfStreamException();
@@ -209,7 +210,7 @@ public static class McHandshakeRewriter
     {
         var packet = await McDisguise.ReadPacketAsync(game, ct);
         var reader = new McDisguise.PacketReader(packet);
-        if (reader.VarInt() != 0x00) throw new InvalidDataException("第一个包不是 MC 握手包");
+        if (reader.VarInt() != 0x00) throw new InvalidDataException(L.T("core.mp.socks.first_packet_not_mc_handshake"));
         var protocol = reader.VarInt();
         var address = reader.String(255);
         reader.UShort();

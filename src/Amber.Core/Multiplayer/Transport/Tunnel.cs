@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
@@ -92,7 +93,7 @@ public static class TunnelHandshake
     }
 
     private static TunnelService ParseService(byte[] payload) =>
-        payload is [var b] && Enum.IsDefined((TunnelService)b) ? (TunnelService)b : throw new CryptographicException("握手里的服务不认识");
+        payload is [var b] && Enum.IsDefined((TunnelService)b) ? (TunnelService)b : throw new CryptographicException(L.T("core.mp.transport.tunnel.unknownservice"));
 
     private static async Task WriteFramedAsync(Stream stream, byte[] message, CancellationToken ct)
     {
@@ -106,11 +107,11 @@ public static class TunnelHandshake
     private static async Task<byte[]> ReadFramedAsync(Stream stream, CancellationToken ct)
     {
         var header = new byte[2];
-        if (!await SecureStream.ReadExactAsync(stream, header, ct)) throw new EndOfStreamException("对方没有发握手消息就断开了");
+        if (!await SecureStream.ReadExactAsync(stream, header, ct)) throw new EndOfStreamException(L.T("core.mp.transport.tunnel.missinghandshake"));
         var length = BinaryPrimitives.ReadUInt16BigEndian(header);
-        if (length is 0 or > MaxHandshakeMessage) throw new CryptographicException("握手消息长度不对");
+        if (length is 0 or > MaxHandshakeMessage) throw new CryptographicException(L.T("core.mp.transport.tunnel.handshakelength"));
         var message = new byte[length];
-        if (!await SecureStream.ReadExactAsync(stream, message, ct)) throw new EndOfStreamException("握手消息被截断");
+        if (!await SecureStream.ReadExactAsync(stream, message, ct)) throw new EndOfStreamException(L.T("core.mp.transport.tunnel.handshaketruncated"));
         return message;
     }
 }
@@ -139,7 +140,7 @@ public static class McDisguise
     public static async Task<bool> ReadLoginAsync(Stream stream, CancellationToken ct)
     {
         var handshake = new PacketReader(await ReadPacketAsync(stream, ct));
-        if (handshake.VarInt() != 0x00) throw new CryptographicException("不是 MC 握手包");
+        if (handshake.VarInt() != 0x00) throw new CryptographicException(L.T("core.mp.transport.mc.handshakerequired"));
         handshake.VarInt();
         handshake.String(255);
         handshake.UShort();
@@ -149,9 +150,9 @@ public static class McDisguise
             await AnswerStatusAsync(stream, ct);
             return false;
         }
-        if (next is not (2 or 3)) throw new CryptographicException("MC 握手包的下一状态不对");
+        if (next is not (2 or 3)) throw new CryptographicException(L.T("core.mp.transport.mc.nextstate"));
         var login = new PacketReader(await ReadPacketAsync(stream, ct));
-        if (login.VarInt() != 0x00) throw new CryptographicException("不是 Login Start");
+        if (login.VarInt() != 0x00) throw new CryptographicException(L.T("core.mp.transport.mc.loginstartrequired"));
         return true;
     }
 
@@ -180,7 +181,7 @@ public static class McDisguise
     public static async Task<byte[]> ReadEncryptionRequestAsync(Stream stream, CancellationToken ct)
     {
         var p = new PacketReader(await ReadPacketAsync(stream, ct));
-        if (p.VarInt() != 0x01) throw new CryptographicException("不是 Encryption Request");
+        if (p.VarInt() != 0x01) throw new CryptographicException(L.T("core.mp.transport.mc.encryptionrequestrequired"));
         p.String(20);
         return p.PrefixedBytes();
     }
@@ -195,7 +196,7 @@ public static class McDisguise
     public static async Task<byte[]> ReadEncryptionResponseAsync(Stream stream, CancellationToken ct)
     {
         var p = new PacketReader(await ReadPacketAsync(stream, ct));
-        if (p.VarInt() != 0x01) throw new CryptographicException("不是 Encryption Response");
+        if (p.VarInt() != 0x01) throw new CryptographicException(L.T("core.mp.transport.mc.encryptionresponserequired"));
         return p.PrefixedBytes();
     }
 
@@ -204,15 +205,15 @@ public static class McDisguise
         var length = 0;
         for (var shift = 0; ; shift += 7)
         {
-            if (shift > 28) throw new CryptographicException("VarInt 太长");
+            if (shift > 28) throw new CryptographicException(L.T("core.mp.transport.packet.varinttoolong"));
             var one = new byte[1];
-            if (!await SecureStream.ReadExactAsync(stream, one, ct)) throw new EndOfStreamException("连接断开");
+            if (!await SecureStream.ReadExactAsync(stream, one, ct)) throw new EndOfStreamException(L.T("core.mp.transport.tunnel.disconnected"));
             length |= (one[0] & 0x7F) << shift;
             if ((one[0] & 0x80) == 0) break;
         }
-        if (length is <= 0 or > MaxPacket) throw new CryptographicException("MC 包长度不对");
+        if (length is <= 0 or > MaxPacket) throw new CryptographicException(L.T("core.mp.transport.mc.packetlength"));
         var packet = new byte[length];
-        if (!await SecureStream.ReadExactAsync(stream, packet, ct)) throw new EndOfStreamException("MC 包被截断");
+        if (!await SecureStream.ReadExactAsync(stream, packet, ct)) throw new EndOfStreamException(L.T("core.mp.transport.mc.packettruncated"));
         return packet;
     }
 
@@ -270,7 +271,7 @@ public static class McDisguise
             var value = 0;
             for (var shift = 0; ; shift += 7)
             {
-                if (shift > 28 || _pos >= data.Length) throw new CryptographicException("VarInt 不对");
+                if (shift > 28 || _pos >= data.Length) throw new CryptographicException(L.T("core.mp.transport.packet.invalidvarint"));
                 var b = data[_pos++];
                 value |= (b & 0x7F) << shift;
                 if ((b & 0x80) == 0) return value;
@@ -280,7 +281,7 @@ public static class McDisguise
         public string String(int maxChars)
         {
             var length = VarInt();
-            if (length < 0 || length > maxChars * 4 || _pos + length > data.Length) throw new CryptographicException("字符串长度不对");
+            if (length < 0 || length > maxChars * 4 || _pos + length > data.Length) throw new CryptographicException(L.T("core.mp.transport.packet.stringlength"));
             var s = Encoding.UTF8.GetString(data, _pos, length);
             _pos += length;
             return s;
@@ -288,7 +289,7 @@ public static class McDisguise
 
         public ushort UShort()
         {
-            if (_pos + 2 > data.Length) throw new CryptographicException("包太短");
+            if (_pos + 2 > data.Length) throw new CryptographicException(L.T("core.mp.transport.packet.tooshort"));
             var v = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(_pos));
             _pos += 2;
             return v;
@@ -296,7 +297,7 @@ public static class McDisguise
 
         public long Long()
         {
-            if (_pos + 8 > data.Length) throw new CryptographicException("包太短");
+            if (_pos + 8 > data.Length) throw new CryptographicException(L.T("core.mp.transport.packet.tooshort"));
             var v = BinaryPrimitives.ReadInt64BigEndian(data.AsSpan(_pos));
             _pos += 8;
             return v;
@@ -305,7 +306,7 @@ public static class McDisguise
         public byte[] PrefixedBytes()
         {
             var length = VarInt();
-            if (length < 0 || _pos + length > data.Length) throw new CryptographicException("字节数组长度不对");
+            if (length < 0 || _pos + length > data.Length) throw new CryptographicException(L.T("core.mp.transport.packet.arraylength"));
             var b = data.AsSpan(_pos, length).ToArray();
             _pos += length;
             return b;

@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
@@ -117,16 +118,16 @@ public sealed class SecureStream : Stream
         {
             if (ClosedCleanly) return null;
             var header = new byte[2];
-            if (!await ReadExactAsync(_inner, header, ct)) throw new EndOfStreamException("对方没有正常结束就断开了（连接可能被截断）");
+            if (!await ReadExactAsync(_inner, header, ct)) throw new EndOfStreamException(L.T("core.mp.transport.stream.abruptdisconnect"));
             _receiveMask?.Apply(header);
             var length = BinaryPrimitives.ReadUInt16BigEndian(header);
-            if (length < CipherState.TagLength + HeaderLength) throw new CryptographicException("记录太短");
+            if (length < CipherState.TagLength + HeaderLength) throw new CryptographicException(L.T("core.mp.transport.stream.recordshort"));
             var cipher = new byte[length];
-            if (!await ReadExactAsync(_inner, cipher, ct)) throw new EndOfStreamException("记录被截断");
+            if (!await ReadExactAsync(_inner, cipher, ct)) throw new EndOfStreamException(L.T("core.mp.transport.stream.recordtruncated"));
             var plain = _receive.DecryptWithAd([], cipher);
             var flags = plain[0];
             var dataLength = BinaryPrimitives.ReadUInt16BigEndian(plain.AsSpan(1));
-            if (HeaderLength + dataLength > plain.Length) throw new CryptographicException("记录长度不对");
+            if (HeaderLength + dataLength > plain.Length) throw new CryptographicException(L.T("core.mp.transport.stream.recordlength"));
             if ((flags & FlagRekey) != 0)
             {
                 _receive.Rekey();
@@ -137,7 +138,7 @@ public sealed class SecureStream : Stream
             {
                 // 距上次换钥的时间，扣掉本机没在读的时间。
                 var paused = TimeSpan.FromSeconds(_pausedSinceRekeyTicks / (double)Stopwatch.Frequency);
-                if (Stopwatch.GetElapsedTime(_lastReceiveRekeyTicks) - paused > MaxReceiveKeyAge) throw new CryptographicException("对方太久没有换钥");
+                if (Stopwatch.GetElapsedTime(_lastReceiveRekeyTicks) - paused > MaxReceiveKeyAge) throw new CryptographicException(L.T("core.mp.transport.stream.rekeyoverdue"));
             }
             if ((flags & FlagClose) != 0)
             {
@@ -290,7 +291,7 @@ public sealed class SecureStream : Stream
             if (n == 0)
             {
                 if (read == 0) return false;
-                throw new EndOfStreamException("连接中途断开");
+                throw new EndOfStreamException(L.T("core.mp.transport.stream.interrupted"));
             }
             read += n;
         }

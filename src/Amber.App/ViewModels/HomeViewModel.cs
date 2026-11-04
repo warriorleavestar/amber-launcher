@@ -34,15 +34,15 @@ public sealed partial class HomeViewModel : PageViewModel
             ExtraGameArgs = hasProxyArg ? options.ExtraGameArgs : [.. options.ExtraGameArgs, .. proxy.GameArgs],
         };
         if (!hasProxyArg)
-            _proxyNotes.Add($"[Amber] 仅游戏转发：游戏里的 HTTP 请求（进服务器时的会话校验、皮肤）经 {proxy.ExitIp} 的电脑出去；域名在本机查询，Amber 自己刷新登录不经过它");
+            _proxyNotes.Add(L.F("home.proxy.http_forwarding", proxy.ExitIp));
         else
-            _proxyNotes.Add("[Amber] 游戏参数里已经有你自己写的 --proxyHost：游戏会用你的代理，进服务器时的会话校验不经出口");
+            _proxyNotes.Add(L.T("home.proxy.custom_proxy"));
         if (options.JoinServer is not { Length: > 0 } server) return (options, null);
         // 本机、局域网、本机解析成私有地址的服务器不经出口（出口也会拒绝），游戏照常直连；端口是 25565 时像游戏一样查 SRV。
-        if (await Amber.Core.Multiplayer.Transport.JoinTarget.ResolveForRelayAsync(server, onSkip: reason => _proxyNotes.Add("[Amber] 进服务器不经出口：" + reason)) is not { } plan)
+        if (await Amber.Core.Multiplayer.Transport.JoinTarget.ResolveForRelayAsync(server, onSkip: reason => _proxyNotes.Add(L.T("home.proxy.direct_join") + reason)) is not { } plan)
             return (options, null);
         var relay = proxy.RelayTo(plan);
-        _proxyNotes.Add($"[Amber] 进入 {plan.HandshakeHost} 也经 {proxy.ExitIp} 转发（游戏里显示的地址是本机转发端口 127.0.0.1:{relay.Port}）");
+        _proxyNotes.Add(L.F("home.proxy.server_forwarding", plan.HandshakeHost, proxy.ExitIp, relay.Port));
         return (options with { JoinServer = $"127.0.0.1:{relay.Port}" }, relay);
     }
 

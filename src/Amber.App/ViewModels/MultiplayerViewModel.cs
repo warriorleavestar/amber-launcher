@@ -136,10 +136,10 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     /// <summary>极端加密要系统支持 ML-KEM（较新的 Windows 11）；不支持时不列出来。</summary>
     public IReadOnlyList<TransportChoice> TransportChoices { get; } =
     [
-        new(TransportMode.General, "通用"),
-        new(TransportMode.Minecraft, "MC 专用"),
-        new(TransportMode.High, "高加密"),
-        .. NoiseHandshake.HybridSupported ? [new TransportChoice(TransportMode.Extreme, "极端加密")] : Array.Empty<TransportChoice>(),
+        new(TransportMode.General, L.T("multiplayer.transport.mode.general")),
+        new(TransportMode.Minecraft, L.T("multiplayer.transport.mode.minecraft")),
+        new(TransportMode.High, L.T("multiplayer.transport.mode.high")),
+        .. NoiseHandshake.HybridSupported ? [new TransportChoice(TransportMode.Extreme, L.T("multiplayer.transport.mode.extreme"))] : Array.Empty<TransportChoice>(),
     ];
 
     /// <summary>开房间时用的封装方式；加入时跟着房间码走。</summary>
@@ -160,7 +160,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
 
     public bool UsingGameProxy => GameProxyIp.Length > 0;
     public string GameProxyBanner => UsingGameProxy
-        ? $"从 Amber 启动的游戏，HTTP 请求（进服务器时的会话校验、皮肤）经 {GameProxyIp} 的电脑和网络出去；启动页填了“进入服务器”时那个服务器也经它连（只转 IPv4）。在游戏里的服务器列表点别的服务器是直接连的；域名在你这边查询；Amber 自己刷新登录不经过它。"
+        ? L.F("multiplayer.proxy.banner", GameProxyIp)
         : "";
 
     /// <summary>允许别人经自己转发、但查不到自己公网 IP 时的提示（这时不转发）。</summary>
@@ -536,22 +536,22 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     {
         try
         {
-            _transport = RoomTransport.Start(options, line => _diag.Add("封装", line));
+            _transport = RoomTransport.Start(options, line => _diag.Add(L.T("multiplayer.transport.diagnostics_category"), line));
             _currentOptions = options;
         }
         catch (System.Net.Sockets.SocketException e)
         {
             _session?.Dispose();
             _session = null;
-            Status = $"联机没有启动：封装通道的本机端口 {TunnelSettings.Port} 被占用（{e.Message}）。是不是开着另一个 Amber？";
+            Status = L.F("multiplayer.transport.port_in_use", TunnelSettings.Port, e.Message);
             return false;
         }
         _service.ActiveGameProxy = _transport.Proxy;
         GameProxyIp = _transport.Proxy?.ExitIp ?? "";
         var t = options.Room.Tunnel;
         TransportText = t.Wraps
-            ? $"数据封装：{TransportChoices.FirstOrDefault(c => c.Mode == t.Mode)?.Label ?? t.Mode.ToString()}{(t.Disguise ? "，伪装成 MC" : "")}。{TransportProfile.Describe(t.Mode)}"
-            : "数据封装：通用（只靠 EasyTier 自带的加密）";
+            ? L.F("multiplayer.transport.summary", TransportChoices.FirstOrDefault(c => c.Mode == t.Mode)?.Label ?? t.Mode.ToString(), (t.Disguise ? L.T("multiplayer.transport.disguised_suffix") : ""), TransportProfile.Describe(t.Mode))
+            : L.T("multiplayer.transport.general_summary");
         OnPropertyChanged(nameof(CanUseGameProxy));
         return true;
     }
@@ -581,7 +581,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             LocalExitPort = current.Tun ? null : EasyTierArgs.FreeTcpPort(),
         };
         if (await RestartForProxyAsync(options))
-            Status = $"游戏流量会经 {peer.Name}（{peer.Peer.Ip}）的电脑出去。对方要先勾选“允许成员经我的电脑转发游戏流量”。之后从启动页启动游戏生效。";
+            Status = L.F("multiplayer.proxy.switching", peer.Name, peer.Peer.Ip);
     }
 
     [RelayCommand]
@@ -589,7 +589,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     {
         if (_currentOptions is not { } current || !UsingGameProxy) return;
         if (await RestartForProxyAsync(current with { ProxyExit = null, LocalSocksPort = null, LocalExitPort = null }))
-            Status = "已停止转发游戏流量，之后启动的游戏直接连网。";
+            Status = L.T("multiplayer.proxy.stopped");
     }
 
     /// <summary>换“仅游戏”转发的设置：不建网卡时要重启联机组件（转发规则是启动参数）；完整局域网模式下只换 Amber 自己的部分。</summary>
@@ -612,7 +612,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             catch (Exception e) when (e is IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
             {
                 StopSession();
-                Status = "联机组件没能重启：" + e.Message;
+                Status = L.T("multiplayer.proxy.restart_failed") + e.Message;
                 return false;
             }
         }
