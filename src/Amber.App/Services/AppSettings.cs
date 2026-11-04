@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Text.Json;
 using Amber.Core.Launch;
 
@@ -53,6 +54,7 @@ public sealed class AppSettings
     {
         WriteIndented = true,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        TypeInfoResolver = AmberJson.WithReflectionFallback(AppJsonContext.Default),
     };
 
     public static string DataDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Amber");
@@ -78,7 +80,7 @@ public sealed class AppSettings
         try
         {
             if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings();
+                return JsonSerializer.Deserialize(File.ReadAllText(FilePath), AppJsonContext.Default.AppSettings) ?? new AppSettings();
         }
         catch (JsonException)
         {
@@ -92,7 +94,10 @@ public sealed class AppSettings
     {
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
         var temp = FilePath + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(this, JsonOptions));
+        File.WriteAllText(temp, JsonSerializer.Serialize(this, JsonOptions.Info<AppSettings>()));
         File.Move(temp, FilePath, true);
     }
 }
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(AppSettings))]
+internal sealed partial class AppJsonContext : System.Text.Json.Serialization.JsonSerializerContext;

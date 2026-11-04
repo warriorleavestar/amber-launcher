@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -85,7 +86,7 @@ public sealed class ExternalAuth(HttpClient http)
     public async Task EnsureValidAsync(Account account, CancellationToken ct = default)
     {
         if (account.AccessToken is null) throw new LoginRequiredException($"{account.Name} 的登录已失效，请重新登录");
-        using var validate = await http.PostAsync(account.ServerUrl + "/authserver/validate", JsonContent.Create(new JsonObject
+        using var validate = await http.PostAsync(account.ServerUrl + "/authserver/validate", AmberJson.Body(new JsonObject
         {
             ["accessToken"] = account.AccessToken,
             ["clientToken"] = account.ClientToken,
@@ -127,7 +128,7 @@ public sealed class ExternalAuth(HttpClient http)
 
     private async Task<JsonObject> PostAsync(string url, JsonObject body, CancellationToken ct)
     {
-        using var response = await http.PostAsync(url, JsonContent.Create(body), ct);
+        using var response = await http.PostAsync(url, AmberJson.Body(body), ct);
         var text = await response.Content.ReadAsStringAsync(ct);
         JsonObject json;
         try { json = string.IsNullOrWhiteSpace(text) ? [] : JsonNode.Parse(text) as JsonObject ?? []; }

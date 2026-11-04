@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Text.Json;
 using Amber.Core.Game;
 using Amber.Core.Net;
@@ -19,7 +20,7 @@ public sealed class VanillaInstaller(Downloader downloader, GameDirectory dir)
     public async Task<VersionManifest> GetManifestAsync(CancellationToken ct = default)
     {
         var text = await downloader.GetStringAsync(ManifestUrl, ct);
-        return JsonSerializer.Deserialize<VersionManifest>(text, Json.Options)
+        return JsonSerializer.Deserialize(text, Json.Options.Info<VersionManifest>())
                ?? throw new InvalidDataException("版本清单解析失败");
     }
 
@@ -80,7 +81,7 @@ public sealed class VanillaInstaller(Downloader downloader, GameDirectory dir)
     public static async Task<AssetIndex> ReadAssetIndexAsync(string path, CancellationToken ct = default)
     {
         await using var stream = File.OpenRead(path);
-        return await JsonSerializer.DeserializeAsync<AssetIndex>(stream, Json.Options, ct)
+        return await JsonSerializer.DeserializeAsync(stream, Json.Options.Info<AssetIndex>(), ct)
                ?? throw new InvalidDataException($"资源索引解析失败：{path}");
     }
 }

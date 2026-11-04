@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net;
@@ -43,13 +44,13 @@ public sealed class ChatCipher
 
     public byte[] Seal(ChatMessage message)
     {
-        var plain = JsonSerializer.SerializeToUtf8Bytes(new Body(message.Kind, message.Name, message.Text, message.Time.ToUnixTimeMilliseconds()));
+        var plain = JsonSerializer.SerializeToUtf8Bytes(new Body(message.Kind, message.Name, message.Text, message.Time.ToUnixTimeMilliseconds()), AmberJsonContext.Default.Body);
         var nonce = RandomNumberGenerator.GetBytes(12);
         var cipher = new byte[plain.Length];
         var tag = new byte[16];
         using (var aes = new AesGcm(_key, 16)) aes.Encrypt(nonce, plain, cipher, tag, Encoding.UTF8.GetBytes(message.SenderId));
         var envelope = new Envelope(message.SenderId, Convert.ToBase64String(nonce), Convert.ToBase64String([.. cipher, .. tag]));
-        return JsonSerializer.SerializeToUtf8Bytes(envelope);
+        return JsonSerializer.SerializeToUtf8Bytes(envelope, AmberJsonContext.Default.Envelope);
     }
 
     /// <summary>解开并校验。格式不对、密钥不对、被改过都返回 null。</summary>
@@ -57,14 +58,14 @@ public sealed class ChatCipher
     {
         try
         {
-            var envelope = JsonSerializer.Deserialize<Envelope>(frame);
+            var envelope = JsonSerializer.Deserialize(frame, AmberJsonContext.Default.Envelope);
             if (envelope is null || envelope.Sender.Length is 0 or > 64) return null;
             var nonce = Convert.FromBase64String(envelope.Nonce);
             var data = Convert.FromBase64String(envelope.Cipher);
             if (nonce.Length != 12 || data.Length < 16) return null;
             var plain = new byte[data.Length - 16];
             using (var aes = new AesGcm(_key, 16)) aes.Decrypt(nonce, data.AsSpan(0, plain.Length), data.AsSpan(plain.Length), plain, Encoding.UTF8.GetBytes(envelope.Sender));
-            var body = JsonSerializer.Deserialize<Body>(plain);
+            var body = JsonSerializer.Deserialize(plain, AmberJsonContext.Default.Body);
             if (body is null) return null;
             return new ChatMessage(body.Kind, envelope.Sender, RoomChat.Clean(body.Name, RoomChat.MaxNameLength), RoomChat.Clean(body.Text, RoomChat.MaxTextLength),
                 DateTimeOffset.FromUnixTimeMilliseconds(body.Time));

@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
@@ -262,7 +263,7 @@ public sealed class GameLauncher(GameDirectory dir)
         if (!File.Exists(indexPath)) return;
 
         using var stream = File.OpenRead(indexPath);
-        var index = JsonSerializer.Deserialize<AssetIndex>(stream, Json.Options);
+        var index = JsonSerializer.Deserialize(stream, Json.Options.Info<AssetIndex>());
         if (index is null || !(index.Virtual || index.MapToResources)) return;
 
         var targetRoot = index.MapToResources ? Path.Combine(workDir, "resources") : LegacyAssetsDir(id, workDir);
@@ -288,7 +289,7 @@ public sealed class GameLauncher(GameDirectory dir)
             }
             if (element.ValueKind != JsonValueKind.Object) continue;
 
-            var ruleList = element.TryGetProperty("rules", out var r) ? r.Deserialize<List<Rule>>(Json.Options) : null;
+            var ruleList = element.TryGetProperty("rules", out var r) ? r.Deserialize(Json.Options.Info<List<Rule>>()) : null;
             if (!rules.IsAllowed(ruleList)) continue;
             if (!element.TryGetProperty("value", out var value)) continue;
 

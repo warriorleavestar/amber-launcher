@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -154,5 +155,6 @@ public static class Json
         PropertyNameCaseInsensitive = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
+        TypeInfoResolver = AmberJsonContext.Resolver,
     };
 }

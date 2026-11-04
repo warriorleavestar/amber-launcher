@@ -138,7 +138,7 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
             if (!identified.TryGetValue(hashes[f.Relative], out var remote)) continue;
             linked.Add(f.Relative);
             var sha512 = await Sha512Async(f.FullPath, ct);
-            files.Add(new JsonObject
+            files.Add((JsonNode)new JsonObject
             {
                 ["path"] = f.Relative,
                 ["hashes"] = new JsonObject { ["sha1"] = hashes[f.Relative], ["sha512"] = sha512 },
@@ -191,12 +191,12 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         foreach (var (fp, remote) in matches)
         {
             linked.Add(fingerprints[fp]);
-            files.Add(new JsonObject { ["projectID"] = long.Parse(remote.ProjectId), ["fileID"] = long.Parse(remote.FileId), ["required"] = true });
+            files.Add((JsonNode)new JsonObject { ["projectID"] = long.Parse(remote.ProjectId), ["fileID"] = long.Parse(remote.FileId), ["required"] = true });
         }
 
         var loaders = new JsonArray();
         if (instance.Loader is "forge" or "neoforge" or "fabric" or "quilt")
-            loaders.Add(new JsonObject { ["id"] = $"{instance.Loader}-{StripMcPrefix(instance.LoaderVersion, instance.McVersion)}", ["primary"] = true });
+            loaders.Add((JsonNode)new JsonObject { ["id"] = $"{instance.Loader}-{StripMcPrefix(instance.LoaderVersion, instance.McVersion)}", ["primary"] = true });
         var manifest = new JsonObject
         {
             ["minecraft"] = new JsonObject { ["version"] = instance.McVersion, ["modLoaders"] = loaders },
@@ -220,7 +220,10 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         {
             var entry = zip.CreateEntry(indexName);
             await using (var writer = entry.Open())
-                await JsonSerializer.SerializeAsync(writer, index, new JsonSerializerOptions { WriteIndented = true }, ct);
+            {
+                await using var json = new Utf8JsonWriter(writer, new JsonWriterOptions { Indented = true });
+                index.WriteTo(json);
+            }
             foreach (var (relative, full) in overrides)
             {
                 ct.ThrowIfCancellationRequested();

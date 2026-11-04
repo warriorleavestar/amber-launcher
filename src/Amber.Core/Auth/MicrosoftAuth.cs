@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -156,7 +157,7 @@ public sealed class MicrosoftAuth(HttpClient http, string clientId)
 
     private async Task<JsonObject> PostJsonAsync(string url, JsonObject body, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonContent.Create(body) };
+        using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = AmberJson.Body(body) };
         request.Headers.Accept.ParseAdd("application/json");
         using var response = await http.SendAsync(request, ct);
         var json = await ReadJsonAsync(response, ct);

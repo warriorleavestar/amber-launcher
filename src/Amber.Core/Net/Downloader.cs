@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -585,11 +586,11 @@ public sealed class Downloader
         public static ChunkState? Load(string path)
         {
             if (!File.Exists(path)) return null;
-            try { return JsonSerializer.Deserialize<ChunkState>(File.ReadAllText(path)); }
+            try { return JsonSerializer.Deserialize(File.ReadAllText(path), AmberJsonContext.Default.ChunkState); }
             catch (JsonException) { return null; }
         }
 
-        public void Save(string path) => File.WriteAllText(path, JsonSerializer.Serialize(this));
+        public void Save(string path) => File.WriteAllText(path, JsonSerializer.Serialize(this, AmberJsonContext.Default.ChunkState));
     }
 }
 

@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -28,6 +29,7 @@ public sealed class InstanceSettings
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        TypeInfoResolver = AmberJsonContext.Resolver,
     };
 
     public const string FileName = "amber-instance.json";
@@ -38,7 +40,7 @@ public sealed class InstanceSettings
         if (!File.Exists(path)) return new InstanceSettings();
         try
         {
-            return JsonSerializer.Deserialize<InstanceSettings>(File.ReadAllText(path), Options) ?? new InstanceSettings();
+            return JsonSerializer.Deserialize(File.ReadAllText(path), Options.Info<InstanceSettings>()) ?? new InstanceSettings();
         }
         catch (JsonException)
         {
@@ -49,7 +51,7 @@ public sealed class InstanceSettings
     public void Save(GameDirectory dir, string id)
     {
         Directory.CreateDirectory(dir.VersionDir(id));
-        File.WriteAllText(Path.Combine(dir.VersionDir(id), FileName), JsonSerializer.Serialize(this, Options));
+        File.WriteAllText(Path.Combine(dir.VersionDir(id), FileName), JsonSerializer.Serialize(this, Options.Info<InstanceSettings>()));
     }
 
     /// <summary>
