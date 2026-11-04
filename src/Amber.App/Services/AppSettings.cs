@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Text.Json;
 using Amber.Core.Launch;
 
@@ -49,10 +50,11 @@ public sealed class AppSettings
     /// <summary>联机用的 EasyTier 中继节点，空表示用 EasyTier 社区的公共节点。</summary>
     public List<string>? MultiplayerPeers { get; set; }
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        TypeInfoResolver = AmberJson.WithReflectionFallback(AppJsonContext.Default),
     };
 
     public static string DataDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Amber");
@@ -78,7 +80,7 @@ public sealed class AppSettings
         try
         {
             if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings();
+                return JsonSerializer.Deserialize(File.ReadAllText(FilePath), AppJsonContext.Default.AppSettings) ?? new AppSettings();
         }
         catch (JsonException)
         {
@@ -92,7 +94,17 @@ public sealed class AppSettings
     {
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
         var temp = FilePath + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(this, JsonOptions));
+        File.WriteAllText(temp, JsonSerializer.Serialize(this, JsonOptions.Info<AppSettings>()));
         File.Move(temp, FilePath, true);
     }
+}
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(AppSettings))]
+internal sealed partial class AppJsonContext : System.Text.Json.Serialization.JsonSerializerContext;
+
+/// <summary>测试用：比较新旧两种读写方式。</summary>
+internal static class AppSettingsJson
+{
+    internal static JsonSerializerOptions Options => AppSettings.JsonOptions;
+    internal static System.Text.Json.Serialization.Metadata.IJsonTypeInfoResolver Generated => AppJsonContext.Default;
 }

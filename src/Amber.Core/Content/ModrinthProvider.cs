@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -19,7 +20,7 @@ public sealed class ModrinthProvider(HttpClient http, string apiRoot = "https://
             facets.Add(q.Loader == "quilt" ? ["categories:quilt", "categories:fabric"] : [$"categories:{q.Loader}"]);
 
         var url = $"{apiRoot}/search?query={Uri.EscapeDataString(q.Text)}&limit={q.Limit}&offset={q.Offset}&index=relevance" +
-                  $"&facets={Uri.EscapeDataString(JsonSerializer.Serialize(facets))}";
+                  $"&facets={Uri.EscapeDataString(JsonSerializer.Serialize(facets, AmberJsonContext.Default.ListStringArray))}";
         using var doc = JsonDocument.Parse(await http.GetStringAsync(url, ct));
         var root = doc.RootElement;
         var items = root.GetProperty("hits").EnumerateArray().Select(h => new ContentProject(
@@ -52,8 +53,8 @@ public sealed class ModrinthProvider(HttpClient http, string apiRoot = "https://
     public async Task<IReadOnlyList<ContentFile>> GetFilesAsync(string projectId, string? gameVersion, string? loader, CancellationToken ct = default)
     {
         var url = $"{apiRoot}/project/{projectId}/version?include_changelog=false";
-        if (!string.IsNullOrEmpty(gameVersion)) url += "&game_versions=" + Uri.EscapeDataString(JsonSerializer.Serialize(new[] { gameVersion }));
-        if (!string.IsNullOrEmpty(loader)) url += "&loaders=" + Uri.EscapeDataString(JsonSerializer.Serialize(loader == "quilt" ? new[] { "quilt", "fabric" } : new[] { loader }));
+        if (!string.IsNullOrEmpty(gameVersion)) url += "&game_versions=" + Uri.EscapeDataString(JsonSerializer.Serialize(new[] { gameVersion }, AmberJsonContext.Default.StringArray));
+        if (!string.IsNullOrEmpty(loader)) url += "&loaders=" + Uri.EscapeDataString(JsonSerializer.Serialize(loader == "quilt" ? new[] { "quilt", "fabric" } : new[] { loader }, AmberJsonContext.Default.StringArray));
         using var doc = JsonDocument.Parse(await http.GetStringAsync(url, ct));
         return doc.RootElement.EnumerateArray().Select(ParseVersion).OfType<ContentFile>().OrderByDescending(f => f.Date).ToList();
     }
@@ -68,7 +69,7 @@ public sealed class ModrinthProvider(HttpClient http, string apiRoot = "https://
     public async Task<Dictionary<string, ContentFile>> IdentifyBySha1Async(IReadOnlyCollection<string> sha1s, CancellationToken ct = default)
     {
         if (sha1s.Count == 0) return [];
-        using var response = await http.PostAsync($"{apiRoot}/version_files", JsonContent.Create(new { hashes = sha1s, algorithm = "sha1" }), ct);
+        using var response = await http.PostAsync($"{apiRoot}/version_files", AmberJson.Body(new JsonObject { ["hashes"] = new JsonArray(sha1s.Select(h => (JsonNode?)h).ToArray()), ["algorithm"] = "sha1" }), ct);
         response.EnsureSuccessStatusCode();
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
         return ParseHashMap(doc.RootElement);
@@ -81,7 +82,7 @@ public sealed class ModrinthProvider(HttpClient http, string apiRoot = "https://
         var body = new JsonObject { ["hashes"] = new JsonArray(sha1s.Select(h => (JsonNode?)h).ToArray()), ["algorithm"] = "sha1" };
         if (!string.IsNullOrEmpty(loader)) body["loaders"] = new JsonArray(loader);
         if (!string.IsNullOrEmpty(gameVersion)) body["game_versions"] = new JsonArray(gameVersion);
-        using var response = await http.PostAsync($"{apiRoot}/version_files/update", JsonContent.Create(body), ct);
+        using var response = await http.PostAsync($"{apiRoot}/version_files/update", AmberJson.Body(body), ct);
         response.EnsureSuccessStatusCode();
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
         return ParseHashMap(doc.RootElement);

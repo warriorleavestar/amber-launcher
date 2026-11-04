@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Text.Json;
 
 namespace Amber.Core.Game;
@@ -42,7 +43,7 @@ public sealed class GameDirectory(string root)
     {
         var path = VersionJsonPath(id);
         using var stream = File.OpenRead(path);
-        return JsonSerializer.Deserialize<VersionJson>(stream, Json.Options)
+        return JsonSerializer.Deserialize(stream, Json.Options.Info<VersionJson>())
                ?? throw new InvalidDataException($"无法解析 {path}");
     }
 

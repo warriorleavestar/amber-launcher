@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -48,7 +49,8 @@ public sealed class AccountStore(string path)
     private static readonly JsonSerializerOptions Options = new()
     {
         WriteIndented = true,
-        Converters = { new JsonStringEnumConverter() },
+        Converters = { new JsonStringEnumConverter<AccountKind>() },
+        TypeInfoResolver = AmberJsonContext.Resolver,
     };
 
     private static readonly byte[] Entropy = "Amber.Launcher.Accounts"u8.ToArray();
@@ -58,7 +60,7 @@ public sealed class AccountStore(string path)
 
     public Account? Selected => Accounts.FirstOrDefault(a => a.Id == SelectedId) ?? Accounts.FirstOrDefault();
 
-    private sealed class FileModel
+    internal sealed class FileModel
     {
         public string? SelectedId { get; set; }
         public List<Account> Accounts { get; set; } = [];
@@ -69,7 +71,7 @@ public sealed class AccountStore(string path)
         if (!File.Exists(path)) return;
         try
         {
-            var model = JsonSerializer.Deserialize<FileModel>(File.ReadAllText(path), Options) ?? new FileModel();
+            var model = JsonSerializer.Deserialize(File.ReadAllText(path), Options.Info<FileModel>()) ?? new FileModel();
             foreach (var account in model.Accounts)
             {
                 account.AccessToken = Unprotect(account.ProtectedAccessToken);
@@ -93,7 +95,7 @@ public sealed class AccountStore(string path)
         }
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(new FileModel { SelectedId = SelectedId, Accounts = Accounts }, Options));
+        File.WriteAllText(temp, JsonSerializer.Serialize(new FileModel { SelectedId = SelectedId, Accounts = Accounts }, Options.Info<FileModel>()));
         File.Move(temp, path, true);
     }
 

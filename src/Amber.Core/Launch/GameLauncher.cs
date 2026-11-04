@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
@@ -35,6 +36,8 @@ public sealed record LaunchOptions
 /// <summary>拼装启动参数、准备 natives 与旧版资源，然后启动游戏进程。</summary>
 public sealed class GameLauncher(GameDirectory dir)
 {
+    public GameDirectory GameDir => dir;
+
     public RuleEvaluator BaseRules { get; init; } = RuleEvaluator.Current;
 
     /// <summary>改用英文名联接启动时，联接背后真正的游戏目录。旧版本的家目录联接要直接指向真目录，不能联接套联接。</summary>
@@ -156,6 +159,16 @@ public sealed class GameLauncher(GameDirectory dir)
     /// <summary>准备 natives 与旧版资源后启动游戏。路径含系统语言表示不了的字符时改用英文名的联接启动。</summary>
     public Process Launch(LaunchOptions options, Action<string>? onOutput = null)
     {
+        var (launcher, mapped) = ForCurrentCodePage(options, onOutput);
+        return launcher.LaunchCore(mapped, onOutput);
+    }
+
+    /// <summary>
+    /// Java 按 ANSI 代码页读自己的路径和命令行参数：路径里有当前系统语言表示不了的字符时，换成指向同一位置的纯英文联接。
+    /// 返回用来生成参数和启动的 launcher 和 options（不需要时就是自己和原样的 options）。正式启动、预处理、导出启动脚本都经过这里。
+    /// </summary>
+    public (GameLauncher Launcher, LaunchOptions Options) ForCurrentCodePage(LaunchOptions options, Action<string>? onOutput = null)
+    {
         var root = AsciiPaths.AliasIfNeeded(dir.Root, onOutput);
         var javaHome = Path.GetDirectoryName(Path.GetDirectoryName(options.JavaPath));
         var javaAlias = javaHome is not null && !options.JavaPath.StartsWith(dir.Root, StringComparison.OrdinalIgnoreCase) ? AsciiPaths.AliasIfNeeded(javaHome, onOutput) : null;
@@ -170,11 +183,18 @@ public sealed class GameLauncher(GameDirectory dir)
             {
                 JavaPath = Map(options.JavaPath),
                 WorkingDirectory = options.WorkingDirectory is { } w ? Map(w) : null,
-                ExtraJvmArgs = options.ExtraJvmArgs.Select(Map).ToList(),
+                ExtraJvmArgs = options.ExtraJvmArgs.Select(a => AsciiPaths.MapArgument(Map(a), onOutput)).ToList(),
+                ExtraGameArgs = options.ExtraGameArgs.Select(a => AsciiPaths.MapArgument(Map(a), onOutput)).ToList(),
             };
-            return new GameLauncher(new GameDirectory(root)) { BaseRules = BaseRules, RealRoot = dir.Root }.LaunchCore(mapped, onOutput);
+            return (new GameLauncher(new GameDirectory(root)) { BaseRules = BaseRules, RealRoot = dir.Root }, mapped);
         }
-        return LaunchCore(options, onOutput);
+        // 游戏目录和 Java 都是英文路径，参数里也可能带别处的路径（比如外置登录的 -javaagent 指向数据目录）。
+        var args = options with
+        {
+            ExtraJvmArgs = options.ExtraJvmArgs.Select(a => AsciiPaths.MapArgument(a, onOutput)).ToList(),
+            ExtraGameArgs = options.ExtraGameArgs.Select(a => AsciiPaths.MapArgument(a, onOutput)).ToList(),
+        };
+        return (this, args);
     }
 
     private Process LaunchCore(LaunchOptions options, Action<string>? onOutput)
@@ -262,7 +282,7 @@ public sealed class GameLauncher(GameDirectory dir)
         if (!File.Exists(indexPath)) return;
 
         using var stream = File.OpenRead(indexPath);
-        var index = JsonSerializer.Deserialize<AssetIndex>(stream, Json.Options);
+        var index = JsonSerializer.Deserialize(stream, Json.Options.Info<AssetIndex>());
         if (index is null || !(index.Virtual || index.MapToResources)) return;
 
         var targetRoot = index.MapToResources ? Path.Combine(workDir, "resources") : LegacyAssetsDir(id, workDir);
@@ -288,7 +308,7 @@ public sealed class GameLauncher(GameDirectory dir)
             }
             if (element.ValueKind != JsonValueKind.Object) continue;
 
-            var ruleList = element.TryGetProperty("rules", out var r) ? r.Deserialize<List<Rule>>(Json.Options) : null;
+            var ruleList = element.TryGetProperty("rules", out var r) ? r.Deserialize(Json.Options.Info<List<Rule>>()) : null;
             if (!rules.IsAllowed(ruleList)) continue;
             if (!element.TryGetProperty("value", out var value)) continue;
 

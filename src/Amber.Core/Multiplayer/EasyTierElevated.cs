@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
@@ -63,7 +64,7 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
 
         // 参数写进 JSON，避免在命令行里拼接引号；脚本每次现写，不复用旧文件。
         var argsFile = Path.Combine(workDir, "args.json");
-        File.WriteAllText(argsFile, JsonSerializer.Serialize(EasyTierArgs.Build(options)));
+        File.WriteAllText(argsFile, JsonSerializer.Serialize(EasyTierArgs.Build(options), AmberJsonContext.Default.ListString));
         var script = Path.Combine(workDir, "guard.ps1");
         File.WriteAllText(script, GuardScript, new UTF8Encoding(true));
 
@@ -105,7 +106,7 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
         // 测试矩阵里也会切回默认模式（不建网卡），守护脚本照样能跑。
         var restart = _stopFile + ".restart";
         var temp = restart + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(EasyTierArgs.Build(options)));
+        File.WriteAllText(temp, JsonSerializer.Serialize(EasyTierArgs.Build(options), AmberJsonContext.Default.ListString));
         File.Move(temp, restart, true);
         Options = options;
     }

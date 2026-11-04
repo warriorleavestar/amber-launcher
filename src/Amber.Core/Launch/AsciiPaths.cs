@@ -125,6 +125,43 @@ public static class AsciiPaths
         return candidates.Where(c => c.All(ch => ch < 128));
     }
 
+    /// <summary>
+    /// 参数里带的路径（整个参数是路径、-javaagent:路径[=选项]、-D名字=路径）表示不了时，把它所在的目录换成英文联接。
+    /// 认不出路径或者路径不存在时原样返回。
+    /// </summary>
+    public static string MapArgument(string arg, Action<string>? log = null) =>
+        MapArgument(arg, Representable, dir => AliasIfNeeded(dir, log));
+
+    internal static string MapArgument(string arg, Func<string, bool> representable, Func<string, string> alias)
+    {
+        if (representable(arg)) return arg;
+        var (prefix, path, suffix) = SplitPathArgument(arg);
+        if (path is null) return arg;
+        string dir, rest;
+        if (File.Exists(path)) (dir, rest) = (Path.GetDirectoryName(path)!, Path.DirectorySeparatorChar + Path.GetFileName(path));
+        else if (Directory.Exists(path)) (dir, rest) = (path, "");
+        else return arg;
+        var mapped = alias(dir.TrimEnd(Path.DirectorySeparatorChar));
+        return prefix + mapped + rest + suffix;
+    }
+
+    /// <summary>拆出参数里的路径部分：前缀、路径、后缀（-javaagent 的 =选项）。不像路径时 path 为 null。</summary>
+    internal static (string Prefix, string? Path, string Suffix) SplitPathArgument(string arg)
+    {
+        if (arg.StartsWith("-javaagent:", StringComparison.Ordinal))
+        {
+            var body = arg["-javaagent:".Length..];
+            // 选项从 .jar 后面的 = 开始；路径里本身可能有 =，所以按 .jar= 找。
+            var jarEnd = body.IndexOf(".jar=", StringComparison.OrdinalIgnoreCase);
+            return jarEnd >= 0 ? ("-javaagent:", body[..(jarEnd + 4)], body[(jarEnd + 4)..]) : ("-javaagent:", body, "");
+        }
+        if (arg.StartsWith("-D", StringComparison.Ordinal) && arg.IndexOf('=') is var eq and > 2 && LooksLikePath(arg[(eq + 1)..]))
+            return (arg[..(eq + 1)], arg[(eq + 1)..], "");
+        return LooksLikePath(arg) ? ("", arg, "") : ("", null, "");
+    }
+
+    private static bool LooksLikePath(string text) => Path.IsPathFullyQualified(text);
+
     /// <summary>把 path 里 from 开头的部分换成 to。</summary>
     public static string Remap(string path, string from, string to)
     {

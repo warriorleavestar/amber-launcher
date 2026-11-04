@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -23,10 +24,10 @@ public sealed class CurseForgeProvider(HttpClient http, Func<string?> apiKey, st
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
     }
 
-    private async Task<JsonDocument> PostAsync(string path, object body, CancellationToken ct)
+    private async Task<JsonDocument> PostAsync(string path, JsonObject body, CancellationToken ct)
     {
         using var request = NewRequest(HttpMethod.Post, path);
-        request.Content = JsonContent.Create(body);
+        request.Content = AmberJson.Body(body);
         using var response = await http.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
@@ -78,7 +79,7 @@ public sealed class CurseForgeProvider(HttpClient http, Func<string?> apiKey, st
     public async Task<IReadOnlyList<ContentFile>> GetFilesByIdAsync(IReadOnlyCollection<long> fileIds, CancellationToken ct = default)
     {
         if (fileIds.Count == 0) return [];
-        using var doc = await PostAsync("/mods/files", new { fileIds }, ct);
+        using var doc = await PostAsync("/mods/files", new JsonObject { ["fileIds"] = new JsonArray(fileIds.Select(i => (JsonNode?)i).ToArray()) }, ct);
         return doc.RootElement.GetProperty("data").EnumerateArray().Select(ParseFile).ToList();
     }
 
@@ -87,7 +88,7 @@ public sealed class CurseForgeProvider(HttpClient http, Func<string?> apiKey, st
     {
         var result = new Dictionary<string, string>();
         if (modIds.Count == 0) return result;
-        using var doc = await PostAsync("/mods", new { modIds }, ct);
+        using var doc = await PostAsync("/mods", new JsonObject { ["modIds"] = new JsonArray(modIds.Select(i => (JsonNode?)i).ToArray()) }, ct);
         foreach (var m in doc.RootElement.GetProperty("data").EnumerateArray())
         {
             var classId = m.TryGetProperty("classId", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetInt32() : 6;
@@ -106,7 +107,7 @@ public sealed class CurseForgeProvider(HttpClient http, Func<string?> apiKey, st
     {
         var result = new Dictionary<uint, ContentFile>();
         if (fingerprints.Count == 0) return result;
-        using var doc = await PostAsync("/fingerprints", new { fingerprints }, ct);
+        using var doc = await PostAsync("/fingerprints", new JsonObject { ["fingerprints"] = new JsonArray(fingerprints.Select(i => (JsonNode?)i).ToArray()) }, ct);
         foreach (var match in doc.RootElement.GetProperty("data").GetProperty("exactMatches").EnumerateArray())
         {
             var file = ParseFile(match.GetProperty("file"));

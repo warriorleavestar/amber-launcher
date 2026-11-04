@@ -4,7 +4,7 @@
 
 **A clean, lightweight launcher for Minecraft: Java Edition**
 
-No telemetry, no remote switches, one file to download.
+No telemetry, no remote switches. Download, unzip, run.
 
 [![Latest release](https://img.shields.io/github/v/release/warriorleavestar/amber-launcher?color=d98a1f)](https://github.com/warriorleavestar/amber-launcher/releases/latest)
 [![License](https://img.shields.io/github/license/warriorleavestar/amber-launcher)](LICENSE)
@@ -20,8 +20,11 @@ No telemetry, no remote switches, one file to download.
 
 ## Download
 
-1. Get `Amber.exe` from [Releases](https://github.com/warriorleavestar/amber-launcher/releases/latest).
-2. Run it. There is nothing to install, and you don't need .NET.
+1. Get `Amber-win-x64-aot.zip` (recommended) from [Releases](https://github.com/warriorleavestar/amber-launcher/releases/latest).
+2. Unzip it anywhere and run `Amber.exe` inside. There is nothing to install, and you don't need .NET.
+
+The recommended zip is compiled ahead of time to native code (Native AOT): the window opens in about 0.3 seconds and it uses less memory. It unzips to 4 files that must stay in the same folder.
+Each release also has a single-file `Amber.exe` that runs straight after download if you prefer one file; it starts a little slower. Both builds have the same features and share the same data, so you can switch at any time.
 
 Amber needs 64-bit Windows 10 or later. You don't need to set up Java either: Amber picks a suitable local Java for each game version and downloads one if none fits.
 

@@ -4,7 +4,7 @@
 
 **干净、轻快的 Minecraft Java 版启动器**
 
-没有遥测，没有远程开关，下载一个文件就能用。
+没有遥测，没有远程开关，下载解压就能用。
 
 [![最新版本](https://img.shields.io/github/v/release/warriorleavestar/amber-launcher?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=d98a1f)](https://github.com/warriorleavestar/amber-launcher/releases/latest)
 [![许可证](https://img.shields.io/github/license/warriorleavestar/amber-launcher?label=%E8%AE%B8%E5%8F%AF%E8%AF%81)](LICENSE)
@@ -18,8 +18,11 @@
 
 ## 下载安装
 
-1. 到 [Releases](https://github.com/warriorleavestar/amber-launcher/releases/latest) 下载 `Amber.exe`。
-2. 双击运行，不用安装，也不用另外装 .NET。
+1. 到 [Releases](https://github.com/warriorleavestar/amber-launcher/releases/latest) 下载 `Amber-win-x64-aot.zip`（推荐）。
+2. 解压到任意文件夹，双击里面的 `Amber.exe` 运行。不用安装，也不用另外装 .NET。
+
+推荐的 zip 是预先编译成本机代码的版本（Native AOT），启动更快（窗口约 0.3 秒打开）、占内存更少，解压后是 4 个文件，要放在同一个文件夹里。
+同一个发布里还有单个文件的 `Amber.exe`，下载即可运行，适合只想要一个文件的情况，启动稍慢一些。两个版本功能和数据完全相同，可以随时换用。
 
 需要 64 位 Windows 10 或更新的系统。Java 不用提前准备：Amber 会按游戏版本自动选择本机的 Java，没有合适的就下载一个。
 

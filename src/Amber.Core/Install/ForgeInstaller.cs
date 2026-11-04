@@ -1,3 +1,4 @@
+using Amber.Core;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
@@ -113,7 +114,7 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
         var vanilla = dir.ResolveVersion(mcVersion);
 
         // 处理器依赖的库。
-        var profileVersion = new VersionJson { Libraries = profile["libraries"]?.Deserialize<List<Library>>(Json.Options) ?? [] };
+        var profileVersion = new VersionJson { Libraries = profile["libraries"]?.Deserialize(Json.Options.Info<List<Library>>()) ?? [] };
         var items = LibraryResolver.Resolve(profileVersion, dir, RuleEvaluator.Current)
             .Where(l => !string.IsNullOrEmpty(l.Url))
             .Select(l => new DownloadItem(l.Url!, l.LocalPath, l.Sha1, l.Size)).ToList();

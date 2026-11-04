@@ -74,12 +74,17 @@ internal sealed class TestServer : IDisposable
     {
         var path = c.Request.Url!.AbsolutePath.TrimStart('/');
         Interlocked.Increment(ref Requests);
+        // 并发数只在“收到请求 → 开始回数据之前”这段里算：客户端读完最后一个字节就会发下一个请求，
+        // 那时这边的 Close() 可能还没返回，按整个处理过程算会多数出一个其实不存在的并发。
         var active = Interlocked.Increment(ref _active);
+        var counted = true;
         int peak;
         while (active > (peak = Volatile.Read(ref PeakActive))) Interlocked.CompareExchange(ref PeakActive, active, peak);
         try
         {
             if (DelayMs > 0) await Task.Delay(DelayMs);
+            Interlocked.Decrement(ref _active);
+            counted = false;
             var isChunk = c.Request.Headers["Range"] is { } r && !r.EndsWith('-');
             if ((!FailChunksOnly || isChunk) && Volatile.Read(ref FailNext) > 0 && Interlocked.Decrement(ref FailNext) >= 0)
             {
@@ -148,7 +153,7 @@ internal sealed class TestServer : IDisposable
         catch (Exception e) when (e is HttpListenerException or IOException or ObjectDisposedException or OperationCanceledException) { }
         finally
         {
-            Interlocked.Decrement(ref _active);
+            if (counted) Interlocked.Decrement(ref _active);
         }
     }
 

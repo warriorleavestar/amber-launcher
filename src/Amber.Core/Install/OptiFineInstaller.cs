@@ -58,7 +58,7 @@ public sealed class OptiFineInstaller(LoaderContext ctx) : ILoaderInstaller
             var library = dir.LibraryPath($"optifine/OptiFine/{libVersion}/OptiFine-{libVersion}.jar");
             Directory.CreateDirectory(Path.GetDirectoryName(library)!);
 
-            var libraries = new JsonArray { new JsonObject { ["name"] = $"optifine:OptiFine:{libVersion}" } };
+            var libraries = new JsonArray { (JsonNode)new JsonObject { ["name"] = $"optifine:OptiFine:{libVersion}" } };
             using (var zip = ZipFile.OpenRead(installer))
             {
                 if (zip.GetEntry("optifine/Patcher.class") is not null)
@@ -80,18 +80,18 @@ public sealed class OptiFineInstaller(LoaderContext ctx) : ILoaderInstaller
                     var target = dir.LibraryPath($"optifine/launchwrapper-of/{ofVersion}/launchwrapper-of-{ofVersion}.jar");
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     zip.GetEntry($"launchwrapper-of-{ofVersion}.jar")!.ExtractToFile(target, true);
-                    libraries.Add(new JsonObject { ["name"] = $"optifine:launchwrapper-of:{ofVersion}" });
+                    libraries.Add((JsonNode)new JsonObject { ["name"] = $"optifine:launchwrapper-of:{ofVersion}" });
                 }
                 else if (zip.GetEntry("launchwrapper-2.0.jar") is { } lw2)
                 {
                     var target = dir.LibraryPath("optifine/launchwrapper/2.0/launchwrapper-2.0.jar");
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     lw2.ExtractToFile(target, true);
-                    libraries.Add(new JsonObject { ["name"] = "optifine:launchwrapper:2.0" });
+                    libraries.Add((JsonNode)new JsonObject { ["name"] = "optifine:launchwrapper:2.0" });
                 }
                 else
                 {
-                    libraries.Add(new JsonObject { ["name"] = "net.minecraft:launchwrapper:1.12" });
+                    libraries.Add((JsonNode)new JsonObject { ["name"] = "net.minecraft:launchwrapper:1.12" });
                 }
             }
 
