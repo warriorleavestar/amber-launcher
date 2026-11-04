@@ -69,11 +69,11 @@ public sealed record RoomCode(string Network, string Secret, int Port)
         if (!int.TryParse(digits, out var port) || port is < 1 or > 65535) return false;
         var tunnel = Transport.TunnelSettings.Default;
         var rest = parts[2][digits.Length..];
-        if (rest.StartsWith('-'))
+        if (rest.Length >= 3 && rest[0] == '-' && rest[1] == 'T' && char.IsAsciiDigit(rest[2]))
         {
-            // 端口后面跟着 “-” 就必须是合法的模式段：-T0…-T3，可选 D，后面不能再接字母数字。
-            // 被截断、改坏或不认识的模式直接算格式不对，不会悄悄当成通用模式。
-            if (rest.Length < 3 || rest[1] != 'T' || rest[2] is < '0' or > '3') return false;
+            // 模式段 -T0…-T3，可选 D。不认识的模式号、后面紧跟别的字母数字（改坏了）都算格式不对，不会悄悄当成通用模式。
+            // （模式也写进了 EasyTier 的网络名和密钥，模式不对的人本来就进不了房间。）
+            if (rest[2] > '3') return false;
             var disguise = rest.Length > 3 && rest[3] == 'D';
             var end = disguise ? 4 : 3;
             if (rest.Length > end && char.IsAsciiLetterOrDigit(rest[end])) return false;

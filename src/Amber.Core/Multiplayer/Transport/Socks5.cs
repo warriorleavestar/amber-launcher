@@ -178,10 +178,11 @@ public static class McHandshakeRewriter
     }
 
     /// <summary>给 TunnelClient 用：先做 SOCKS5 CONNECT，再把改写过的握手包发过去，之后原样转发。</summary>
-    public static Func<Stream, Stream, CancellationToken, Task<Stream>> ViaSocks(string host, int port) => async (game, remote, ct) =>
+    /// <param name="handshakeHost">握手包里写的地址（用户写的名字，经 SRV 查到别的主机时也写原来的名字）；默认和 host 一样。</param>
+    public static Func<Stream, Stream, CancellationToken, Task<Stream>> ViaSocks(string host, int port, string? handshakeHost = null, int? handshakePort = null) => async (game, remote, ct) =>
     {
         await Socks5.ConnectAsync(remote, host, port, ct);
-        var first = await RewriteFirstPacketAsync(game, host, port, ct);
+        var first = await RewriteFirstPacketAsync(game, handshakeHost ?? host, handshakePort ?? port, ct);
         await remote.WriteAsync(first, ct);
         await remote.FlushAsync(ct);
         return game;

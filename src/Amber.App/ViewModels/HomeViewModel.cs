@@ -33,9 +33,9 @@ public sealed partial class HomeViewModel : PageViewModel
         _proxyNotes.Add($"[Amber] 仅游戏转发：游戏的登录和网络连接经 {proxy.ExitIp} 的电脑出去（域名在本机查询）");
         if (options.JoinServer is not { Length: > 0 } server) return (options, null);
         // 本机、局域网、本机解析成私有地址的服务器不经出口（出口也会拒绝），游戏照常直连；没写端口时像游戏一样查 SRV。
-        if (await Amber.Core.Multiplayer.Transport.JoinTarget.ResolveForRelayAsync(server) is not var (host, port)) return (options, null);
-        var relay = proxy.RelayTo(host, port);
-        _proxyNotes.Add($"[Amber] 进入 {host}:{port} 也经 {proxy.ExitIp} 转发（游戏里显示的地址是本机转发端口 127.0.0.1:{relay.Port}）");
+        if (await Amber.Core.Multiplayer.Transport.JoinTarget.ResolveForRelayAsync(server) is not { } plan) return (options, null);
+        var relay = proxy.RelayTo(plan);
+        _proxyNotes.Add($"[Amber] 进入 {plan.HandshakeHost} 也经 {proxy.ExitIp} 转发（游戏里显示的地址是本机转发端口 127.0.0.1:{relay.Port}）");
         return (options with { JoinServer = $"127.0.0.1:{relay.Port}" }, relay);
     }
 

@@ -33,6 +33,9 @@ public sealed class SecureStream : Stream
     private readonly Task? _cover;
     private readonly Task _rekeyTimer;
     private long _lastReceiveRekeyTicks = Stopwatch.GetTimestamp();
+    /// <summary>本机没在读的时间（游戏卡住、本地写不出去）：这段时间对方的换钥记录在缓冲区里等着，不算对方的错。</summary>
+    private long _pausedSinceRekeyTicks;
+    private long _readReturnedTicks;
     private bool _closeSent;
     private int _disposed;
 
@@ -81,6 +84,19 @@ public sealed class SecureStream : Stream
 
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
     {
+        if (_readReturnedTicks != 0) _pausedSinceRekeyTicks += Stopwatch.GetTimestamp() - _readReturnedTicks;
+        try
+        {
+            return await ReadCoreAsync(buffer, ct);
+        }
+        finally
+        {
+            _readReturnedTicks = Stopwatch.GetTimestamp();
+        }
+    }
+
+    private async ValueTask<int> ReadCoreAsync(Memory<byte> buffer, CancellationToken ct)
+    {
         while (_readOffset >= _readBuffer.Length)
         {
             var record = await ReadRecordAsync(ct);
@@ -102,7 +118,6 @@ public sealed class SecureStream : Stream
             if (ClosedCleanly) return null;
             var header = new byte[2];
             if (!await ReadExactAsync(_inner, header, ct)) throw new EndOfStreamException("对方没有正常结束就断开了（连接可能被截断）");
-            if (Stopwatch.GetElapsedTime(_lastReceiveRekeyTicks) > MaxReceiveKeyAge) throw new CryptographicException("对方太久没有换钥");
             _receiveMask?.Apply(header);
             var length = BinaryPrimitives.ReadUInt16BigEndian(header);
             if (length < CipherState.TagLength + HeaderLength) throw new CryptographicException("记录太短");
@@ -116,6 +131,13 @@ public sealed class SecureStream : Stream
             {
                 _receive.Rekey();
                 _lastReceiveRekeyTicks = Stopwatch.GetTimestamp();
+                _pausedSinceRekeyTicks = 0;
+            }
+            else
+            {
+                // 距上次换钥的时间，扣掉本机没在读的时间。
+                var paused = TimeSpan.FromSeconds(_pausedSinceRekeyTicks / (double)Stopwatch.Frequency);
+                if (Stopwatch.GetElapsedTime(_lastReceiveRekeyTicks) - paused > MaxReceiveKeyAge) throw new CryptographicException("对方太久没有换钥");
             }
             if ((flags & FlagClose) != 0)
             {
@@ -279,16 +301,27 @@ public sealed class SecureStream : Stream
     {
         if (disposing && Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            // 先尽量告诉对方“正常结束”（最多等 1 秒），再关连接。
-            try { CloseAsync().Wait(TimeSpan.FromSeconds(1)); } catch (Exception e) when (e is AggregateException or ObjectDisposedException or IOException) { }
-            _cts.Cancel();
-            try { Task.WaitAll([.. new[] { _cover, _rekeyTimer }.OfType<Task>()], TimeSpan.FromSeconds(1)); } catch (AggregateException) { }
-            _inner.Dispose();
-            _cts.Dispose();
-            _sendMask?.Dispose();
-            _receiveMask?.Dispose();
-            _send.Dispose();
-            _receive.Dispose();
+            // 在后台收尾：先尽量告诉对方“正常结束”（最多等 1 秒），再关连接、清密钥。不阻塞调用的线程（可能是界面线程）。
+            _ = Task.Run(async () =>
+            {
+                try { await CloseAsync().WaitAsync(TimeSpan.FromSeconds(1)); }
+                catch (Exception e) when (e is TimeoutException or ObjectDisposedException or IOException or OperationCanceledException or System.Net.Sockets.SocketException) { }
+                _cts.Cancel();
+                try { await Task.WhenAll(new[] { _cover, _rekeyTimer }.OfType<Task>()).WaitAsync(TimeSpan.FromSeconds(1)); }
+                catch (Exception e) when (e is TimeoutException or OperationCanceledException) { }
+                _inner.Dispose();
+                // 写锁拿到之后再清密钥，保证没有写在用它。
+                if (await _writeLock.WaitAsync(TimeSpan.FromSeconds(1)))
+                {
+                    _send.Dispose();
+                    _writeLock.Release();
+                }
+                else _send.Dispose();
+                _receive.Dispose();
+                _sendMask?.Dispose();
+                _receiveMask?.Dispose();
+                _cts.Dispose();
+            });
         }
         base.Dispose(disposing);
     }

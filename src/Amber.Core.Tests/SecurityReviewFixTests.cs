@@ -52,6 +52,7 @@ public class SecurityReviewFixTests
     public void Exit_BlocksSiblingPrefixesAndRoutes()
     {
         using var policy = new ExitPolicy([IPAddress.Parse("2400:1a00:b1:4e::25")], [(IPAddress.Parse("2400:1a00:b1:4e::"), 64), (IPAddress.Parse("2400:1a00:b1:4e::25"), 56)]);
+        Assert.Equal(48, new ExitPolicy(48).IPv6SitePrefix);
         Assert.False(policy.Allows(IPAddress.Parse("2400:1a00:b1:4f::1")));
         Assert.False(policy.Allows(IPAddress.Parse("2400:1a00:b1:ff::1")));
         Assert.True(policy.Allows(IPAddress.Parse("2400:1a00:b2:0::1")));
@@ -98,13 +99,23 @@ public class SecurityReviewFixTests
     // 5. 模式写进 EasyTier 的网络名和密钥；房间码里的模式段坏了直接算格式不对。
     [Theory]
     [InlineData("-T9")]
-    [InlineData("-TX")]
+    [InlineData("-T7D")]
     [InlineData("-T2Q")]
-    [InlineData("-")]
-    [InlineData("-T")]
+    [InlineData("-T20")]
     [InlineData("X")]
     public void RoomCode_RejectsBadModeSuffix(string suffix) =>
         Assert.False(RoomCode.TryParse("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565" + suffix, out _));
+
+    [Theory]
+    [InlineData("-快来玩")]
+    [InlineData("-thanks")]
+    [InlineData(" 快来")]
+    [InlineData("。")]
+    public void RoomCode_ToleratesTrailingText(string suffix)
+    {
+        Assert.True(RoomCode.TryParse("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565" + suffix, out var room));
+        Assert.Equal(TransportMode.General, room.Tunnel.Mode);
+    }
 
     [Fact]
     public void RoomCode_ModeChangesEasyTierNetwork()
@@ -195,14 +206,55 @@ public class SecurityReviewFixTests
         cb2.Dispose();
     }
 
-    // 9. 关闭后密钥清零。
+    // 9. 关闭后密钥清零，而且关闭后不会退回“不加密”。
     [Fact]
     public void Keys_AreErasedOnDispose()
     {
-        var (iSend, _, _, _) = Keys();
+        var (iSend, iReceive, _, _) = Keys();
         Assert.True(iSend.HasKey);
         iSend.Dispose();
         Assert.False(iSend.HasKey);
+        Assert.Throws<ObjectDisposedException>(() => iSend.EncryptWithAd([], "secret"u8));
+        iReceive.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => iReceive.DecryptWithAd([], new byte[32]));
+    }
+
+    // 代码审查：本机暂停读（游戏卡住）不算对方没换钥。
+    [Fact]
+    public async Task Stream_LocalPauseDoesNotTripKeyAge()
+    {
+        var fast = TransportProfile.For(TransportMode.High) with { RekeyEvery = TimeSpan.FromMilliseconds(150) };
+        var (a, b, ca, cb) = await PairAsync();
+        var (iSend, iReceive, rSend, rReceive) = Keys();
+        await using var client = new SecureStream(a, iSend, iReceive, fast);
+        await using var server = new SecureStream(b, rSend, rReceive, fast);
+        await client.WriteAsync("one"u8.ToArray());
+        var buf = new byte[3];
+        Assert.True(await SecureStream.ReadExactAsync(server, buf, default));
+        // 本机 800 毫秒不读，对方照常换钥（记录排在缓冲区里）。
+        await Task.Delay(800);
+        await client.WriteAsync("two"u8.ToArray());
+        Assert.True(await SecureStream.ReadExactAsync(server, buf, default));
+        Assert.Equal("two"u8.ToArray(), buf);
+        ca.Dispose();
+        cb.Dispose();
+    }
+
+    // 代码审查：关闭不阻塞调用的线程。
+    [Fact]
+    public async Task Stream_DisposeDoesNotBlock()
+    {
+        var (a, b, ca, cb) = await PairAsync();
+        var (iSend, iReceive, rSend, rReceive) = Keys();
+        var client = new SecureStream(a, iSend, iReceive, TransportProfile.For(TransportMode.Extreme));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        client.Dispose();
+        Assert.True(watch.ElapsedMilliseconds < 200, $"Dispose 用了 {watch.ElapsedMilliseconds} ms");
+        await using var server = new SecureStream(b, rSend, rReceive, TransportProfile.For(TransportMode.Extreme));
+        Assert.Equal(0, await server.ReadAsync(new byte[4]).AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(server.ClosedCleanly);
+        ca.Dispose();
+        cb.Dispose();
     }
 
     // 10. 出口的日志里没有成员访问的目标。
@@ -260,13 +312,24 @@ public class SecurityReviewFixTests
         static (string, int)? NoSrv(string _) => null;
         static (string, int)? Srv(string name) => name == "_minecraft._tcp.play.example.org" ? ("mc1.example.org", 25570) : null;
 
-        Assert.Equal(("play.example.org", 25565), await JoinTarget.ResolveForRelayAsync("play.example.org", default, Public, NoSrv));
-        Assert.Equal(("mc1.example.org", 25570), await JoinTarget.ResolveForRelayAsync("play.example.org", default, Public, Srv));
-        Assert.Equal(("play.example.org", 25566), await JoinTarget.ResolveForRelayAsync("play.example.org:25566", default, Public, Srv));
+        Assert.Equal(new RelayPlan("play.example.org", 25565, "play.example.org", 25565), await JoinTarget.ResolveForRelayAsync("play.example.org", default, Public, NoSrv));
+        // SRV：连 SRV 给的主机和端口，握手包里仍写用户写的名字和默认端口（和游戏直接进时一样，按域名分服的服务器才认得）。
+        Assert.Equal(new RelayPlan("mc1.example.org", 25570, "play.example.org", 25565), await JoinTarget.ResolveForRelayAsync("play.example.org", default, Public, Srv));
+        Assert.Equal(new RelayPlan("play.example.org", 25566, "play.example.org", 25566), await JoinTarget.ResolveForRelayAsync("play.example.org:25566", default, Public, Srv));
         Assert.Null(await JoinTarget.ResolveForRelayAsync("intranet.example.org", default, Private, NoSrv));
         Assert.Null(await JoinTarget.ResolveForRelayAsync("localhost:25565", default, Public, NoSrv));
         Assert.Null(await JoinTarget.ResolveForRelayAsync("192.168.1.5:25565", default, Public, NoSrv));
-        Assert.Equal(("1.2.3.4", 25565), await JoinTarget.ResolveForRelayAsync("1.2.3.4", default, Public, NoSrv));
+        Assert.Equal(new RelayPlan("1.2.3.4", 25565, "1.2.3.4", 25565), await JoinTarget.ResolveForRelayAsync("1.2.3.4", default, Public, NoSrv));
+        // 本机名字不去查 SRV。
+        var asked = false;
+        (string, int)? Spy(string _) { asked = true; return null; }
+        Assert.Null(await JoinTarget.ResolveForRelayAsync("nas.lan", default, Public, Spy));
+        Assert.False(asked);
+        // SRV 查询卡住也不会一直等。
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        (string, int)? Hang(string _) { Thread.Sleep(10_000); return null; }
+        Assert.NotNull(await JoinTarget.ResolveForRelayAsync("play.example.org", default, Public, Hang));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(6));
     }
 
     [Fact]

@@ -99,7 +99,8 @@ public sealed class TunnelServer : IAsyncDisposable
         _log = log;
         _listener = new TcpListener(address ?? IPAddress.Loopback, port);
         _listener.Start();
-        _loop = AcceptLoopAsync(_cts.Token);
+        // 在线程池上跑：不要带上界面线程的同步上下文（否则每条连接的收尾都要排队等界面线程）。
+        _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
     }
 
     /// <summary>把服务交给本机的一个 TCP 端口（游戏、聊天）。</summary>
@@ -204,7 +205,8 @@ public sealed class TunnelClient : IAsyncDisposable
         _log = log;
         _listener = new TcpListener(IPAddress.Loopback, localPort);
         _listener.Start();
-        _loop = AcceptLoopAsync(_cts.Token);
+        // 在线程池上跑：不要带上界面线程的同步上下文（否则每条连接的收尾都要排队等界面线程）。
+        _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
     }
 
     /// <summary>经 EasyTier 连到 host:port，再按房间设置做封装握手。</summary>

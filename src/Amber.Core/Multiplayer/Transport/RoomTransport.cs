@@ -18,6 +18,9 @@ public sealed record GameProxy(int SocksPort, string ExitIp, Func<CancellationTo
     /// </summary>
     public TunnelClient RelayTo(string host, int port, Action<string>? log = null) =>
         new(0, Open, log, McHandshakeRewriter.ViaSocks(host, port));
+
+    public TunnelClient RelayTo(RelayPlan plan, Action<string>? log = null) =>
+        new(0, Open, log, McHandshakeRewriter.ViaSocks(plan.ConnectHost, plan.ConnectPort, plan.HandshakeHost, plan.HandshakePort));
 }
 
 /// <summary>

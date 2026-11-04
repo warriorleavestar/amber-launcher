@@ -21,6 +21,7 @@ public sealed class CipherState : IDisposable
     private ulong _n;
 
     public bool HasKey => _k is not null;
+    private bool _disposed;
     public ulong Nonce => _n;
 
     /// <summary>接管 key 数组（之后由这个对象负责清零）；旧密钥先清零。</summary>
@@ -45,6 +46,7 @@ public sealed class CipherState : IDisposable
 
     public byte[] EncryptWithAd(ReadOnlySpan<byte> ad, ReadOnlySpan<byte> plaintext)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_k is null) return plaintext.ToArray();
         // 2^64-1 留给 Rekey 用，不能拿来加密。
         if (_n == ulong.MaxValue) throw new CryptographicException("nonce 用完了，必须换钥");
@@ -57,6 +59,7 @@ public sealed class CipherState : IDisposable
     /// <summary>认证失败抛 CryptographicException，nonce 不前进。</summary>
     public byte[] DecryptWithAd(ReadOnlySpan<byte> ad, ReadOnlySpan<byte> ciphertext)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_k is null) return ciphertext.ToArray();
         if (_n == ulong.MaxValue) throw new CryptographicException("nonce 用完了，必须换钥");
         if (ciphertext.Length < TagLength) throw new CryptographicException("密文太短");
@@ -80,9 +83,10 @@ public sealed class CipherState : IDisposable
         _n = n;
     }
 
-    /// <summary>关闭时把密钥清零。</summary>
+    /// <summary>关闭时把密钥清零。之后再加解密会抛异常（不会退回“没有密钥就原样”的状态）。</summary>
     public void Dispose()
     {
+        _disposed = true;
         if (_k is not null) CryptographicOperations.ZeroMemory(_k);
         _k = null;
         _aead?.Dispose();

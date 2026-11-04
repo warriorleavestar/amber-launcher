@@ -18,7 +18,7 @@ namespace Amber.Core.Multiplayer.Transport;
 public sealed partial class ExitPolicy : IDisposable
 {
     /// <summary>本机公网 IPv6 周围按这个长度一起拦（运营商一般给家里一个 /56 或 /48，路由器和别的 VLAN 都在里面）。</summary>
-    public int IPv6SitePrefix { get; init; } = 56;
+    public int IPv6SitePrefix { get; }
     /// <summary>
     /// 别处（直连房间的 STUN、路由器端口映射）查到的本机公网地址，所有出口规则共用。
     /// </summary>
@@ -43,8 +43,11 @@ public sealed partial class ExitPolicy : IDisposable
     /// <summary>查不到公网地址时的说明（这时不当出口）；正常时为 null。</summary>
     public string? Failure => _failure;
 
-    public ExitPolicy()
+    private readonly SemaphoreSlim _wake = new(0);
+
+    public ExitPolicy(int ipv6SitePrefix = 56)
     {
+        IPv6SitePrefix = ipv6SitePrefix;
         RefreshLocal();
         NetworkChange.NetworkAddressChanged += OnAddressChanged;
     }
@@ -60,12 +63,24 @@ public sealed partial class ExitPolicy : IDisposable
     {
         try
         {
+            string? lastLogged = null;
             while (!ct.IsCancellationRequested)
             {
-                var wasReady = _ready;
                 await RefreshPublicAsync(ct);
-                if (_failure is { } f && wasReady != _ready) log?.Invoke("[转发] " + f);
-                await Task.Delay(TimeSpan.FromMinutes(3), ct);
+                if (_failure != lastLogged)
+                {
+                    log?.Invoke(_failure is { } f ? "[转发] " + f : "[转发] 已查到公网 IP，开始转发");
+                    lastLogged = _failure;
+                }
+                // 正常时 3 分钟重查一次；查不到时 15 秒后重试；网络变化时等 3 秒（地址变化常常一下来好几个）再查。
+                var delay = _ready ? TimeSpan.FromMinutes(3) : TimeSpan.FromSeconds(15);
+                await Task.WhenAny(Task.Delay(delay, ct), _wake.WaitAsync(ct));
+                ct.ThrowIfCancellationRequested();
+                if (!_ready)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(3), ct);
+                    while (_wake.Wait(0)) { }
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -117,7 +132,8 @@ public sealed partial class ExitPolicy : IDisposable
     {
         RefreshLocal();
         _ready = false;
-        _ = RefreshPublicAsync(_cts.Token).ContinueWith(_ => { }, TaskScheduler.Default);
+        _failure = null;
+        _wake.Release();
     }
 
     /// <summary>本机所有网卡（包括停用的、虚拟的）的单播地址和所在网段。</summary>
@@ -262,16 +278,32 @@ public sealed partial class ExitPolicy : IDisposable
             var count = Marshal.ReadInt32(table);
             const int rowSize = 104;
             const int firstRow = 8;
+            var rows = new List<(uint Interface, IPAddress Destination, int Prefix, bool OnLink)>();
             for (var i = 0; i < count; i++)
             {
                 var row = table + firstRow + i * rowSize;
-                // DestinationPrefix：SOCKADDR_INET（偏移 12，28 字节）+ PrefixLength（偏移 40）。
+                // MIB_IPFORWARD_ROW2：InterfaceIndex（偏移 8）、DestinationPrefix（SOCKADDR_INET 偏移 12 + PrefixLength 偏移 40）、NextHop（偏移 44）。
+                var index = (uint)Marshal.ReadInt32(row, 8);
                 var prefixLength = Marshal.ReadByte(row, 40);
-                if (ReadSockaddr(row + 12) is not { } address) continue;
-                var minimum = address.AddressFamily == AddressFamily.InterNetwork ? 8 : 16;
-                if (prefixLength < minimum) continue;
-                result.Add((Normalize(address), prefixLength));
+                if (ReadSockaddr(row + 12) is not { } destination) continue;
+                var nextHop = ReadSockaddr(row + 44);
+                var onLink = nextHop is null || nextHop.Equals(IPAddress.Any) || nextHop.Equals(IPAddress.IPv6Any);
+                rows.Add((index, Normalize(destination), prefixLength, onLink));
             }
+            // 有默认路由的网卡（正常上网走的那块）。
+            var defaultInterfaces = rows.Where(r => r.Prefix == 0).Select(r => r.Interface).ToHashSet();
+            foreach (var r in rows)
+            {
+                if (r.Prefix == 0) continue;
+                var full = r.Destination.AddressFamily == AddressFamily.InterNetwork ? 32 : 128;
+                // 直连网段（本机所在的网段）和主机路由（本机地址、广播）：一定是本地的。
+                if (r.OnLink && r.Prefix >= (full == 32 ? 8 : 16) || r.Prefix == full) result.Add((r.Destination, r.Prefix));
+            }
+            // 经别的网卡（VPN、虚拟网卡）去的、范围不太大的路由：公司内网、VPN 推下来的网段。
+            // 分流 VPN 常常装上成百上千条公网路由，那种情况不拦（不然大半个互联网都连不了）。
+            var viaOther = rows.Where(r => r.Prefix > 0 && !r.OnLink && !defaultInterfaces.Contains(r.Interface)
+                                           && r.Prefix >= (r.Destination.AddressFamily == AddressFamily.InterNetwork ? 16 : 32)).ToList();
+            if (viaOther.Count <= 64) result.AddRange(viaOther.Select(r => (r.Destination, r.Prefix)));
         }
         finally
         {
