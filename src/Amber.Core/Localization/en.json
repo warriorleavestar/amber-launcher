@@ -408,6 +408,7 @@
   "core.mp.diagnostics.visibleips": "Not masked (included by user choice)",
   "core.mp.exit.failure_log": "[Proxy] {0}",
   "core.mp.exit.invalid_virtual_ip": "The forwarding exit must be a room member's virtual IP: {0}",
+  "core.mp.exit.local_scan_failed": "Could not read this computer's network adapters ({0}). Forwarding is paused so others cannot reach your computer or home devices through you. It will retry automatically.",
   "core.mp.exit.public_ip_ready": "[Proxy] Public IP found. Starting forwarding",
   "core.mp.exit.public_ip_unavailable": "Your public IP could not be found (the STUN servers are unreachable, possibly because UDP is blocked). Forwarding is paused to prevent others from reaching your router through you. It will retry automatically when the network recovers.",
   "core.mp.failure.symmetric": "Both sides use symmetric NAT (strict), so a direct connection is unlikely. Try having one player use home broadband, enable UPnP on the router, or add a relay node",

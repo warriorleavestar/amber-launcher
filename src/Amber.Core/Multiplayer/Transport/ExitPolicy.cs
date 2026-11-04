@@ -126,6 +126,8 @@ public sealed partial class ExitPolicy : IDisposable
         {
             // 连接触发的重查：等锁期间后台刚查过（结果还新），就不再查。
             if (onlyIfStale && IsFresh(MaxPublicIpAge)) return;
+            // 上次收集网卡失败：先重新收集，还是失败就继续不转发。
+            if (_localStale && !RecollectLocal()) return;
             var generation = Volatile.Read(ref _generation);
             var ok = await (Discover ?? (c => DiscoverPublicAddressAsync(_stunServers, c)))(ct);
             // 检查“期间网络没变”和设成可用放在同一把锁里：网络变化（也拿这把锁）不会插在两步中间。
@@ -205,39 +207,73 @@ public sealed partial class ExitPolicy : IDisposable
     /// <summary>网卡地址变了：先停止转发，再重新收集本机地址，公网地址也重新查，查到之前不转发。</summary>
     private void OnAddressChanged(object? sender, EventArgs e)
     {
+        // 这是系统的网络变化回调：这里抛出的异常会让整个程序退出，所以什么都不往外抛。
+        try
+        {
+            RecollectLocal();
+            Volatile.Read(ref _wake).TrySetResult();
+        }
+        catch (Exception)
+        {
+            lock (_lock) _ready = false;
+        }
+    }
+
+    /// <summary>正在重新收集网卡的次数（可能有几个地址变化同时在收集）。收集期间开始的查询不能让出口变成可用。</summary>
+    private int _collecting;
+
+    /// <summary>上次收集网卡失败了：还在用旧的本机网段，下次查公网 IP 之前先重新收集，成功之前不转发。</summary>
+    private bool _localStale;
+
+    /// <summary>测试用：换掉收集本机地址和网段的方法。</summary>
+    internal Func<(HashSet<IPAddress> Addresses, List<(IPAddress, int)> Networks)>? Collector { get; set; }
+
+    /// <summary>
+    /// 重新收集本机地址和网段，成功时换上新的。期间开始的公网 IP 查询全部作废，收集失败时不转发（保留旧的网段，等下次重试）。
+    /// 计数在 finally 里减，收集出任何异常都不会让出口一直卡在“正在收集”。
+    /// </summary>
+    private bool RecollectLocal()
+    {
         lock (_lock)
         {
             _ready = false;
             _generation++;
             _collecting++;
         }
-        var (addresses, networks) = CollectLocal();
-        // 换上新的本机网段，和作废收集期间开始的查询放在同一把锁里。
-        lock (_lock)
+        try
         {
-            _localAddresses = addresses;
-            _localNetworks = networks;
-            _ready = false;
-            _generation++;
-            _collecting--;
-            _failure = null;
+            var (addresses, networks) = (Collector ?? CollectLocal)();
+            // 换上新的本机网段，和作废收集期间开始的查询放在同一把锁里。
+            lock (_lock)
+            {
+                _localAddresses = addresses;
+                _localNetworks = networks;
+                _ready = false;
+                _generation++;
+                _localStale = false;
+                _failure = null;
+            }
+            return true;
         }
-        Volatile.Read(ref _wake).TrySetResult();
+        catch (Exception e)
+        {
+            lock (_lock)
+            {
+                _ready = false;
+                _generation++;
+                _localStale = true;
+                _failure = L.F("core.mp.exit.local_scan_failed", e.Message);
+            }
+            return false;
+        }
+        finally
+        {
+            lock (_lock) _collecting--;
+        }
     }
 
-    /// <summary>正在重新收集网卡的次数（可能有几个地址变化同时在收集）。</summary>
-    private int _collecting;
-
-    /// <summary>本机所有网卡（包括停用的、虚拟的）的单播地址和所在网段。</summary>
-    public void RefreshLocal()
-    {
-        var (addresses, networks) = CollectLocal();
-        lock (_lock)
-        {
-            _localAddresses = addresses;
-            _localNetworks = networks;
-        }
-    }
+    /// <summary>重新收集本机所有网卡（包括停用的、虚拟的）的单播地址和所在网段。失败时不转发，下次查公网 IP 时再试。</summary>
+    public void RefreshLocal() => RecollectLocal();
 
     private (HashSet<IPAddress> Addresses, List<(IPAddress, int)> Networks) CollectLocal()
     {

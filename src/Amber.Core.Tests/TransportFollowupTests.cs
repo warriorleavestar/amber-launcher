@@ -325,4 +325,33 @@ public class TransportFollowupTests
             base.Dispose(disposing);
         }
     }
+
+    // 收集网卡出错（适配器正在消失、系统调用失败）：这次不转发、说明原因，下次重试成功后出口又能用；不会一直卡住，也不往外抛。
+    [Fact]
+    public async Task FailedLocalScanRecovers()
+    {
+        var attempts = 0;
+        using var policy = new ExitPolicy([], [])
+        {
+            Discover = _ => Task.FromResult(true),
+            RetryInterval = TimeSpan.FromMilliseconds(50),
+            ReadyInterval = TimeSpan.FromMinutes(10),
+            Debounce = TimeSpan.FromMilliseconds(10),
+        };
+        policy.Collector = () =>
+        {
+            if (Interlocked.Increment(ref attempts) == 1) throw new InvalidOperationException("网卡正在移除");
+            return ([], []);
+        };
+        policy.SetReady(true);
+        policy.SimulateAddressChange();   // 第一次收集失败
+        Assert.False(policy.IsReady);
+        Assert.Contains("网卡正在移除", policy.Failure);
+        policy.Start();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        while (!policy.IsReady && watch.ElapsedMilliseconds < 3000) await Task.Delay(20);
+        Assert.True(policy.IsReady, "重新收集成功后出口应该恢复");
+        Assert.Null(policy.Failure);
+        Assert.True(attempts >= 2);
+    }
 }
