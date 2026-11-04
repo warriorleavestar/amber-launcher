@@ -297,33 +297,58 @@ public sealed class SecureStream : Stream
         return true;
     }
 
+    private Task? _shutdown;
+    private bool _aborted;
+
+    /// <summary>出错时用：不发结束记录就关（对方会当成连接被截断）。</summary>
+    public void Abort()
+    {
+        _aborted = true;
+        _ = ShutdownAsync();
+    }
+
+    /// <summary>正常关闭：先发结束记录（最多等 1 秒）再关连接、清密钥。等它做完再关底下的 TCP，对方才一定收得到结束记录。</summary>
+    public override ValueTask DisposeAsync() => new(ShutdownAsync());
+
+    /// <summary>同步的 Dispose 不阻塞调用的线程（可能是界面线程）：在后台做同样的收尾。</summary>
     protected override void Dispose(bool disposing)
     {
-        if (disposing && Interlocked.Exchange(ref _disposed, 1) == 0)
-        {
-            // 在后台收尾：先尽量告诉对方“正常结束”（最多等 1 秒），再关连接、清密钥。不阻塞调用的线程（可能是界面线程）。
-            _ = Task.Run(async () =>
-            {
-                try { await CloseAsync().WaitAsync(TimeSpan.FromSeconds(1)); }
-                catch (Exception e) when (e is TimeoutException or ObjectDisposedException or IOException or OperationCanceledException or System.Net.Sockets.SocketException) { }
-                _cts.Cancel();
-                try { await Task.WhenAll(new[] { _cover, _rekeyTimer }.OfType<Task>()).WaitAsync(TimeSpan.FromSeconds(1)); }
-                catch (Exception e) when (e is TimeoutException or OperationCanceledException) { }
-                _inner.Dispose();
-                // 写锁拿到之后再清密钥，保证没有写在用它。
-                if (await _writeLock.WaitAsync(TimeSpan.FromSeconds(1)))
-                {
-                    _send.Dispose();
-                    _writeLock.Release();
-                }
-                else _send.Dispose();
-                _receive.Dispose();
-                _sendMask?.Dispose();
-                _receiveMask?.Dispose();
-                _cts.Dispose();
-            });
-        }
+        if (disposing) _ = ShutdownAsync();
         base.Dispose(disposing);
+    }
+
+    private Task ShutdownAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0) _shutdown = Task.Run(ShutdownCoreAsync);
+        return _shutdown ?? Task.CompletedTask;
+    }
+
+    private async Task ShutdownCoreAsync()
+    {
+        if (!_aborted)
+        {
+            try { await CloseAsync().WaitAsync(TimeSpan.FromSeconds(1)); }
+            catch (Exception e) when (e is TimeoutException or ObjectDisposedException or IOException or OperationCanceledException or System.Net.Sockets.SocketException or CryptographicException) { }
+        }
+        _cts.Cancel();
+        try { await Task.WhenAll(new[] { _cover, _rekeyTimer }.OfType<Task>()).WaitAsync(TimeSpan.FromSeconds(1)); }
+        catch (Exception e) when (e is TimeoutException or OperationCanceledException) { }
+        // 先关底下的连接：卡在写上的操作会因此出错并放开写锁。
+        _inner.Dispose();
+        // 一定在拿到写锁之后才清发送密钥，保证没有写在用它。
+        await _writeLock.WaitAsync();
+        try
+        {
+            _send.Dispose();
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+        _receive.Dispose();
+        _sendMask?.Dispose();
+        _receiveMask?.Dispose();
+        _cts.Dispose();
     }
 }
 

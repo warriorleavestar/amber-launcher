@@ -72,9 +72,11 @@ public static class TunnelHandshake
         {
             using var hs = new NoiseHandshake(profile.Pattern, initiator: false, Prologue(mode, false), Psk(room));
             var payload = hs.ReadMessage(await ReadFramedAsync(stream, timeout.Token));
+            // 先认服务：不认识就在分出会话密钥之前失败（不留下没人管的密钥和换钥定时器）。
+            var service = ParseService(payload);
             await WriteFramedAsync(stream, hs.WriteMessage([]), timeout.Token);
             var (send, receive) = hs.Split();
-            return (new SecureStream(stream, send, receive, profile), ParseService(payload));
+            return (new SecureStream(stream, send, receive, profile), service);
         }
         else
         {
@@ -82,9 +84,10 @@ public static class TunnelHandshake
             if (!await McDisguise.ReadLoginAsync(stream, timeout.Token)) return null;
             await McDisguise.WriteEncryptionRequestAsync(stream, hs.WriteMessage([]), timeout.Token);
             var payload = hs.ReadMessage(await McDisguise.ReadEncryptionResponseAsync(stream, timeout.Token));
+            var service = ParseService(payload);
             var (send, receive) = hs.Split();
             var (i2r, r2i) = Masks(hs.HandshakeHash);
-            return (new SecureStream(stream, send, receive, profile, sendMask: i2r, receiveMask: r2i), ParseService(payload));
+            return (new SecureStream(stream, send, receive, profile, sendMask: i2r, receiveMask: r2i), service);
         }
     }
 

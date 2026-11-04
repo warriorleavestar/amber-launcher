@@ -46,12 +46,16 @@ public sealed class CipherState : IDisposable
 
     public byte[] EncryptWithAd(ReadOnlySpan<byte> ad, ReadOnlySpan<byte> plaintext)
     {
+        // 先把密钥和 AEAD 读到局部变量：别的线程同时清掉它们时，这里要么用完整的旧密钥，要么报错，不会退回“不加密”。
+        var aead = _aead;
+        var hasKey = _k is not null;
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_k is null) return plaintext.ToArray();
+        if (!hasKey) return plaintext.ToArray();
+        ObjectDisposedException.ThrowIf(aead is null, this);
         // 2^64-1 留给 Rekey 用，不能拿来加密。
         if (_n == ulong.MaxValue) throw new CryptographicException("nonce 用完了，必须换钥");
         var output = new byte[plaintext.Length + TagLength];
-        _aead!.Encrypt(NonceBytes(_n), plaintext, output.AsSpan(0, plaintext.Length), output.AsSpan(plaintext.Length), ad);
+        aead.Encrypt(NonceBytes(_n), plaintext, output.AsSpan(0, plaintext.Length), output.AsSpan(plaintext.Length), ad);
         _n++;
         return output;
     }
@@ -59,12 +63,15 @@ public sealed class CipherState : IDisposable
     /// <summary>认证失败抛 CryptographicException，nonce 不前进。</summary>
     public byte[] DecryptWithAd(ReadOnlySpan<byte> ad, ReadOnlySpan<byte> ciphertext)
     {
+        var aead = _aead;
+        var hasKey = _k is not null;
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_k is null) return ciphertext.ToArray();
+        if (!hasKey) return ciphertext.ToArray();
+        ObjectDisposedException.ThrowIf(aead is null, this);
         if (_n == ulong.MaxValue) throw new CryptographicException("nonce 用完了，必须换钥");
         if (ciphertext.Length < TagLength) throw new CryptographicException("密文太短");
         var plain = new byte[ciphertext.Length - TagLength];
-        _aead!.Decrypt(NonceBytes(_n), ciphertext[..plain.Length], ciphertext[plain.Length..], plain, ad);
+        aead.Decrypt(NonceBytes(_n), ciphertext[..plain.Length], ciphertext[plain.Length..], plain, ad);
         _n++;
         return plain;
     }
@@ -72,11 +79,14 @@ public sealed class CipherState : IDisposable
     /// <summary>Noise 规范 11.3 的 Rekey：k = ENCRYPT(k, 2^64-1, 空, 32 个零) 的前 32 字节。nonce 不变。</summary>
     public void Rekey()
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_k is null) return;
         var zeros = new byte[KeyLength];
         var output = new byte[KeyLength];
         var tag = new byte[TagLength];
-        _aead!.Encrypt(NonceBytes(ulong.MaxValue), zeros, output, tag);
+        var aead = _aead;
+        ObjectDisposedException.ThrowIf(_disposed || aead is null, this);
+        aead.Encrypt(NonceBytes(ulong.MaxValue), zeros, output, tag);
         CryptographicOperations.ZeroMemory(_k);
         var n = _n;
         InitializeKey(output);

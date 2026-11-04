@@ -64,14 +64,23 @@ public static partial class JoinTarget
     /// 决定经出口连哪个主机和端口；返回 null 表示这个地址不经出口（本机、局域网、私有地址、在本机解析出私有地址）。
     /// 没写端口时查 SRV：有就用 SRV 给的主机和端口（游戏本身也是这么做的）。
     /// </summary>
+    /// <param name="onSkip">不经出口转时说明原因（显示在游戏日志里）。</param>
     public static async Task<RelayPlan?> ResolveForRelayAsync(string server, CancellationToken ct = default,
-        Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null, Func<string, (string Host, int Port)?>? srv = null)
+        Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null, Func<string, (string Host, int Port)?>? srv = null, Action<string>? onSkip = null)
     {
-        if (!TryParse(server, out var typedHost, out var typedPort, out var hasPort)) return null;
-        if (IPAddress.TryParse(typedHost, out var typedIp)) return ExitPolicy.IsGloballyRoutable(typedIp) ? new RelayPlan(typedHost, typedPort, typedHost, typedPort) : null;
-        if (IsLocalName(typedHost)) return null;
+        RelayPlan? Skip(string reason)
+        {
+            onSkip?.Invoke(reason);
+            return null;
+        }
+        if (!TryParse(server, out var typedHost, out var typedPort, out _)) return Skip($"“{server}”不是有效的服务器地址");
+        if (IPAddress.TryParse(typedHost, out var typedIp))
+            return ExitPolicy.IsGloballyRoutable(typedIp) ? new RelayPlan(typedHost, typedPort, typedHost, typedPort) : Skip($"{typedHost} 是本机或局域网地址，直接连");
+        if (IsLocalName(typedHost)) return Skip($"{typedHost} 是本机或局域网的名字，直接连");
+        if (typedHost.Length > 253) return Skip("服务器名字太长");
         var (host, port) = (typedHost, typedPort);
-        if (!hasPort)
+        // 和游戏一样：端口是默认的 25565（写没写都算）时查 SRV 记录。
+        if (typedPort == DefaultPort)
         {
             // SRV 查询是同步的系统调用：放到线程池上，最多等 3 秒，免得卡住界面。
             var lookup = srv ?? LookupSrv;
@@ -82,19 +91,32 @@ public static partial class JoinTarget
             }
             catch (TimeoutException) { }
         }
-        if (IPAddress.TryParse(host, out var ip)) return ExitPolicy.IsGloballyRoutable(ip) ? new RelayPlan(host, port, typedHost, typedPort) : null;
-        if (IsLocalName(host)) return null;
+        // 游戏按 SRV 查到的主机和端口去连，握手包里写的也是它们（和直接进时一样）。
+        if (IPAddress.TryParse(host, out var ip))
+            return ExitPolicy.IsGloballyRoutable(ip) ? new RelayPlan(host, port, host, port) : Skip($"{typedHost} 指向本机或局域网地址，直接连");
+        if (IsLocalName(host)) return Skip($"{typedHost} 指向本机或局域网的名字，直接连");
         try
         {
             var addresses = await (resolve ?? ((h, c) => Dns.GetHostAddressesAsync(h, c)))(host, ct);
+            // 本机的 Clash / sing-box 等代理会把名字解析成 198.18.0.0/15 的假地址：当成没解析，交给出口去解析。
+            var real = addresses.Where(a => !IsFakeIp(a)).ToArray();
             // 本机解析出私有地址的名字（内网 DNS、hosts 文件）不经出口——出口那边解析出来的多半不是同一台机器。
-            if (addresses.Length > 0 && addresses.Any(a => !ExitPolicy.IsGloballyRoutable(a))) return null;
+            if (real.Length > 0 && real.Any(a => !ExitPolicy.IsGloballyRoutable(a))) return Skip($"{host} 在本机解析成了局域网地址，直接连");
         }
-        catch (System.Net.Sockets.SocketException)
+        catch (Exception e) when (e is System.Net.Sockets.SocketException or ArgumentException)
         {
             // 本机解析不了也没关系，交给出口那边解析。
         }
-        return new RelayPlan(host, port, typedHost, typedPort);
+        return new RelayPlan(host, port, host, port);
+    }
+
+    /// <summary>代理软件“假 IP”模式用的地址段（198.18.0.0/15）。</summary>
+    internal static bool IsFakeIp(IPAddress address)
+    {
+        var a = ExitPolicy.Normalize(address);
+        if (a.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) return false;
+        var b = a.GetAddressBytes();
+        return b[0] == 198 && b[1] is 18 or 19;
     }
 
     /// <summary>查 SRV 记录（Windows 的 DnsQuery）。查不到或不是 Windows 返回 null。</summary>
@@ -102,9 +124,11 @@ public static partial class JoinTarget
     {
         if (!OperatingSystem.IsWindows()) return null;
         const ushort DnsTypeSrv = 33;
-        if (DnsQuery(name, DnsTypeSrv, 0, IntPtr.Zero, out var results, IntPtr.Zero) != 0 || results == IntPtr.Zero) return null;
+        var status = DnsQuery(name, DnsTypeSrv, 0, IntPtr.Zero, out var results, IntPtr.Zero);
+        if (results == IntPtr.Zero) return null;
         try
         {
+            if (status != 0) return null;
             (string, int, int)? best = null;
             for (var p = results; p != IntPtr.Zero; p = Marshal.ReadIntPtr(p))
             {

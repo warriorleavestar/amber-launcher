@@ -110,7 +110,7 @@ public sealed class DirectSession : IAsyncDisposable
 
     private EasyTierOptions HostOptions(bool tun, bool allowExit, IReadOnlyList<string>? extra = null) =>
         new(Room, true, Options.FallbackNodes, EasyTierArgs.FreeTcpPort(), null, [$"udp://127.0.0.1:{_easyTierUdpPort}"], _machineId, tun, null, allowExit, null,
-            Verbose(extra));
+            Verbose(extra)) { ServesSpeedTest = true };
 
     private EasyTierOptions GuestOptions(bool viaBridge, bool tun, string? exitNode, IReadOnlyList<string>? extra = null, bool nodes = true)
     {

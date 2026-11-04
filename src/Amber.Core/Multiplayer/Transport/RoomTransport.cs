@@ -82,9 +82,10 @@ public sealed class RoomTransport : IAsyncDisposable
                 TunnelService.Chat when o.IsHost && settings.Wraps => TunnelServer.ToLocalPort(RoomChat.Port),
                 TunnelService.Socks when o.AllowProxy => async (stream, ct) =>
                 {
-                    // 还没查到自己的公网 IP 时先等一会；查不到就一律拒绝（Allows 在没就绪时返回 false）。
-                    await _exitPolicy!.WaitReadyAsync(TimeSpan.FromSeconds(8), ct);
-                    await Socks5.ServeAsync(stream, ct, _log, _exitPolicy.Allows);
+                    // 公网 IP 还没查到或者查到太久了（路由器可能重新拨号）：先重查（最多 8 秒）；还是不行就回“出口还没准备好”，不去解析和连接。
+                    var policy = _exitPolicy!;
+                    var ready = await policy.EnsureFreshAsync(TimeSpan.FromSeconds(8), ct);
+                    await Socks5.ServeAsync(stream, ct, _log, policy.Allows, ready: ready);
                 },
                 _ => null,
             }, _log, listen));

@@ -458,7 +458,8 @@ public class ForwardingTests
     public void RoomCodeCarriesTransport()
     {
         var room = RoomCode.Create(25565) with { Tunnel = new TunnelSettings(TransportMode.Extreme, true) };
-        Assert.EndsWith("-25565-T3D", room.ToString());
+        Assert.StartsWith("AMB-T3D-", room.ToString());
+        Assert.EndsWith("-25565", room.ToString());
         Assert.True(RoomCode.TryParse("朋友发来的：" + room + " 快来", out var parsed));
         Assert.Equal(room, parsed);
         // 通用模式的房间码和以前完全一样，老版本也能用。
@@ -512,11 +513,15 @@ public class ExitPolicyTests
     [Theory]
     [InlineData("8.8.8.8")]
     [InlineData("1.1.1.1")]
-    [InlineData("2606:4700:4700::1111")]
     [InlineData("::ffff:8.8.8.8")]
     [InlineData("64:ff9b::808:808")]
     [InlineData("2002:0808:0808::1")]
     public void AllowsOtherPublicAddresses(string address) => Assert.True(Policy().Allows(IPAddress.Parse(address)));
+
+    [Theory]
+    [InlineData("2606:4700:4700::1111")]
+    [InlineData("2001:4860:4860::8888")]
+    public void GameOnlyExitRefusesIPv6(string address) => Assert.False(Policy().Allows(IPAddress.Parse(address)));
 
     [Fact]
     public void DeniesRouterPublicIpOnceKnown()

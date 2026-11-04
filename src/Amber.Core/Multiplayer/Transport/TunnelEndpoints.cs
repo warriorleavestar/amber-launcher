@@ -28,18 +28,28 @@ public static class Pump
         var up = CopyAsync(a, b, linked.Token);
         var down = CopyAsync(b, a, linked.Token);
         var first = await Task.WhenAny(up, down);
-        // 先结束的是“从封装通道读”的那一边，而通道没收到结束记录：异常结束。
-        var secureEnded = first == up ? a : b;
-        if (secureEnded is SecureStream { ClosedCleanly: false }) abortLocal?.Invoke();
+        var secure = a as SecureStream ?? b as SecureStream;
+        if (secure is not null)
+        {
+            var readFromSecure = ReferenceEquals(secure, a) ? up : down;
+            if (first != readFromSecure && first.Result.Error)
+            {
+                // 本机那头出错断的：封装通道也按出错处理，不发“正常结束”。
+                secure.Abort();
+            }
+        }
         linked.Cancel();
-        a.Dispose();
-        b.Dispose();
-        long Result(Task<long> t) => t.IsCompletedSuccessfully ? t.Result : 0;
-        try { await Task.WhenAll(up, down); } catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException or CryptographicException or SocketException) { }
-        return (Result(up), Result(down));
+        try { await Task.WhenAll(up, down).WaitAsync(TimeSpan.FromSeconds(2)); } catch (TimeoutException) { }
+        // 不管哪边先结束，只要封装通道没收到认证过的结束记录，就把本机那头重置，而不是正常关闭。
+        if (secure is { ClosedCleanly: false }) abortLocal?.Invoke();
+        await a.DisposeAsync();
+        await b.DisposeAsync();
+        long Bytes(Task<(long Total, bool Error)> t) => t.IsCompletedSuccessfully ? t.Result.Total : 0;
+        return (Bytes(up), Bytes(down));
     }
 
-    private static async Task<long> CopyAsync(Stream from, Stream to, CancellationToken ct)
+    /// <summary>把 from 的数据转给 to，返回转了多少字节、是不是出错结束的（正常读到结尾不算出错）。</summary>
+    private static async Task<(long Total, bool Error)> CopyAsync(Stream from, Stream to, CancellationToken ct)
     {
         var buffer = new byte[32 * 1024];
         long total = 0;
@@ -52,9 +62,16 @@ public static class Pump
                 await to.FlushAsync(ct);
                 total += n;
             }
+            return (total, false);
         }
-        catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException or CryptographicException or SocketException or EndOfStreamException) { }
-        return total;
+        catch (OperationCanceledException)
+        {
+            return (total, false);
+        }
+        catch (Exception e) when (e is IOException or ObjectDisposedException or CryptographicException or SocketException or EndOfStreamException)
+        {
+            return (total, true);
+        }
     }
 
     /// <summary>关闭时直接发 RST（不经过正常的四次挥手），对面马上知道连接是出错断的。</summary>
@@ -155,7 +172,7 @@ public sealed class TunnelServer : IAsyncDisposable
                 Interlocked.Increment(ref Accepted);
                 await handler(stream, ct);
             }
-            catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException or PlatformNotSupportedException)
+            catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException or PlatformNotSupportedException or InvalidDataException or ArgumentException)
             {
                 Interlocked.Increment(ref Rejected);
                 if (e is CryptographicException or PlatformNotSupportedException) _log?.Invoke("[封装] 握手或认证失败，连接已断开：" + e.Message);
@@ -260,7 +277,7 @@ public sealed class TunnelClient : IAsyncDisposable
                 Interlocked.Add(ref BytesUp, down);
                 Interlocked.Add(ref BytesDown, up);
             }
-            catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException or InvalidDataException or PlatformNotSupportedException)
+            catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException or InvalidDataException or PlatformNotSupportedException or ArgumentException)
             {
                 Interlocked.Increment(ref Failures);
                 _log?.Invoke("[封装] 连不上对面：" + e.Message);

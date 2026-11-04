@@ -223,7 +223,14 @@ try
             foreach (var (mode, disguise) in new[] { (Amber.Core.Multiplayer.Transport.TransportMode.General, false), (Amber.Core.Multiplayer.Transport.TransportMode.Minecraft, false),
                          (Amber.Core.Multiplayer.Transport.TransportMode.High, false), (Amber.Core.Multiplayer.Transport.TransportMode.High, true),
                          (Amber.Core.Multiplayer.Transport.TransportMode.Extreme, false), (Amber.Core.Multiplayer.Transport.TransportMode.Extreme, true) })
+            {
+                if (mode == Amber.Core.Multiplayer.Transport.TransportMode.Extreme && !Amber.Core.Multiplayer.Transport.NoiseHandshake.HybridSupported)
+                {
+                    Console.WriteLine("Extreme：这台电脑不支持 ML-KEM，跳过");
+                    continue;
+                }
                 Console.WriteLine(await TransportBench.RunAsync(mode, disguise, cts.Token));
+            }
             break;
         }
         case "account-check":
@@ -390,7 +397,9 @@ try
             var listen = TakeAll(argList, "--listen");
             var seconds = int.Parse(TakeOption(argList, "--seconds") ?? "0");
             // 封装模式：--transport 0..3（通用 / MC 专用 / 高加密 / 极端加密），--disguise 伪装成 MC。
-            var transportMode = TakeOption(argList, "--transport") is { } tm ? (Amber.Core.Multiplayer.Transport.TransportMode)int.Parse(tm) : Amber.Core.Multiplayer.Transport.TransportMode.General;
+            var transportMode = TakeOption(argList, "--transport") is { } tm
+                ? int.TryParse(tm, out var tmValue) && tmValue is >= 0 and <= 3 ? (Amber.Core.Multiplayer.Transport.TransportMode)tmValue : throw new ArgumentException("--transport 只能是 0–3")
+                : Amber.Core.Multiplayer.Transport.TransportMode.General;
             var disguise = argList.Remove("--disguise");
             if (transportMode == Amber.Core.Multiplayer.Transport.TransportMode.Extreme && !Amber.Core.Multiplayer.Transport.NoiseHandshake.HybridSupported)
                 throw new PlatformNotSupportedException("极端加密需要系统支持 ML-KEM（较新的 Windows 11），这台电脑不支持");

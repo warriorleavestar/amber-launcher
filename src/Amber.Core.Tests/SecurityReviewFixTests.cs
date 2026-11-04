@@ -55,7 +55,7 @@ public class SecurityReviewFixTests
         Assert.Equal(48, new ExitPolicy(48).IPv6SitePrefix);
         Assert.False(policy.Allows(IPAddress.Parse("2400:1a00:b1:4f::1")));
         Assert.False(policy.Allows(IPAddress.Parse("2400:1a00:b1:ff::1")));
-        Assert.True(policy.Allows(IPAddress.Parse("2400:1a00:b2:0::1")));
+        Assert.False(policy.Allows(IPAddress.Parse("2400:1a00:b2:0::1")));   // 仅游戏转发不转 IPv6
         if (OperatingSystem.IsWindows())
         {
             var routes = ExitPolicy.NonDefaultRoutes();
@@ -86,11 +86,12 @@ public class SecurityReviewFixTests
         var args = EasyTierArgs.Build(host);
         var i = args.IndexOf("--tcp-whitelist");
         Assert.True(i >= 0);
-        Assert.Equal(["25565", "47652", "47653"], args.Skip(i + 1).TakeWhile(a => !a.StartsWith("--", StringComparison.Ordinal)));
+        Assert.Equal("25565,47652", args[i + 1]);   // 逗号连在一个参数里；测速端口只有直连房间才放行
         Assert.Contains("--udp-whitelist", args);
         Assert.Contains("--rpc-portal-whitelist", args);
         var wrapped = new EasyTierOptions(room with { Tunnel = new TunnelSettings(TransportMode.High, false) }, true, [], 15888) { AllowProxy = true };
-        Assert.Equal([47653, TunnelSettings.Port], EasyTierArgs.ServedPorts(wrapped).Order());
+        Assert.Equal([TunnelSettings.Port], EasyTierArgs.ServedPorts(wrapped));
+        Assert.Equal([25565, 47652, 47653], EasyTierArgs.ServedPorts(host with { ServesSpeedTest = true }));
         var joiner = new EasyTierOptions(room, false, [], 15888, 30000);
         Assert.Equal([1], EasyTierArgs.ServedPorts(joiner));
         Assert.DoesNotContain("--tcp-whitelist", EasyTierArgs.Build(host with { Tun = true }));
@@ -98,17 +99,29 @@ public class SecurityReviewFixTests
 
     // 5. 模式写进 EasyTier 的网络名和密钥；房间码里的模式段坏了直接算格式不对。
     [Theory]
-    [InlineData("-T9")]
-    [InlineData("-T7D")]
-    [InlineData("-T2Q")]
-    [InlineData("-T20")]
-    [InlineData("X")]
-    public void RoomCode_RejectsBadModeSuffix(string suffix) =>
-        Assert.False(RoomCode.TryParse("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565" + suffix, out _));
+    [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565-T2")]     // 旧的模式写法
+    [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565X")]
+    [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565-thanks")]
+    [InlineData("AMB-T-K7Q2M9XD-4HZP8RW2N6TC-25565")]
+    [InlineData("AMB-TX-K7Q2M9XD-4HZP8RW2N6TC-25565")]
+    [InlineData("AMB-T0-K7Q2M9XD-4HZP8RW2N6TC-25565")]
+    [InlineData("AMB-T9-K7Q2M9XD-4HZP8RW2N6TC-25565")]
+    [InlineData("AMB-T2Q-K7Q2M9XD-4HZP8RW2N6TC-25565")]
+    [InlineData("AMB-Ｔ２-K7Q2M9XD-4HZP8RW2N6TC-25565")]       // 全角
+    [InlineData("AMB-T2-K7Q2M9XD-4HZP8RW2N6TC")]               // 少了端口
+    public void RoomCode_RejectsBadModeSuffix(string code) => Assert.False(RoomCode.TryParse(code, out _));
+
+    [Fact]
+    public void RoomCode_OldVersionParserRejectsWrappedRooms()
+    {
+        // v0.5.6 的解析规则：AMB- 后面三段，第一段必须是 8 位网络名。封装模式的码在这一步就失败，旧版本不会悄悄按通用模式去连。
+        var wrapped = (RoomCode.Create(25565) with { Tunnel = new TunnelSettings(TransportMode.High, false) }).ToString();
+        var parts = wrapped[(wrapped.IndexOf("AMB-", StringComparison.Ordinal) + 4)..].Split('-', 3);
+        Assert.NotEqual(RoomCode.NetworkLength, parts[0].Length);
+    }
 
     [Theory]
     [InlineData("-快来玩")]
-    [InlineData("-thanks")]
     [InlineData(" 快来")]
     [InlineData("。")]
     public void RoomCode_ToleratesTrailingText(string suffix)
@@ -314,7 +327,9 @@ public class SecurityReviewFixTests
 
         Assert.Equal(new RelayPlan("play.example.org", 25565, "play.example.org", 25565), await JoinTarget.ResolveForRelayAsync("play.example.org", default, Public, NoSrv));
         // SRV：连 SRV 给的主机和端口，握手包里仍写用户写的名字和默认端口（和游戏直接进时一样，按域名分服的服务器才认得）。
-        Assert.Equal(new RelayPlan("mc1.example.org", 25570, "play.example.org", 25565), await JoinTarget.ResolveForRelayAsync("play.example.org", default, Public, Srv));
+        Assert.Equal(new RelayPlan("mc1.example.org", 25570, "mc1.example.org", 25570), await JoinTarget.ResolveForRelayAsync("play.example.org", default, Public, Srv));
+        // 写了 25565 也查 SRV（和游戏一样）。
+        Assert.Equal(new RelayPlan("mc1.example.org", 25570, "mc1.example.org", 25570), await JoinTarget.ResolveForRelayAsync("play.example.org:25565", default, Public, Srv));
         Assert.Equal(new RelayPlan("play.example.org", 25566, "play.example.org", 25566), await JoinTarget.ResolveForRelayAsync("play.example.org:25566", default, Public, Srv));
         Assert.Null(await JoinTarget.ResolveForRelayAsync("intranet.example.org", default, Private, NoSrv));
         Assert.Null(await JoinTarget.ResolveForRelayAsync("localhost:25565", default, Public, NoSrv));

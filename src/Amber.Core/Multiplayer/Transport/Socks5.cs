@@ -14,7 +14,8 @@ public static class Socks5
     private const byte Version = 5;
 
     /// <summary>出口成员：处理一条已经接上的 SOCKS5 连接。</summary>
-    public static async Task ServeAsync(Stream client, CancellationToken ct, Action<string>? log = null, Func<IPAddress, bool>? allow = null, Func<int, bool>? allowPort = null)
+    /// <param name="ready">出口准备好了没有（查到了自己的公网 IP）。没有时读完请求就回“网络不可达”，不解析也不连接。</param>
+    public static async Task ServeAsync(Stream client, CancellationToken ct, Action<string>? log = null, Func<IPAddress, bool>? allow = null, Func<int, bool>? allowPort = null, bool ready = true)
     {
         allowPort ??= ExitPolicy.AllowsPort;
         allow ??= IsPublic;
@@ -38,6 +39,12 @@ public static class Socks5
             return;
         }
         var (host, port) = await ReadAddressAsync(client, request[3], ct);
+        if (!ready)
+        {
+            log?.Invoke("[转发] 拒绝了一个连接：还没确认自己的公网 IP");
+            await ReplyAsync(client, 3, ct);
+            return;
+        }
         if (!allowPort(port))
         {
             log?.Invoke("[转发] 拒绝了一个连接：发邮件的端口不能经别人转发");
@@ -110,6 +117,7 @@ public static class Socks5
         {
             2 => $"出口拒绝连接 {host}:{port}（本机、局域网、保留地址和发邮件的端口不能经别人转发）",
             4 => $"出口那边找不到 {host}",
+            3 => "出口还没准备好（还在确认它的公网 IP，或者它查不到自己的公网 IP），稍后再试",
             5 => $"{host}:{port} 拒绝连接",
             _ => $"出口连不上 {host}:{port}（代码 {reply[1]}）",
         });

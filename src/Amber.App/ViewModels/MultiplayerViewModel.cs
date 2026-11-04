@@ -157,7 +157,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
 
     public bool UsingGameProxy => GameProxyIp.Length > 0;
     public string GameProxyBanner => UsingGameProxy
-        ? $"从 Amber 启动的游戏经 {GameProxyIp} 的电脑和网络登录、连服务器（只影响游戏，别的程序照常）。启动页填了“进入服务器”时那个服务器也经它连；在游戏里的服务器列表里点别的服务器是直接连的。域名查询仍走你自己的网络。"
+        ? $"从 Amber 启动的游戏，HTTP 请求（进服务器时的会话校验、皮肤）经 {GameProxyIp} 的电脑和网络出去；启动页填了“进入服务器”时那个服务器也经它连（只转 IPv4）。在游戏里的服务器列表点别的服务器是直接连的；域名在你这边查询；Amber 自己刷新登录不经过它。"
         : "";
 
     /// <summary>允许别人经自己转发、但查不到自己公网 IP 时的提示（这时不转发）。</summary>
@@ -167,6 +167,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     [ObservableProperty] public partial string TransportText { get; set; } = "";
 
     private RoomTransport? _transport;
+    private DateTime _joinedAt;
     /// <summary>当前会话实际用的参数（完整局域网模式下换转发不重启 EasyTier，参数记在这里）。</summary>
     private EasyTierOptions? _currentOptions;
 
@@ -480,6 +481,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
                 AllowProxy = AllowGameProxy,
             })) return;
         _room = room;
+        _joinedAt = DateTime.UtcNow;
         RestoreChatHistory(room);
         _localChatPort = chatPort;
         ChatStatus = "连上房主后自动进入聊天";
@@ -536,7 +538,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         GameProxyIp = _transport.Proxy?.ExitIp ?? "";
         var t = options.Room.Tunnel;
         TransportText = t.Wraps
-            ? $"数据封装：{TransportChoices.First(c => c.Mode == t.Mode).Label}{(t.Disguise ? "，伪装成 MC" : "")}。{TransportProfile.Describe(t.Mode)}"
+            ? $"数据封装：{TransportChoices.FirstOrDefault(c => c.Mode == t.Mode)?.Label ?? t.Mode.ToString()}{(t.Disguise ? "，伪装成 MC" : "")}。{TransportProfile.Describe(t.Mode)}"
             : "数据封装：通用（只靠 EasyTier 自带的加密）";
         OnPropertyChanged(nameof(CanUseGameProxy));
         return true;
@@ -797,7 +799,9 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             }
             var host = Peers.FirstOrDefault(p => p.Peer.Ip == EasyTierArgs.HostIp && p.Peer.Cost != "Local");
             TickChat(host is not null);
-            if (IsJoined)
+            if (IsJoined && host is null && DateTime.UtcNow - _joinedAt > TimeSpan.FromSeconds(20))
+                Status = "还没连上房主。请确认房间码完整（包括开头的 AMB- 和模式段），双方用同样的联机节点，而且都是同一版本的 Amber（封装模式需要 v0.5.7 或更新）。";
+            else if (IsJoined)
                 Status = host is null ? "正在连接房主……（第一次可能要十几秒）"
                     : $"已连上房主{(host.Peer.LatencyMs is { } ms ? $"，延迟 {ms:F0} ms" : "")}。在游戏里添加服务器 {JoinAddress}，或点下面的按钮直接进入";
             else if (IsHosting)

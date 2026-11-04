@@ -111,6 +111,8 @@ public sealed record EasyTierOptions(
     public int? LocalSocksPort { get; init; }
     /// <summary>不建网卡时：本机这个端口经 EasyTier 转发到出口成员的封装 / SOCKS5 端口。</summary>
     public int? LocalExitPort { get; init; }
+    /// <summary>直连房间的房主：对加入方提供测速端口。</summary>
+    public bool ServesSpeedTest { get; init; }
 }
 
 public static class EasyTierArgs
@@ -162,8 +164,8 @@ public static class EasyTierArgs
         // 所以只放行这台电脑在这次联机里真正提供的端口；UDP 都不需要。完整局域网模式本来就是要互通，不限制。
         if (!o.Tun)
         {
-            args.Add("--tcp-whitelist");
-            args.AddRange(ServedPorts(o).Select(p => p.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            // 端口用逗号连在一个参数里（EasyTier 2.6.4 的写法）。
+            args.AddRange(["--tcp-whitelist", string.Join(',', ServedPorts(o).Select(p => p.ToString(System.Globalization.CultureInfo.InvariantCulture)))]);
             args.AddRange(["--udp-whitelist", "1"]);
             args.AddRange(["--rpc-portal-whitelist", "127.0.0.1/32"]);
         }
@@ -195,7 +197,7 @@ public static class EasyTierArgs
     }
 
     /// <summary>
-    /// 这台电脑经 EasyTier 对房间提供的 TCP 端口。房主：封装模式只有封装端口，通用模式是游戏端口和聊天端口，再加直连房间的测速端口；
+    /// 这台电脑经 EasyTier 对房间提供的 TCP 端口。房主：封装模式只有封装端口，通用模式是游戏端口和聊天端口；直连房间再加测速端口；
     /// 允许别人借自己转发时加上转发端口。什么都不提供时放一个不会有人听的端口（列表不能空，空的等于不限制）。
     /// </summary>
     public static IReadOnlyList<int> ServedPorts(EasyTierOptions o)
@@ -209,7 +211,7 @@ public static class EasyTierArgs
                 ports.Add(o.Room.Port);
                 ports.Add(RoomChat.Port);
             }
-            ports.Add(SpeedTestServer.Port);
+            if (o.ServesSpeedTest) ports.Add(SpeedTestServer.Port);
         }
         if (o.AllowProxy) ports.Add(o.Room.Tunnel.Wraps ? Transport.TunnelSettings.Port : Transport.TunnelSettings.PlainSocksPort);
         if (ports.Count == 0) ports.Add(1);

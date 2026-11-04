@@ -7,7 +7,8 @@ namespace Amber.Core.Multiplayer;
 /// 联机房间码：AMB-网络名8位-密钥12位-房主端口，例如 AMB-K7Q2M9XD-4HZP8RW2N6TC-25565。
 /// 字母数字用 Crockford Base32（不含 I L O U），手抄时把 I/L 看成 1、O 看成 0 也能认。
 /// 网络名和密钥都只在房主电脑上随机生成，不经过任何 Amber 的服务器。
-/// 房主选了封装模式时末尾多一段：-T模式号（0–3），伪装成 MC 再加 D，例如 …-25565-T2D。加入方按这段设置连接。
+/// 房主选了封装模式时，AMB- 后面先写模式段：T模式号（1–3），伪装成 MC 再加 D，例如 AMB-T2D-K7Q2M9XD-4HZP8RW2N6TC-25565。
+/// 放在这个位置是故意的：不认识封装模式的旧版本（v0.5.6 及以前）会直接说房间码格式不对，而不是悄悄按通用模式去连。
 /// </summary>
 public sealed record RoomCode(string Network, string Secret, int Port)
 {
@@ -22,7 +23,10 @@ public sealed record RoomCode(string Network, string Secret, int Port)
     /// 给 EasyTier 用的网络名和密钥。封装模式的房间用按模式派生的另一套（HKDF），
     /// 这样房间码末尾的模式被删掉或改掉的人连 EasyTier 网络都进不来，碰不到房主没封装的端口。通用模式和以前一样。
     /// </summary>
-    public string EasyTierNetworkName => Tunnel.Wraps ? $"{NetworkName}-t{(int)Tunnel.Mode}{(Tunnel.Disguise ? "d" : "")}" : NetworkName;
+    public string EasyTierNetworkName => Tunnel.Wraps
+        ? "amber-" + Convert.ToHexStringLower(HKDF.DeriveKey(HashAlgorithmName.SHA256, Encoding.UTF8.GetBytes(Secret), 8, Encoding.UTF8.GetBytes(NetworkName),
+            Encoding.UTF8.GetBytes($"amber-et-name-v1|{(int)Tunnel.Mode}|{(Tunnel.Disguise ? 1 : 0)}")))
+        : NetworkName;
 
     public string EasyTierSecret => Tunnel.Wraps
         ? Convert.ToHexStringLower(HKDF.DeriveKey(HashAlgorithmName.SHA256, Encoding.UTF8.GetBytes(Secret), 32, Encoding.UTF8.GetBytes(NetworkName),
@@ -36,7 +40,7 @@ public sealed record RoomCode(string Network, string Secret, int Port)
     public Transport.TunnelSettings Tunnel { get; init; } = Transport.TunnelSettings.Default;
 
     public override string ToString() =>
-        $"AMB-{Network}-{Secret}-{Port}" + (Tunnel.Wraps ? $"-T{(int)Tunnel.Mode}{(Tunnel.Disguise ? "D" : "")}" : "");
+        Tunnel.Wraps ? $"AMB-T{(int)Tunnel.Mode}{(Tunnel.Disguise ? "D" : "")}-{Network}-{Secret}-{Port}" : $"AMB-{Network}-{Secret}-{Port}";
 
     public static RoomCode Create(int port)
     {
@@ -59,7 +63,18 @@ public sealed record RoomCode(string Network, string Secret, int Port)
         var upper = text.ToUpperInvariant();
         var start = upper.IndexOf("AMB-", StringComparison.Ordinal);
         if (start < 0) return false;
-        var parts = upper[(start + 4)..].Split('-', 3);
+        var body = upper[(start + 4)..];
+        var tunnel = Transport.TunnelSettings.Default;
+        // 模式段：AMB- 后面第一段如果不是 8 位网络名，就必须是 T1–T3（可选 D），只认半角字符；别的写法一律算格式不对。
+        var firstDash = body.IndexOf('-');
+        if (firstDash is > 0 and < NetworkLength)
+        {
+            var marker = body[..firstDash];
+            if (marker.Length is < 2 or > 3 || marker[0] != 'T' || marker[1] is < '1' or > '3' || marker.Length == 3 && marker[2] != 'D') return false;
+            tunnel = new Transport.TunnelSettings((Transport.TransportMode)(marker[1] - '0'), marker.Length == 3);
+            body = body[(firstDash + 1)..];
+        }
+        var parts = body.Split('-', 3);
         if (parts.Length != 3) return false;
 
         var network = Normalize(parts[0]);
@@ -67,19 +82,10 @@ public sealed record RoomCode(string Network, string Secret, int Port)
         var digits = new string(parts[2].TakeWhile(char.IsAsciiDigit).ToArray());
         if (network is not { Length: NetworkLength } || secret is not { Length: SecretLength }) return false;
         if (!int.TryParse(digits, out var port) || port is < 1 or > 65535) return false;
-        var tunnel = Transport.TunnelSettings.Default;
+        // 端口后面紧跟字母数字或者“-字母数字”（比如旧的 -T2 写法、被改坏的码）都算格式不对；空格、中文等普通文字可以。
         var rest = parts[2][digits.Length..];
-        if (rest.Length >= 3 && rest[0] == '-' && rest[1] == 'T' && char.IsAsciiDigit(rest[2]))
-        {
-            // 模式段 -T0…-T3，可选 D。不认识的模式号、后面紧跟别的字母数字（改坏了）都算格式不对，不会悄悄当成通用模式。
-            // （模式也写进了 EasyTier 的网络名和密钥，模式不对的人本来就进不了房间。）
-            if (rest[2] > '3') return false;
-            var disguise = rest.Length > 3 && rest[3] == 'D';
-            var end = disguise ? 4 : 3;
-            if (rest.Length > end && char.IsAsciiLetterOrDigit(rest[end])) return false;
-            tunnel = new Transport.TunnelSettings((Transport.TransportMode)(rest[2] - '0'), disguise);
-        }
-        else if (rest.Length > 0 && char.IsAsciiLetterOrDigit(rest[0])) return false;
+        if (rest.Length > 0 && char.IsAsciiLetterOrDigit(rest[0])) return false;
+        if (rest.Length > 1 && rest[0] == '-' && char.IsAsciiLetterOrDigit(rest[1])) return false;
         room = new RoomCode(network, secret, port) { Tunnel = tunnel };
         return true;
     }

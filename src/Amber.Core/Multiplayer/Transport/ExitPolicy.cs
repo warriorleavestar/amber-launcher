@@ -36,14 +36,30 @@ public sealed partial class ExitPolicy : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private IReadOnlyList<string>? _stunServers;
+    /// <summary>网卡地址每变一次加一：变化之前开始的公网 IP 查询，结果不能再让出口变成“可用”。</summary>
+    private int _generation;
+    /// <summary>上次成功查到公网 IP 的时间。</summary>
+    private long _lastSuccessTicks;
+    /// <summary>唤醒信号：每轮换一个新的，不会像信号量那样留下等不到的等待者。</summary>
+    private TaskCompletionSource _wake = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>测试用：可以换掉查公网 IP 的方法和各种间隔。</summary>
+    internal Func<CancellationToken, Task<bool>>? Discover { get; set; }
+    internal TimeSpan ReadyInterval { get; set; } = TimeSpan.FromMinutes(3);
+    internal TimeSpan RetryInterval { get; set; } = TimeSpan.FromSeconds(15);
+    internal TimeSpan Debounce { get; set; } = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// 查到公网 IP 后最多信任这么久：路由器重新拨号（PPPoE）会换公网 IP，而本机网卡还是私有地址、不会触发地址变化。
+    /// 超过这个时间，新的转发连接先重查一次再放行。
+    /// </summary>
+    internal TimeSpan MaxPublicIpAge { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>已经查到本机公网地址，可以开始转发。没查到之前所有连接都拒绝（宁可不转，也不放过自己的公网地址）。</summary>
     public bool IsReady => _ready;
 
     /// <summary>查不到公网地址时的说明（这时不当出口）；正常时为 null。</summary>
     public string? Failure => _failure;
-
-    private readonly SemaphoreSlim _wake = new(0);
 
     public ExitPolicy(int ipv6SitePrefix = 56)
     {
@@ -52,11 +68,11 @@ public sealed partial class ExitPolicy : IDisposable
         NetworkChange.NetworkAddressChanged += OnAddressChanged;
     }
 
-    /// <summary>开始当出口：先查公网地址，之后每 3 分钟、网络变化时再查（路由器重新拨号会换公网 IP）。</summary>
+    /// <summary>开始当出口：先查公网地址，之后定期、网络变化时再查。</summary>
     public void Start(IReadOnlyList<string>? stunServers = null, Action<string>? log = null)
     {
         _stunServers = stunServers;
-        _ = LoopAsync(log, _cts.Token);
+        _ = Task.Run(() => LoopAsync(log, _cts.Token));
     }
 
     private async Task LoopAsync(Action<string>? log, CancellationToken ct)
@@ -72,14 +88,15 @@ public sealed partial class ExitPolicy : IDisposable
                     log?.Invoke(_failure is { } f ? "[转发] " + f : "[转发] 已查到公网 IP，开始转发");
                     lastLogged = _failure;
                 }
-                // 正常时 3 分钟重查一次；查不到时 15 秒后重试；网络变化时等 3 秒（地址变化常常一下来好几个）再查。
-                var delay = _ready ? TimeSpan.FromMinutes(3) : TimeSpan.FromSeconds(15);
-                await Task.WhenAny(Task.Delay(delay, ct), _wake.WaitAsync(ct));
+                var wake = Volatile.Read(ref _wake);
+                var delay = _ready ? ReadyInterval : RetryInterval;
+                await Task.WhenAny(Task.Delay(delay, ct), wake.Task);
                 ct.ThrowIfCancellationRequested();
-                if (!_ready)
+                if (wake.Task.IsCompleted)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(3), ct);
-                    while (_wake.Wait(0)) { }
+                    // 地址变化常常一下来好几个：等一会再查，期间再来的变化合并成一次。
+                    await Task.Delay(Debounce, ct);
+                    Interlocked.Exchange(ref _wake, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
                 }
             }
         }
@@ -91,12 +108,15 @@ public sealed partial class ExitPolicy : IDisposable
         await _refreshLock.WaitAsync(ct);
         try
         {
-            if (await DiscoverPublicAddressAsync(_stunServers, ct))
+            var generation = Volatile.Read(ref _generation);
+            var ok = await (Discover ?? (c => DiscoverPublicAddressAsync(_stunServers, c)))(ct);
+            if (ok && generation == Volatile.Read(ref _generation))
             {
                 _failure = null;
+                Interlocked.Exchange(ref _lastSuccessTicks, System.Diagnostics.Stopwatch.GetTimestamp());
                 _ready = true;
             }
-            else
+            else if (!ok)
             {
                 _ready = false;
                 _failure = "查不到你的公网 IP（STUN 服务器连不上，可能是 UDP 被拦了），为了不让别人经你连到你的路由器，暂时不转发。网络恢复后会自动重试。";
@@ -108,11 +128,27 @@ public sealed partial class ExitPolicy : IDisposable
         }
     }
 
-    /// <summary>等到可以转发（最多等 timeout）。</summary>
-    public async Task<bool> WaitReadyAsync(TimeSpan timeout, CancellationToken ct)
+    /// <summary>
+    /// 每条转发连接开始前调用：公网 IP 查到太久（可能路由器重新拨号了）就先重查一次，多条连接同时来时只查一次。
+    /// 返回能不能转发；查不到、超时或者网络刚变化时返回 false。
+    /// </summary>
+    public async Task<bool> EnsureFreshAsync(TimeSpan timeout, CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (!_ready && _failure is null && DateTime.UtcNow < deadline) await Task.Delay(100, ct);
+        var started = Interlocked.Read(ref _lastSuccessTicks);
+        if (_ready && System.Diagnostics.Stopwatch.GetElapsedTime(started) <= MaxPublicIpAge) return true;
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(timeout);
+        try
+        {
+            await _refreshLock.WaitAsync(limit.Token);
+            _refreshLock.Release();
+            // 等锁期间别的连接已经查过了，就不再查。
+            if (Interlocked.Read(ref _lastSuccessTicks) == started || !_ready) await RefreshPublicAsync(limit.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return false;
+        }
         return _ready;
     }
 
@@ -122,18 +158,28 @@ public sealed partial class ExitPolicy : IDisposable
         _localAddresses = localAddresses.Select(Normalize).ToHashSet();
         _localNetworks = localNetworks.Select(n => (Normalize(n.Item1), n.Item2)).ToList();
         _ready = true;
+        _lastSuccessTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        MaxPublicIpAge = TimeSpan.MaxValue;
     }
 
     /// <summary>测试用：模拟还没查到公网地址的状态。</summary>
-    internal void SetReady(bool ready) => _ready = ready;
+    internal void SetReady(bool ready)
+    {
+        _ready = ready;
+        if (ready) _lastSuccessTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+    }
 
-    /// <summary>网卡地址变了：重新收集本机地址，公网地址也重新查，查到之前不转发。</summary>
+    /// <summary>测试用：模拟网卡地址变化。</summary>
+    internal void SimulateAddressChange() => OnAddressChanged(null, EventArgs.Empty);
+
+    /// <summary>网卡地址变了：先停止转发，再重新收集本机地址，公网地址也重新查，查到之前不转发。</summary>
     private void OnAddressChanged(object? sender, EventArgs e)
     {
-        RefreshLocal();
         _ready = false;
+        Interlocked.Increment(ref _generation);
+        RefreshLocal();
         _failure = null;
-        _wake.Release();
+        Volatile.Read(ref _wake).TrySetResult();
     }
 
     /// <summary>本机所有网卡（包括停用的、虚拟的）的单播地址和所在网段。</summary>
@@ -151,7 +197,10 @@ public sealed partial class ExitPolicy : IDisposable
                     var ip = Normalize(u.Address);
                     addresses.Add(ip);
                     var prefix = u.PrefixLength;
-                    if (prefix is > 0 and < 128) networks.Add((ip, prefix));
+                    // IPv6 里嵌着的 IPv4 换成 IPv4 后，前缀长度也要按 IPv4 算。
+                    if (u.Address.AddressFamily == AddressFamily.InterNetworkV6 && ip.AddressFamily == AddressFamily.InterNetwork) prefix = Math.Max(0, prefix - 96);
+                    var full = ip.AddressFamily == AddressFamily.InterNetwork ? 32 : 128;
+                    if (prefix > 0 && prefix < full) networks.Add((ip, prefix));
                     // 公网 IPv6：同一个 /56 里的别的 /64（路由器、别的网段）也是家里的。
                     if (ip.AddressFamily == AddressFamily.InterNetworkV6 && IsGloballyRoutable(ip)) networks.Add((ip, IPv6SitePrefix));
                 }
@@ -202,6 +251,8 @@ public sealed partial class ExitPolicy : IDisposable
     {
         if (!_ready) return false;
         var ip = Normalize(address);
+        // 只转 IPv4：路由器的 IPv6 外网地址不在本机任何网段里，拦不全；Minecraft 服务器和 Mojang 都有 IPv4，Java 也优先用 IPv4。
+        if (ip.AddressFamily != AddressFamily.InterNetwork) return false;
         if (!IsGloballyRoutable(ip)) return false;
         if (_localAddresses.Contains(ip)) return false;
         lock (_lock)
@@ -354,5 +405,6 @@ public sealed partial class ExitPolicy : IDisposable
     {
         NetworkChange.NetworkAddressChanged -= OnAddressChanged;
         _cts.Cancel();
+        _wake.TrySetCanceled();
     }
 }
