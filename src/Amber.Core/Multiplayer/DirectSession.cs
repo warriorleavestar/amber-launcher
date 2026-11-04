@@ -111,7 +111,7 @@ public sealed class DirectSession : IAsyncDisposable
 
     private EasyTierOptions HostOptions(bool tun, bool allowExit, IReadOnlyList<string>? extra = null) =>
         new(Room, true, Options.FallbackNodes, EasyTierArgs.FreeTcpPort(), null, [$"udp://127.0.0.1:{_easyTierUdpPort}"], _machineId, tun, null, allowExit, null,
-            Verbose(extra));
+            Verbose(extra)) { ServesSpeedTest = true };
 
     private EasyTierOptions GuestOptions(bool viaBridge, bool tun, string? exitNode, IReadOnlyList<string>? extra = null, bool nodes = true)
     {
@@ -129,7 +129,7 @@ public sealed class DirectSession : IAsyncDisposable
     private async Task StartEasyTierAsync(EasyTierOptions options, CancellationToken ct)
     {
         if (_currentOptions is { } current && SameConfig(current, options) && EasyTier is { HasExited: false }) return;
-        Log(L.T("core.mp.session.start") + string.Join(' ', EasyTierArgs.Build(options).Select(a => a == Room.Secret ? L.T("core.mp.diagnostics.secret") : a)));
+        Log(L.T("core.mp.session.start") + string.Join(' ', EasyTierArgs.Build(options).Select(a => Room.Secrets.Contains(a) ? L.T("core.mp.diagnostics.secret") : a)));
         if (EasyTier is EasyTierElevatedSession elevated && !elevated.HasExited)
         {
             elevated.Restart(options);

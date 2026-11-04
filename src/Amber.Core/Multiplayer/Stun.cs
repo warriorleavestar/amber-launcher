@@ -81,9 +81,10 @@ public static class Stun
         IPEndPoint target;
         try
         {
-            target = await ResolveAsync(server, ct);
+            // 域名查询也算在超时里：DNS 卡住时不能让出口一直等。
+            target = await ResolveAsync(server, ct).WaitAsync(timeout, ct);
         }
-        catch (Exception e) when (e is SocketException or FormatException or ArgumentException)
+        catch (Exception e) when (e is SocketException or FormatException or ArgumentException or TimeoutException)
         {
             return null;
         }

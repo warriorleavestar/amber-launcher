@@ -450,6 +450,9 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("联机：重新加入后聊天重连", await WaitAsync(() => guest.ChatReady, 40), guest.ChatStatus);
         guest.StopCommand.Execute(null);
         host.StopCommand.Execute(null);
+
+        await TransportRoomAsync(host, guest, gamePort, relayPort);
+
         stopServer.Cancel();
         server.Stop();
         var left = System.Diagnostics.Process.GetProcessesByName("easytier-core")
@@ -457,6 +460,92 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("联机：结束后 easytier-core 都关掉了", left == 0, $"剩 {left} 个");
         host.TestListeners = null;
         host.TestPeers = null;
+    }
+
+    /// <summary>
+    /// 封装模式的房间：高加密 + 伪装成 MC，房主允许转发。游戏端口和聊天都要经封装通道通；
+    /// 加入方再开“仅游戏”转发（经房主），经它连一个公网地址要通，连局域网地址要被拒绝。
+    /// </summary>
+    private async Task TransportRoomAsync(MultiplayerViewModel host, MultiplayerViewModel guest, int gamePort, int relayPort)
+    {
+        await Task.Delay(1500);
+        host.SelectedTransport = host.TransportChoices.First(c => c.Mode == Amber.Core.Multiplayer.Transport.TransportMode.High);
+        host.DisguiseAsMinecraft = true;
+        host.AllowGameProxy = true;
+        host.ManualPort = gamePort.ToString();
+        await host.CreateRoomCommand.ExecuteAsync(null);
+        Check("封装：创建高加密 + 伪装的房间", host.IsHosting && host.RoomCodeText.StartsWith("AMB-T2D-", StringComparison.Ordinal) && host.TransportText.Contains("高加密"), host.TransportText + " / " + host.Status);
+        guest.JoinCode = host.RoomCodeText;
+        guest.JoinCommand.Execute(null);
+        Check("封装：加入方按房间码用同样的封装", guest.IsJoined && guest.TransportText.Contains("高加密") && guest.TransportText.Contains("伪装"), guest.TransportText);
+        await WaitAsync(() => guest.Peers.Any(p => p.Peer.Ip == Amber.Core.Multiplayer.EasyTierArgs.HostIp), 60);
+        string? reply = null;
+        for (var attempt = 0; attempt < 15 && reply is null; attempt++)
+        {
+            try
+            {
+                using var client = new System.Net.Sockets.TcpClient();
+                var parts = guest.JoinAddress.Split(':');
+                await client.ConnectAsync(parts[0], int.Parse(parts[1]));
+                var stream = client.GetStream();
+                await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes("sealed\n"));
+                reply = await new StreamReader(stream).ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException)
+            {
+                await Task.Delay(2000);
+            }
+        }
+        Check("封装：经封装通道连到房主的游戏端口", reply == "pong:sealed", reply ?? "没有回应");
+        var chatUp = await WaitAsync(() => host.ChatReady && guest.ChatReady, 40);
+        guest.ChatInput = "封装后的聊天";
+        await guest.SendChatCommand.ExecuteAsync(null);
+        Check("封装：聊天经封装通道送达", chatUp && await WaitAsync(() => host.ChatLines.Any(l => l.Text == "封装后的聊天" && !l.Mine), 15), $"{host.ChatStatus} / {guest.ChatStatus}");
+
+        guest.SelectedExitPeer = guest.ExitCandidates.FirstOrDefault(p => p.Peer.Ip == Amber.Core.Multiplayer.EasyTierArgs.HostIp);
+        await guest.UseGameProxyCommand.ExecuteAsync(null);
+        Check("转发：加入方开启仅游戏转发", guest.UsingGameProxy && guest.IsJoined, guest.Status);
+        await WaitAsync(() => guest.Peers.Any(p => p.Peer.Ip == Amber.Core.Multiplayer.EasyTierArgs.HostIp), 60);
+        var proxy = guest.TestGameProxy;
+        string publicResult = "没有转发", privateResult = "没有转发";
+        if (proxy is not null)
+        {
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                try
+                {
+                    await using var s1 = await proxy.Open(default);
+                    await Amber.Core.Multiplayer.Transport.Socks5.ConnectAsync(s1, "api.minecraftservices.com", 443, default);
+                    publicResult = "通";
+                    break;
+                }
+                catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or System.Security.Cryptography.CryptographicException)
+                {
+                    publicResult = e.Message;
+                    await Task.Delay(2000);
+                }
+            }
+            try
+            {
+                await using var s2 = await proxy.Open(default);
+                await Amber.Core.Multiplayer.Transport.Socks5.ConnectAsync(s2, "192.168.0.1", 80, default);
+                privateResult = "竟然通了";
+            }
+            catch (IOException e)
+            {
+                privateResult = e.Message;
+            }
+        }
+        Check("转发：经房主连公网", publicResult == "通", publicResult);
+        Check("转发：经房主连局域网地址被拒绝", privateResult.Contains("局域网"), privateResult);
+        await ShotAsync("联机封装和转发");
+        await guest.StopGameProxyCommand.ExecuteAsync(null);
+        Check("转发：停止后恢复", !guest.UsingGameProxy, guest.Status);
+        guest.StopCommand.Execute(null);
+        host.StopCommand.Execute(null);
+        host.SelectedTransport = host.TransportChoices[0];
+        host.DisguiseAsMinecraft = false;
+        host.AllowGameProxy = false;
     }
 
     /// <summary>

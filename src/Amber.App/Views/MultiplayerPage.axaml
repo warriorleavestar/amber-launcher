@@ -94,6 +94,23 @@
             <CheckBox Content="{l:T multiplayer.exit.allow}" IsChecked="{Binding AllowExitNode}" IsEnabled="{Binding FullLanMode}" Margin="0,6,0,0" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowExitNode}" Foreground="#E0703A"
                        Text="{l:T multiplayer.exit.warning}" />
+            <CheckBox Content="{l:T multiplayer.proxy.allow}" IsChecked="{Binding AllowGameProxy}" Margin="0,6,0,0" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowGameProxy}" Foreground="#E0703A"
+                       Text="{l:T multiplayer.proxy.allow_warning}" />
+          </StackPanel>
+        </Border>
+
+        <!-- 数据封装（开房间时选；加入时按房间码） -->
+        <Border Classes="card" Margin="0" IsVisible="{Binding IsIdle}">
+          <StackPanel Spacing="4">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="{l:T multiplayer.transport.label}" VerticalAlignment="Center" FontWeight="SemiBold" />
+              <ComboBox ItemsSource="{Binding TransportChoices}" SelectedItem="{Binding SelectedTransport}" MinWidth="140" />
+              <CheckBox Content="{l:T multiplayer.transport.disguise}" IsChecked="{Binding DisguiseAsMinecraft}" IsEnabled="{Binding CanDisguise}" />
+            </StackPanel>
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding SelectedTransport.Detail}" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
+                       Text="{l:T multiplayer.transport.hint}" />
           </StackPanel>
         </Border>
 
@@ -229,6 +246,25 @@
               <Button Grid.Column="1" Content="{l:T multiplayer.room.stop}" Command="{Binding StopCommand}" />
             </Grid>
             <TextBlock Classes="hint" Text="{l:T multiplayer.peers.empty}" IsVisible="{Binding !Peers.Count}" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding TransportText}" />
+            <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="#E0703A" Text="{Binding ExitWarning}"
+                       IsVisible="{Binding ExitWarning, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding !UsingGameProxy}">
+              <TextBlock Text="{l:T multiplayer.proxy.peer_label}" VerticalAlignment="Center" />
+              <ComboBox ItemsSource="{Binding ExitCandidates}" SelectedItem="{Binding SelectedExitPeer}" MinWidth="200">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate DataType="vm:PeerItem"><TextBlock Text="{Binding Meta}" /></DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <Button Content="{l:T multiplayer.proxy.start}" Command="{Binding UseGameProxyCommand}" IsEnabled="{Binding CanUseGameProxy}"
+                      ToolTip.Tip="{l:T multiplayer.proxy.start_tip}" />
+            </StackPanel>
+            <Border IsVisible="{Binding UsingGameProxy}" BorderBrush="#E0703A" BorderThickness="1" CornerRadius="6" Padding="8">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="{Binding GameProxyBanner}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Content="{l:T multiplayer.proxy.stop}" Command="{Binding StopGameProxyCommand}" Margin="8,0,0,0" />
+              </Grid>
+            </Border>
             <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding CanUseExit}">
               <TextBlock Text="{l:T multiplayer.exit.peer_label}" VerticalAlignment="Center" />
               <ComboBox ItemsSource="{Binding ExitCandidates}" SelectedItem="{Binding SelectedExitPeer}" MinWidth="200">

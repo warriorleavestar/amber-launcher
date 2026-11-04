@@ -161,6 +161,7 @@ public static class DirectGatherer
         var watch = Stopwatch.StartNew();
         var stun = await Stun.DetectAsync(socket, stunServers, ct);
         log(L.F("core.mp.gather.stun", watch.ElapsedMilliseconds, stun.Detail, stun.Mapped is { } m ? L.T("core.mp.gather.external") + m : ""));
+        if (stun.Mapped is { } reported) Transport.ExitPolicy.ReportPublicAddress(reported.Address);
         if (stun.Mapped is { } mapped && mapped.AddressFamily == AddressFamily.InterNetwork)
             list.Add(new Candidate(PathKind.Punch, mapped));
 
@@ -168,7 +169,11 @@ public static class DirectGatherer
         if (tryPortMapping)
         {
             mapping = await PortMapping.TryMapAsync(port, log, ct);
-            if (mapping is not null) list.Add(new Candidate(PathKind.Mapped, mapping.External));
+            if (mapping is not null)
+            {
+                list.Add(new Candidate(PathKind.Mapped, mapping.External));
+                Transport.ExitPolicy.ReportPublicAddress(mapping.External.Address);
+            }
         }
         return new Gathered(list, mapping is not null && stun.Kind != NatKind.Open ? NatKind.Open : stun.Kind, stun.Detail, mapping);
     }

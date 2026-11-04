@@ -49,6 +49,8 @@ public static partial class NetDiagnostics
         text = RoomCodePattern().Replace(text, m => L.F("core.mp.diagnostics.redactedroom", m.Groups[1].Value, m.Groups[2].Value));
         text = DirectCodePattern().Replace(text, m => L.F("core.mp.diagnostics.redacteddirect", m.Groups[1].Value));
         text = SecretArgPattern().Replace(text, L.T("core.mp.diagnostics.secretarg"));
+        // EasyTier 输出里打印配置时的写法（network_secret: "…" / network_secret = …）。
+        text = SecretConfigPattern().Replace(text, m => m.Groups[1].Value + L.T("core.mp.diagnostics.secret"));
         foreach (var secret in secrets.Where(s => s.Length >= 6)) text = text.Replace(secret, L.T("core.mp.diagnostics.secret"), StringComparison.OrdinalIgnoreCase);
         if (!includePublicIps)
         {
@@ -71,7 +73,7 @@ public static partial class NetDiagnostics
         return $"{groups[0]}:{groups[1]}:*";
     }
 
-    [GeneratedRegex(@"AMB-([0-9A-Z]{8})-[0-9A-Z]{12}-(\d{1,5})", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"AMB-((?:T[1-3]D?-)?[0-9A-Z]{8})-[0-9A-Z]{12}-(\d{1,5})", RegexOptions.IgnoreCase)]
     private static partial Regex RoomCodePattern();
 
     [GeneratedRegex(@"(AMBDIRECT\d+|AMBREPLY\d+)-[A-Za-z0-9_-]+")]
@@ -79,6 +81,9 @@ public static partial class NetDiagnostics
 
     [GeneratedRegex(@"--network-secret\s+\S+")]
     private static partial Regex SecretArgPattern();
+
+    [GeneratedRegex(@"(network[_-]secret[""']?\s*[:=]\s*(?:Some\()?[""']?)[^""'\s,)}]+", RegexOptions.IgnoreCase)]
+    private static partial Regex SecretConfigPattern();
 
     [GeneratedRegex(@"(?<![\d.])(\d{1,3}\.){3}\d{1,3}(?![\d.])")]
     private static partial Regex IPv4Pattern();
