@@ -97,10 +97,12 @@ public sealed partial class ExitPolicy : IDisposable
             while (!ct.IsCancellationRequested)
             {
                 await RefreshPublicAsync(ct);
-                if (_failure != lastLogged)
+                // 只记被采用的结果：查询期间网络变了（结果作废、还没准备好）时什么都不记。
+                var state = _failure is { } f ? L.F("core.mp.exit.failure_log", f) : _ready ? L.T("core.mp.exit.public_ip_ready") : null;
+                if (state is not null && state != lastLogged)
                 {
-                    log?.Invoke(_failure is { } f ? L.F("core.mp.exit.failure_log", f) : L.T("core.mp.exit.public_ip_ready"));
-                    lastLogged = _failure;
+                    log?.Invoke(state);
+                    lastLogged = state;
                 }
                 var wake = Volatile.Read(ref _wake);
                 var delay = _ready ? ReadyInterval : RetryInterval;
@@ -376,16 +378,8 @@ public sealed partial class ExitPolicy : IDisposable
                 if (ReadSockaddr(row + 12) is not { } destination) continue;
                 var nextHop = ReadSockaddr(row + 44);
                 var onLink = nextHop is null || nextHop.Equals(IPAddress.Any) || nextHop.Equals(IPAddress.IPv6Any);
-                var normalized = Normalize(destination);
-                // IPv6 里嵌着的 IPv4 换成 IPv4 后，前缀长度也要按 IPv4 算（和网卡地址那里一样）。
-                int prefix = prefixLength;
-                if (destination.AddressFamily == AddressFamily.InterNetworkV6 && normalized.AddressFamily == AddressFamily.InterNetwork)
-                {
-                    prefix -= 96;
-                    // 比 /96 还宽的嵌入式前缀（比如整个 ::ffff:0:0/96）换算后什么都不剩，不能当成默认路由。
-                    if (prefix <= 0) continue;
-                }
-                rows.Add((index, normalized, prefix, onLink));
+                if (RouteDestination(destination, prefixLength) is not { } route) continue;
+                rows.Add((index, route.Network, route.Prefix, onLink));
             }
             // 有默认路由的网卡（正常上网走的那块）。
             var defaultInterfaces = rows.Where(r => r.Prefix == 0).Select(r => r.Interface).ToHashSet();
@@ -407,6 +401,21 @@ public sealed partial class ExitPolicy : IDisposable
             FreeMibTable(table);
         }
         return result;
+    }
+
+    /// <summary>
+    /// 路由表里的目标网段换成判断用的写法：IPv6 里嵌着的 IPv4 换成 IPv4，前缀长度减 96（和网卡地址那里一样）。
+    /// 比 /96 还宽的嵌入式前缀（比如整个 ::ffff:0:0/96）换算后什么都不剩，返回 null（不能当成默认路由）。
+    /// </summary>
+    internal static (IPAddress Network, int Prefix)? RouteDestination(IPAddress destination, int prefixLength)
+    {
+        var normalized = Normalize(destination);
+        if (destination.AddressFamily == AddressFamily.InterNetworkV6 && normalized.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var prefix = prefixLength - 96;
+            return prefix <= 0 ? null : (normalized, Math.Min(prefix, 32));
+        }
+        return (normalized, prefixLength);
     }
 
     private static IPAddress? ReadSockaddr(IntPtr p)
