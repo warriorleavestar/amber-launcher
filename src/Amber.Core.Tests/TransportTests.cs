@@ -468,3 +468,94 @@ public class ForwardingTests
         Assert.Equal(TransportMode.General, p2.Tunnel.Mode);
     }
 }
+
+public class ExitPolicyTests
+{
+    private static ExitPolicy Policy() => new(
+        [IPAddress.Parse("192.168.1.20"), IPAddress.Parse("2400:1a00:b1:4e::25"), IPAddress.Parse("2400:1a00:b1:4e:a1b2:c3d4:e5f6:7788"), IPAddress.Parse("10.233.144.7")],
+        [(IPAddress.Parse("192.168.1.0"), 24), (IPAddress.Parse("2400:1a00:b1:4e::"), 64), (IPAddress.Parse("10.233.144.0"), 24)]);
+
+    [Theory]
+    // 本机自己的公网 IPv6（固定的和临时的）、同一网段里的别的设备（路由器 ::1、家里别的电脑）
+    [InlineData("2400:1a00:b1:4e::25")]
+    [InlineData("2400:1a00:b1:4e:a1b2:c3d4:e5f6:7788")]
+    [InlineData("2400:1a00:b1:4e::1")]
+    [InlineData("2400:1a00:b1:4e:1111:2222:3333:4444")]
+    // 私有、回环、链路本地、CGNAT、组播、广播、ULA、EasyTier 虚拟网段
+    [InlineData("127.0.0.1")]
+    [InlineData("0.0.0.0")]
+    [InlineData("255.255.255.255")]
+    [InlineData("192.168.1.1")]
+    [InlineData("100.100.1.1")]
+    [InlineData("10.233.144.1")]
+    [InlineData("::1")]
+    [InlineData("::")]
+    [InlineData("fe80::1")]
+    [InlineData("fd12:3456::1")]
+    [InlineData("ff02::1")]
+    // 嵌着私有 IPv4 的 IPv6 写法
+    [InlineData("::ffff:192.168.1.1")]
+    [InlineData("::ffff:127.0.0.1")]
+    [InlineData("::192.168.1.1")]
+    [InlineData("::127.0.0.1")]
+    [InlineData("64:ff9b::192.168.1.1")]
+    [InlineData("64:ff9b::7f00:1")]
+    [InlineData("64:ff9b:1::c0a8:101")]
+    [InlineData("2002:c0a8:0101::1")]
+    [InlineData("2002:7f00:0001::1")]
+    [InlineData("2001:0:4136:e378:8000:63bf:3f57:fefe")]   // Teredo，客户端 IPv4 取反后是 192.168.1.1
+    // 文档、基准测试网段
+    [InlineData("2001:db8::1")]
+    [InlineData("198.18.0.1")]
+    public void DeniesOwnHostAndLocalNetworks(string address) => Assert.False(Policy().Allows(IPAddress.Parse(address)));
+
+    [Theory]
+    [InlineData("8.8.8.8")]
+    [InlineData("1.1.1.1")]
+    [InlineData("2606:4700:4700::1111")]
+    [InlineData("::ffff:8.8.8.8")]
+    [InlineData("64:ff9b::808:808")]
+    [InlineData("2002:0808:0808::1")]
+    public void AllowsOtherPublicAddresses(string address) => Assert.True(Policy().Allows(IPAddress.Parse(address)));
+
+    [Fact]
+    public void DeniesRouterPublicIpOnceKnown()
+    {
+        var policy = Policy();
+        var wan = IPAddress.Parse("203.1.2.3");
+        Assert.True(policy.Allows(wan));
+        policy.AddPublicAddress(wan);
+        Assert.False(policy.Allows(wan));
+        Assert.False(policy.Allows(IPAddress.Parse("::ffff:203.1.2.3")));
+        Assert.False(policy.Allows(IPAddress.Parse("2002:cb01:0203::1")));
+    }
+
+    [Fact]
+    public void RealMachineAddressesAreDenied()
+    {
+        // 这台电脑真实网卡上的每个地址都必须被拒绝。
+        using var policy = new ExitPolicy();
+        foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            foreach (var u in nic.GetIPProperties().UnicastAddresses)
+                Assert.False(policy.Allows(u.Address), u.Address.ToString());
+    }
+
+    [Fact]
+    public async Task SocksDeniesHostnameThatResolvesToLocal()
+    {
+        // 主机名在出口解析：localhost 解析出的回环地址被拒绝，不会因为是名字就放行。
+        var exit = new TcpListener(IPAddress.Loopback, 0);
+        exit.Start();
+        var port = ((IPEndPoint)exit.LocalEndpoint).Port;
+        using var policy = Policy();
+        _ = Task.Run(async () =>
+        {
+            using var c = await exit.AcceptTcpClientAsync();
+            await Socks5.ServeAsync(c.GetStream(), default, allow: policy.Allows);
+        });
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port);
+        await Assert.ThrowsAsync<IOException>(() => Socks5.ConnectAsync(client.GetStream(), "localhost", 80, default));
+        exit.Stop();
+    }
+}

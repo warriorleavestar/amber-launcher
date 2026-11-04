@@ -144,30 +144,9 @@ public static class Socks5
         return (host, BinaryPrimitives.ReadUInt16BigEndian(port));
     }
 
-    /// <summary>公网地址才允许经出口连：排除本机、私有网段、链路本地、CGNAT、组播、保留地址和 EasyTier 的虚拟网段。</summary>
-    public static bool IsPublic(IPAddress address)
-    {
-        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
-        if (IPAddress.IsLoopback(address) || address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any)) return false;
-        if (address.AddressFamily == AddressFamily.InterNetwork)
-        {
-            var b = address.GetAddressBytes();
-            return !(b[0] == 10 || b[0] == 127 || b[0] == 0
-                     || b[0] == 172 && b[1] >= 16 && b[1] < 32
-                     || b[0] == 192 && b[1] == 168
-                     || b[0] == 169 && b[1] == 254
-                     || b[0] == 100 && b[1] >= 64 && b[1] < 128
-                     || b[0] >= 224
-                     || b[0] == 192 && b[1] == 0 && b[2] == 0
-                     || b[0] == 198 && (b[1] == 18 || b[1] == 19));
-        }
-        if (address.AddressFamily == AddressFamily.InterNetworkV6)
-        {
-            var b = address.GetAddressBytes();
-            return !(address.IsIPv6LinkLocal || address.IsIPv6SiteLocal || address.IsIPv6Multicast || (b[0] & 0xFE) == 0xFC);
-        }
-        return false;
-    }
+    /// <summary>按地址本身判断能不能经出口连（保留和私有网段、嵌着私有 IPv4 的 IPv6 写法都不行）。出口实际用 <see cref="ExitPolicy"/>，还会排除本机自己的地址和网段。</summary>
+    public static bool IsPublic(IPAddress address) => ExitPolicy.IsGloballyRoutable(address);
+
 }
 
 /// <summary>

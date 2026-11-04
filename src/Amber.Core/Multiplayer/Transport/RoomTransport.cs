@@ -25,6 +25,7 @@ public sealed record GameProxy(int SocksPort, string ExitIp, Func<CancellationTo
 public sealed class RoomTransport : IAsyncDisposable
 {
     private readonly List<IAsyncDisposable> _parts = [];
+    private ExitPolicy? _exitPolicy;
     private readonly Action<string>? _log;
 
     public TunnelServer? Server { get; private set; }
@@ -57,13 +58,19 @@ public sealed class RoomTransport : IAsyncDisposable
         // 不建网卡时 EasyTier 把发往自己虚拟地址的连接交给本机同一端口；完整局域网模式下连接从虚拟网卡进来，听虚拟地址。
         var listen = o.Tun && IPAddress.TryParse(EasyTierArgs.VirtualIp(o), out var vip) ? vip : IPAddress.Loopback;
 
+        if (o.AllowProxy)
+        {
+            // 别人借我上网：不许连我自己的电脑、路由器和家里的设备。公网 IPv4 用 STUN 在后台查一次。
+            _exitPolicy = new ExitPolicy();
+            _ = _exitPolicy.DiscoverPublicAddressAsync();
+        }
         if (o.IsHost && settings.Wraps || o.AllowProxy)
         {
             Server = Add(new TunnelServer(room, settings, settings.Wraps ? TunnelSettings.Port : TunnelSettings.PlainSocksPort, service => service switch
             {
                 TunnelService.Game when o.IsHost && settings.Wraps => TunnelServer.ToLocalPort(room.Port),
                 TunnelService.Chat when o.IsHost && settings.Wraps => TunnelServer.ToLocalPort(RoomChat.Port),
-                TunnelService.Socks when o.AllowProxy => (stream, ct) => Socks5.ServeAsync(stream, ct, _log),
+                TunnelService.Socks when o.AllowProxy => (stream, ct) => Socks5.ServeAsync(stream, ct, _log, _exitPolicy!.Allows),
                 _ => null,
             }, _log, listen));
         }
@@ -98,5 +105,7 @@ public sealed class RoomTransport : IAsyncDisposable
             try { await part.DisposeAsync(); } catch (Exception e) when (e is IOException or ObjectDisposedException or System.Net.Sockets.SocketException) { }
         }
         _parts.Clear();
+        _exitPolicy?.Dispose();
+        _exitPolicy = null;
     }
 }
