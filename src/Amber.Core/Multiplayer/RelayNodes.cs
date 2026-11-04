@@ -38,7 +38,7 @@ public static class RelayNodes
         var start = text.IndexOf(Prefix, StringComparison.OrdinalIgnoreCase);
         if (start < 0)
         {
-            urls = text.Split(['\n', '\r', ' ', ',', '，'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(IsValid).Distinct().ToList();
+            urls = text.Split(['\n', '\r', ' ', ',', '\uFF0C'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(IsValid).Distinct().ToList();
             return urls.Count > 0;
         }
         var body = new string(text[(start + Prefix.Length)..].TakeWhile(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_').ToArray());

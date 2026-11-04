@@ -1,3 +1,4 @@
+using Amber.App.Localization;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Amber.App.Services;
@@ -38,7 +39,8 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     public override string Icon => "M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zm0 2c-4.4 0-8 2.2-8 5v2h16v-2c0-2.8-3.6-5-8-5z";
 
     public ObservableCollection<AccountItem> Accounts { get; } = [];
-    public string[] LoginKinds => [L.T("accounts.kind.offline"), L.T("accounts.kind.microsoft"), L.T("accounts.kind.external")];
+    /// <summary>列表本身不变，换语言时只换文字（不然下拉框的选中序号会被清成 -1）。</summary>
+    public OptionItem[] LoginKinds { get; } = OptionItem.Keys("accounts.kind.offline", "accounts.kind.microsoft", "accounts.kind.external");
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsOfflineTab), nameof(IsMicrosoftTab), nameof(IsExternalTab))]

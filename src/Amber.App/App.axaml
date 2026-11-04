@@ -1,7 +1,14 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Amber.App.App"
+             xmlns:l="using:Amber.App.Localization"
              RequestedThemeVariant="Default">
+  <Application.DataTemplates>
+    <!-- 下拉框的选项：文字跟着界面语言换，列表本身不变。 -->
+    <DataTemplate DataType="l:OptionItem">
+      <TextBlock Text="{Binding Label}" />
+    </DataTemplate>
+  </Application.DataTemplates>
   <Application.Styles>
     <FluentTheme />
     <Style Selector="Border.card">

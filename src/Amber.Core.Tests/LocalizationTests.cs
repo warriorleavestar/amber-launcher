@@ -13,7 +13,8 @@ public partial class LocalizationTests
     /// <summary>开发用的自检文件不翻译。</summary>
     private static readonly string[] Excluded = ["SelfTest.cs", "LayoutCheck.cs"];
 
-    [GeneratedRegex(@"[一-鿿぀-ヿ]")]
+    // 汉字、假名，以及中日文标点（、。「」……全角符号）：写死在代码里的标点换语言后也会留在文字中间。
+    [GeneratedRegex(@"[一-鿿぀-ヿ　-〿＀-￯]")]
     private static partial Regex Cjk();
 
     [GeneratedRegex(@"//[^\n]*|/\*.*?\*/", RegexOptions.Singleline)]
@@ -58,7 +59,6 @@ public partial class LocalizationTests
     private static readonly string[] CoreAllowed =
     [
         "public const string MatchText = \"匹配\";",
-        "public const string RecommendedNote = \"推荐\";",
         "在端口",
         // 语言选单里每种语言用它自己的写法显示。
         "(\"zh-Hans\", \"简体中文\")",

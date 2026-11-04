@@ -235,11 +235,11 @@ public static class LegacyForge
             }
             catch (Exception e) when (e is HttpRequestException or DownloadException or IOException or InvalidDataException)
             {
-                errors.Add($"{new Uri(url).Host}：{e.Message}");
+                errors.Add(L.F("core.install.legacyforge.mirror_error", new Uri(url).Host, e.Message));
             }
         }
         try { File.Delete(path); } catch (IOException) { }
-        throw new InvalidDataException(L.F("core.install.legacyforge.librarydownloadfailed", lib.Name, string.Join("；", errors)));
+        throw new InvalidDataException(L.F("core.install.legacyforge.librarydownloadfailed", lib.Name, string.Join(L.T("common.error_separator"), errors)));
     }
 
     private static async Task<string> Sha1Async(string path, CancellationToken ct)

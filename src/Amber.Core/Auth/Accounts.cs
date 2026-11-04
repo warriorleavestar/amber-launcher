@@ -41,7 +41,7 @@ public sealed class Account
         _ => "",
     };
 
-    public override string ToString() => $"{Name}（{KindText}）";
+    public override string ToString() => L.F("accounts.display", Name, KindText);
 }
 
 /// <summary>账号列表，保存在 accounts.json。Windows 上令牌用 DPAPI 绑定当前用户加密。</summary>

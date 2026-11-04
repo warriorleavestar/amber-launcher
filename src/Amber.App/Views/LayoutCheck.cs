@@ -90,6 +90,51 @@ internal sealed class LayoutCheck(MainWindow window, MainViewModel main, string 
         return problems;
     }
 
+    /// <summary>
+    /// 只检查现在显示的页面（保持它当前的状态：填好内容的实例、正在主持或已加入的房间），四种语言 × 最小的两种尺寸。
+    /// 截图名带上 tag。
+    /// </summary>
+    public async Task<List<Problem>> CheckCurrentAsync(string tag, Action<string>? log = null)
+    {
+        Directory.CreateDirectory(reportDir);
+        var problems = new List<Problem>();
+        if (window.Content is not Control root) return problems;
+        var (oldW, oldH) = (window.Width, window.Height);
+        var originalLanguage = Amber.Core.Localization.L.Language;
+        foreach (var (language, _) in Amber.Core.Localization.L.Languages)
+        {
+            Amber.Core.Localization.L.SetLanguage(language);
+            await Task.Delay(300);
+            foreach (var (w, h, name) in Sizes.Take(2))
+            {
+                window.MinWidth = 0;
+                window.MinHeight = 0;
+                window.Width = w;
+                window.Height = h;
+                await Task.Delay(250);
+                var found = await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    window.UpdateLayout();
+                    var size = root.Bounds.Size;
+                    if (Math.Abs(size.Width - w) > 1 || Math.Abs(size.Height - h) > 1) return [];
+                    using var bitmap = new RenderTargetBitmap(new PixelSize((int)(w * 1.5), (int)(h * 1.5)), new Vector(144, 144));
+                    bitmap.Render(root);
+                    bitmap.Save(Path.Combine(reportDir, $"{tag}-{language}-{name.Replace('%', 'p')}.png"));
+                    return Find(root, size).Select(p => new Problem($"{tag}[{language}]", name, p)).ToList();
+                });
+                problems.AddRange(found);
+                foreach (var p in found.Take(5)) log?.Invoke($"  {p.Page} @ {p.Size}: {p.What}");
+            }
+        }
+        Amber.Core.Localization.L.SetLanguage(originalLanguage);
+        window.MinWidth = MainWindow.PreferredMinWidth;
+        window.MinHeight = MainWindow.PreferredMinHeight;
+        window.Width = oldW;
+        window.Height = oldH;
+        await Task.Delay(250);
+        return problems;
+    }
+
     /// <summary>找出被切掉的控件，返回说明（同一页同一尺寸下重复的只报一次）。</summary>
     internal static List<string> Find(Control root, Size size)
     {

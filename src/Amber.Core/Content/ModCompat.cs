@@ -218,7 +218,7 @@ public static partial class ModCompat
         if (req?.MinecraftRange is { } range && !VersionMatches(mcVersion, range, req.Syntax))
             return new CompatResult(CompatLevel.WrongVersion, L.F("core.compat.mod.wrongversion", range, mcVersion));
         var missing = (req?.RequiredDeps ?? []).Where(d => !installedIds.Contains(d) && !(viaConnector && (d is "fabric-api" or "fabric" || HasNativeAlias(d, installedIds)))).ToList();
-        if (missing.Count > 0) return new CompatResult(CompatLevel.MissingDeps, L.F("core.compat.mod.missingdependencies", string.Join("、", missing)));
+        if (missing.Count > 0) return new CompatResult(CompatLevel.MissingDeps, L.F("core.compat.mod.missingdependencies", string.Join(L.T("common.list_separator"), missing)));
         if (viaConnector)
             return hasConnector
                 ? new CompatResult(CompatLevel.ViaConnector, L.T("core.compat.mod.viaconnector"))

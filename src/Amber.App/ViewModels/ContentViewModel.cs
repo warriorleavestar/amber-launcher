@@ -1,3 +1,4 @@
+using Amber.App.Localization;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Amber.App.Services;
@@ -70,7 +71,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     public override string Title => L.T("content.title");
     public override string Icon => "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z";
 
-    public string[] TypeNames => [L.T("instance.mods.title"), L.T("instance.resourcepacks.title"), L.T("instance.shaderpacks.title"), L.T("content.type.modpack"), L.T("instance.datapacks.title")];
+    public OptionItem[] TypeNames { get; } = OptionItem.Keys("instance.mods.title", "instance.resourcepacks.title", "instance.shaderpacks.title", "content.type.modpack", "instance.datapacks.title");
     public string[] SourceNames { get; } = ["Modrinth", "CurseForge"];
 
     public ObservableCollection<string> Instances { get; } = [];
@@ -152,10 +153,14 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
 
     partial void OnTypeIndexChanged(int value)
     {
+        if (value < 0) return;
         if (IsDatapack) RefreshWorlds();
         _ = SearchFromStart();
     }
-    partial void OnSourceIndexChanged(int value) => _ = SearchFromStart();
+    partial void OnSourceIndexChanged(int value)
+    {
+        if (value >= 0) _ = SearchFromStart();
+    }
     partial void OnSelectedChanged(ProjectItem? value) => _ = LoadFilesAsync();
     partial void OnShowUnstableChanged(bool value) => _ = LoadFilesAsync();
     partial void OnTargetInstanceChanged(string? value)

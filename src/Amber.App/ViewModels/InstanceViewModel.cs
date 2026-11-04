@@ -1,3 +1,4 @@
+using Amber.App.Localization;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Amber.App.Services;
@@ -368,7 +369,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             if (cts.IsCancellationRequested || Current != c) return;
             HasConnectorPending = pending.Count > 0;
             ConnectorPendingText = pending.Count == 0 ? "" :
-                L.F("instance.connector.pending", pending.Count, string.Join("、", pending.Take(3).Select(m => m.Name)), pending.Count > 3 ? "……" : "");
+                L.F("instance.connector.pending", pending.Count, string.Join(L.T("common.list_separator"), pending.Take(3).Select(m => m.Name)), pending.Count > 3 ? L.T("common.ellipsis") : "");
         }
     }
 
@@ -445,8 +446,10 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     // ---- 设置 ----
 
-    public string[] TriState => [L.T("instance.settings.inherit"), L.T("common.on"), L.T("common.off")];
-    public string[] MemoryModes => [L.T("instance.settings.inherit"), L.T("common.automatic"), L.T("common.manual")];
+    /// <summary>两个下拉框各用一份（共用同一个列表时选中状态会互相影响）。</summary>
+    public OptionItem[] IsolateChoices { get; } = OptionItem.Keys("instance.settings.inherit", "common.on", "common.off");
+    public OptionItem[] FullscreenChoices { get; } = OptionItem.Keys("instance.settings.inherit", "common.on", "common.off");
+    public OptionItem[] MemoryModes { get; } = OptionItem.Keys("instance.settings.inherit", "common.automatic", "common.manual");
     public ObservableCollection<JavaChoice> JavaChoices { get; } = [];
 
     [ObservableProperty] public partial int IsolateIndex { get; set; }
@@ -578,7 +581,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             var plan = await ConnectorInstaller.PlanAsync(c, _service.Modrinth, _service.ContentInstaller, null, ct)
                        ?? throw new InvalidOperationException(L.F("instance.connector.not_found", c.McVersion, c.Loader));
             await _service.ContentInstaller.InstallAsync(plan, c.ModsDir, null, ct);
-            Status = L.F("instance.connector.installed", string.Join("、", plan.Files.Select(f => f.DisplayName)));
+            Status = L.F("instance.connector.installed", string.Join(L.T("common.list_separator"), plan.Files.Select(f => f.DisplayName)));
         });
         await LoadModsAsync();
     }
@@ -868,7 +871,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
                 errors.Add(e.Message);
             }
         }
-        Status = L.F("instance.datapacks.added", added) + (errors.Count > 0 ? "。" + string.Join("；", errors) : "");
+        Status = errors.Count > 0
+            ? L.F("instance.datapacks.added_with_errors", L.F("instance.datapacks.added", added), string.Join(L.T("common.error_separator"), errors))
+            : L.F("instance.datapacks.added", added);
         LoadDatapacks();
     }
 
@@ -1032,7 +1037,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     // ---- 导出 ----
 
-    public string[] ExportFormats => [L.T("instance.export.modrinth"), L.T("instance.export.curseforge")];
+    public OptionItem[] ExportFormats { get; } = OptionItem.Keys("instance.export.modrinth", "instance.export.curseforge");
     public ObservableCollection<ExportOption> ExportOptions { get; } = [];
 
     [ObservableProperty] public partial int ExportFormatIndex { get; set; }

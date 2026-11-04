@@ -52,7 +52,7 @@ public sealed partial class MultiplayerViewModel
     }
 
     private List<string> StunServers() =>
-        StunText.Split([',', '，', ' ', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        StunText.Split([',', '\uFF0C', ' ', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     private DirectOptions MakeDirectOptions() => new(
         StunServers(),

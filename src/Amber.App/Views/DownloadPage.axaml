@@ -71,7 +71,7 @@
 
             <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
               <Button Classes="amber" Content="{l:T download.install.start}" Command="{Binding InstallCommand}" Padding="22,8" />
-              <Button Content="{l:T common.off}" Command="{Binding CloseConfigureCommand}" />
+              <Button Content="{l:T common.close}" Command="{Binding CloseConfigureCommand}" />
             </StackPanel>
           </StackPanel>
         </ScrollViewer>

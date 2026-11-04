@@ -145,12 +145,13 @@
             <TextBox Text="{Binding JoinAddress}" IsReadOnly="True" FontFamily="Consolas,monospace" FontSize="16" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.join.address_hint}" />
             <TextBlock Text="{Binding MyVirtualIpText}" IsVisible="{Binding MyVirtualIp, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-            <StackPanel Orientation="Horizontal" Spacing="6">
+            <!-- 窄窗口、长译文时按钮换到下一行。 -->
+            <WrapPanel ItemSpacing="6" LineSpacing="6">
               <TextBlock Text="{l:T multiplayer.join.version_label}" VerticalAlignment="Center" />
               <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding TargetInstance}" MinWidth="220" />
               <Button Content="{l:T multiplayer.join.add_to_servers}" Command="{Binding AddToServersCommand}" />
               <Button Classes="amber" Content="{l:T multiplayer.join.launch}" Command="{Binding LaunchAndJoinCommand}" />
-            </StackPanel>
+            </WrapPanel>
           </StackPanel>
         </Border>
 
@@ -250,7 +251,7 @@
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding TransportText}" />
             <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="#E0703A" Text="{Binding ExitWarning}"
                        IsVisible="{Binding ExitWarning, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-            <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding !UsingGameProxy}">
+            <WrapPanel ItemSpacing="6" LineSpacing="6" IsVisible="{Binding !UsingGameProxy}">
               <TextBlock Text="{l:T multiplayer.proxy.peer_label}" VerticalAlignment="Center" />
               <ComboBox ItemsSource="{Binding ExitCandidates}" SelectedItem="{Binding SelectedExitPeer}" MinWidth="200">
                 <ComboBox.ItemTemplate>
@@ -259,14 +260,14 @@
               </ComboBox>
               <Button Content="{l:T multiplayer.proxy.start}" Command="{Binding UseGameProxyCommand}" IsEnabled="{Binding CanUseGameProxy}"
                       ToolTip.Tip="{l:T multiplayer.proxy.start_tip}" />
-            </StackPanel>
+            </WrapPanel>
             <Border IsVisible="{Binding UsingGameProxy}" BorderBrush="#E0703A" BorderThickness="1" CornerRadius="6" Padding="8">
               <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Text="{Binding GameProxyBanner}" TextWrapping="Wrap" VerticalAlignment="Center" />
                 <Button Grid.Column="1" Content="{l:T multiplayer.proxy.stop}" Command="{Binding StopGameProxyCommand}" Margin="8,0,0,0" />
               </Grid>
             </Border>
-            <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding CanUseExit}">
+            <WrapPanel ItemSpacing="6" LineSpacing="6" IsVisible="{Binding CanUseExit}">
               <TextBlock Text="{l:T multiplayer.exit.peer_label}" VerticalAlignment="Center" />
               <ComboBox ItemsSource="{Binding ExitCandidates}" SelectedItem="{Binding SelectedExitPeer}" MinWidth="200">
                 <ComboBox.ItemTemplate>
@@ -274,7 +275,7 @@
                 </ComboBox.ItemTemplate>
               </ComboBox>
               <Button Content="{l:T common.start}" Command="{Binding UseExitNodeCommand}" IsEnabled="{Binding !UsingExit}" ToolTip.Tip="{l:T multiplayer.exit.start_tooltip}" />
-            </StackPanel>
+            </WrapPanel>
             <ItemsControl ItemsSource="{Binding Peers}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:PeerItem">

@@ -279,8 +279,6 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
 
 public sealed class ForgeInstaller(LoaderContext ctx) : ForgeLikeInstaller(ctx)
 {
-    /// <summary>加载器版本列表里“推荐”那一版的备注（界面按它选默认版本）。</summary>
-    public const string RecommendedNote = "推荐";
 
     private const string MetadataUrl = "https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.json";
     private const string PromotionsUrl = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json";
@@ -296,14 +294,16 @@ public sealed class ForgeInstaller(LoaderContext ctx) : ForgeLikeInstaller(ctx)
         if (!meta.RootElement.TryGetProperty(mcVersion, out var list)) return [];
 
         // 推荐版 / 最新版标记只是展示用，取不到也不影响安装。
-        var notes = new Dictionary<string, string>();
+        // 构建号 → 是不是推荐版（同一个构建既是最新又是推荐时算推荐）。
+        var promoted = new Dictionary<string, bool>();
         try
         {
             using var promos = JsonDocument.Parse(await Ctx.Downloader.GetStringAsync(PromotionsUrl, ct));
             foreach (var p in promos.RootElement.GetProperty("promos").EnumerateObject())
             {
                 if (!p.Name.StartsWith(mcVersion + "-", StringComparison.Ordinal)) continue;
-                notes[p.Value.GetString()!] = p.Name.EndsWith("recommended", StringComparison.Ordinal) ? RecommendedNote : L.T("core.install.forge.latest");
+                var build = p.Value.GetString()!;
+                promoted[build] = promoted.GetValueOrDefault(build) || p.Name.EndsWith("recommended", StringComparison.Ordinal);
             }
         }
         catch (Exception e) when (e is HttpRequestException or JsonException or KeyNotFoundException) { }
@@ -312,7 +312,9 @@ public sealed class ForgeInstaller(LoaderContext ctx) : ForgeLikeInstaller(ctx)
         {
             var parts = full.Split('-');
             var build = parts.Length > 1 ? parts[1] : full;
-            return new LoaderVersion(Kind, mcVersion, full, Stable: true, Note: notes.GetValueOrDefault(build));
+            if (!promoted.TryGetValue(build, out var recommended)) return new LoaderVersion(Kind, mcVersion, full, Stable: true);
+            return new LoaderVersion(Kind, mcVersion, full, Stable: true,
+                Note: L.T(recommended ? "core.install.forge.recommended" : "core.install.forge.latest"), Recommended: recommended);
         }).ToList();
     }
 }

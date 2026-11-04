@@ -406,7 +406,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         SaveNodes();
         ShareCodeText = "";
-        Status = L.F("multiplayer.nodes.imported", added, (name is null ? "" : "（" + name + "）"));
+        Status = name is null ? L.F("multiplayer.nodes.imported", added, "") : L.F("multiplayer.nodes.imported_named", added, name);
     }
 
     /// <summary>自检用：同一个程序里再开一个联机页（扮演加入方）。</summary>
@@ -708,7 +708,11 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     /// <summary>导出聊天记录（只有用户点了导出才写文件）。</summary>
     public void ExportChat(string path)
     {
-        var lines = ChatLines.Select(l => $"[{l.Message.Time.ToLocalTime():yyyy-MM-dd HH:mm:ss}] {(l.IsNotice ? "" : l.Name + "：")}{l.Text}");
+        var lines = ChatLines.Select(l =>
+        {
+            var time = l.Message.Time.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+            return l.IsNotice ? L.F("multiplayer.chat.export_notice", time, l.Text) : L.F("multiplayer.chat.export_line", time, l.Name, l.Text);
+        });
         File.WriteAllLines(path, lines);
         Status = L.F("multiplayer.chat.exported", path);
     }

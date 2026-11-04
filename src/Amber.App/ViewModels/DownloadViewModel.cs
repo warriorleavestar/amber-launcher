@@ -1,3 +1,4 @@
+using Amber.App.Localization;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Amber.App.Services;
@@ -43,7 +44,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     public override string Title => L.T("download.title");
     public override string Icon => "M11 3h2v9.2l3.6-3.6L18 10l-6 6-6-6 1.400-1.400 3.600 3.600zM5 18h14v2H5z";
 
-    public string[] Filters => [L.T("download.filter.release"), L.T("download.filter.snapshot"), L.T("download.filter.old"), L.T("common.all")];
+    public OptionItem[] Filters { get; } = OptionItem.Keys("download.filter.release", "download.filter.snapshot", "download.filter.old", "common.all");
     public ObservableCollection<RemoteVersionItem> Items { get; } = [];
 
     public LoaderChoice[] LoaderChoices { get; } =
@@ -59,7 +60,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     public ObservableCollection<LoaderVersion> LoaderVersions { get; } = [];
 
     private int _filterIndex;
-    public string Filter
+    public OptionItem Filter
     {
         get => Filters[_filterIndex];
         set
@@ -184,7 +185,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             var versions = await LoaderInstallers.Create(kind, _service.Loaders).ListAsync(target.Id, cts.Token);
             if (cts.IsCancellationRequested) return;
             foreach (var v in versions.Where(v => v.Stable || ShowUnstableLoaders)) LoaderVersions.Add(v);
-            SelectedLoaderVersion = LoaderVersions.FirstOrDefault(v => v.Note == Amber.Core.Install.ForgeInstaller.RecommendedNote) ?? LoaderVersions.FirstOrDefault();
+            SelectedLoaderVersion = LoaderVersions.FirstOrDefault(v => v.Recommended) ?? LoaderVersions.FirstOrDefault();
             LoaderHint = versions.Count == 0 ? L.F("download.loader.unsupported", SelectedLoader.Label, target.Id)
                 : LoaderVersions.Count == 0 ? L.T("download.loader.only_unstable")
                 : "";
