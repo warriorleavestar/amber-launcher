@@ -30,6 +30,9 @@ public enum CompatLevel { Ok, ViaConnector, NeedsConnector, WrongLoader, WrongVe
 
 public sealed record CompatResult(CompatLevel Level, string Text)
 {
+    /// <summary>完全匹配时的说明（模组页不显示它）。</summary>
+    public const string MatchText = "匹配";
+
     public bool IsProblem => Level is CompatLevel.NeedsConnector or CompatLevel.WrongLoader or CompatLevel.WrongVersion or CompatLevel.MissingDeps;
 }
 
@@ -220,7 +223,7 @@ public static partial class ModCompat
                 ? new CompatResult(CompatLevel.ViaConnector, "Fabric 模组，经 Sinytra Connector 运行（不是每个都能用）")
                 : new CompatResult(CompatLevel.NeedsConnector, "这是 Fabric 模组，要装 Sinytra Connector 才能在 " + loader + " 上运行");
         if (loader == "quilt" && !mod.Loaders.Contains("quilt")) return new CompatResult(CompatLevel.Ok, "Fabric 模组，Quilt 直接支持");
-        return new CompatResult(CompatLevel.Ok, "匹配");
+        return new CompatResult(CompatLevel.Ok, CompatResult.MatchText);
     }
 
     /// <summary>

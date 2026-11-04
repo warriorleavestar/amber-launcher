@@ -4,6 +4,7 @@ using Amber.App.Services;
 using Amber.Core.Content;
 using Amber.Core.Game;
 using Amber.Core.Install;
+using Amber.Core.Localization;
 using Amber.Core.Net;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
@@ -17,15 +18,15 @@ public sealed partial class ProjectItem(ContentProject project) : ObservableObje
     public ContentProject Project { get; } = project;
     public string Title => Project.Title;
     public string Summary => Project.Summary;
-    public string Meta => $"{(Project.Author is null ? "" : Project.Author + " · ")}{FormatCount(Project.Downloads)} 次下载";
+    public string Meta => L.F("content.project.downloads", (Project.Author is null ? "" : Project.Author + " · "), FormatCount(Project.Downloads));
 
     [ObservableProperty]
     public partial Bitmap? Icon { get; set; }
 
     private static string FormatCount(long n) => n switch
     {
-        >= 100_000_000 => $"{n / 100_000_000.0:F1} 亿",
-        >= 10_000 => $"{n / 10_000.0:F1} 万",
+        >= 100_000_000 => L.F("content.count.hundred_million", n / 100_000_000.0),
+        >= 10_000 => L.F("content.count.ten_thousand", n / 10_000.0),
         _ => n.ToString(),
     };
 }
@@ -34,12 +35,12 @@ public sealed record FileItem(ContentFile File)
 {
     public string Name => File.DisplayName;
     public string Meta => $"{ChannelText} · {File.Date.LocalDateTime:yyyy-MM-dd} · {string.Join(", ", File.Loaders)} · {string.Join(", ", File.GameVersions.Take(3))}{(File.GameVersions.Count > 3 ? "…" : "")}";
-    private string ChannelText => File.Channel switch { "release" => "正式版", "beta" => "测试版", "alpha" => "早期版", var c => c };
+    private string ChannelText => File.Channel switch { "release" => L.T("download.filter.release"), "beta" => L.T("content.channel.beta"), "alpha" => L.T("content.channel.alpha"), var c => c };
 }
 
 public sealed record WorldChoice(WorldInfo World)
 {
-    public string Label => World.Name == World.FolderName ? World.Name : $"{World.Name}（{World.FolderName}）";
+    public string Label => World.Name == World.FolderName ? World.Name : L.F("content.world.label", World.Name, World.FolderName);
 }
 
 /// <summary>资源页：在 Modrinth / CurseForge 搜索并安装模组、资源包、光影、整合包、数据包。</summary>
@@ -57,10 +58,10 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     /// <summary>当前选中的项目是经 Sinytra Connector 装的 Fabric 模组。</summary>
     private bool _viaConnector;
 
-    public override string Title => "资源";
+    public override string Title => L.T("content.title");
     public override string Icon => "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z";
 
-    public string[] TypeNames { get; } = ["模组", "资源包", "光影", "整合包", "数据包"];
+    public string[] TypeNames => [L.T("instance.mods.title"), L.T("instance.resourcepacks.title"), L.T("instance.shaderpacks.title"), L.T("content.type.modpack"), L.T("instance.datapacks.title")];
     public string[] SourceNames { get; } = ["Modrinth", "CurseForge"];
 
     public ObservableCollection<string> Instances { get; } = [];
@@ -112,8 +113,12 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial double Progress { get; set; }
 
-    [ObservableProperty]
-    public partial string Status { get; set; } = "输入关键词搜索，或直接点搜索看热门内容";
+    private string? _status;
+    public string Status
+    {
+        get => _status ?? L.T("content.search.hint");
+        set => SetProperty(ref _status, value);
+    }
 
     public bool IsModpack => CurrentType == ContentType.Modpack;
     public bool IsDatapack => CurrentType == ContentType.Datapack;
@@ -210,7 +215,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     {
         _searchCts?.Cancel();
         var cts = _searchCts = new CancellationTokenSource();
-        Status = "正在搜索……";
+        Status = L.T("content.search.searching");
         Results.Clear();
         Selected = null;
         try
@@ -225,12 +230,12 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
                 Results.Add(item);
                 _ = LoadIconAsync(item);
             }
-            Status = result.Total == 0 ? "没有找到结果" : $"共 {result.Total} 个结果，第 {Page + 1} 页";
+            Status = result.Total == 0 ? L.T("content.search.no_results") : L.F("content.search.results", result.Total, Page + 1);
         }
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            Status = "搜索失败：" + e.Message;
+            Status = L.F("content.search.failed", e.Message);
         }
     }
 
@@ -289,26 +294,26 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
                 {
                     files = fabric;
                     _viaConnector = true;
-                    loaderNote = $"这个模组只有 Fabric 版。安装时会一起装上 Sinytra Connector 和 Forgified Fabric API，让它在 {instance.Loader} 上运行（不是每个 Fabric 模组都能用）";
+                    loaderNote = L.F("content.loader.connector_hint", instance.Loader);
                 }
             }
             else if (files.Count == 0 && CurrentType == ContentType.Mod && instance is { Loader: "fabric" or "quilt" })
             {
                 var forge = await Provider.GetFilesAsync(selected.Project.Id, instance.McVersion, null, cts.Token);
                 if (forge.Count > 0 && forge.All(f => f.Loaders.All(l => l is "forge" or "neoforge")))
-                    loaderNote = "这个模组只有 Forge / NeoForge 版：Fabric / Quilt 上没有可靠的办法运行 Forge 模组";
+                    loaderNote = L.T("content.loader.forge_only");
             }
             foreach (var f in files.Where(f => f.IsRelease || ShowUnstable)) Files.Add(new FileItem(f));
             SelectedFile = Files.FirstOrDefault();
             if (IsModpack) NewInstanceName = SafeName(selected.Title);
-            if (Files.Count == 0 && files.Count > 0) Status = "这个项目只有测试版，勾选“显示测试版”后可选";
-            else if (files.Count == 0) Status = loaderNote ?? (instance is null ? "这个项目没有可下载的版本" : $"没有适用于 {instance.McVersion} {instance.Loader} 的版本");
+            if (Files.Count == 0 && files.Count > 0) Status = L.T("content.files.only_unstable");
+            else if (files.Count == 0) Status = loaderNote ?? (instance is null ? L.T("content.files.empty") : L.F("content.files.no_matching", instance.McVersion, instance.Loader));
             else if (loaderNote is not null) Status = loaderNote;
         }
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            Status = "获取版本失败：" + e.Message;
+            Status = L.F("content.files.fetch_failed", e.Message);
         }
     }
 
@@ -335,13 +340,13 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
         if (CurrentInstance() is not { } instance)
         {
-            Status = "请先选择要安装到哪个版本";
+            Status = L.T("content.install.instance_required");
             return;
         }
         var world = TargetWorld;
         if (IsDatapack && world is null)
         {
-            Status = "数据包要装进某个世界：这个版本还没有存档，先进游戏建一个世界";
+            Status = L.T("content.install.world_required");
             return;
         }
 
@@ -353,7 +358,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             var plan = new InstallPlan([file], []);
             if (CurrentType == ContentType.Mod)
             {
-                Status = "正在解析依赖……";
+                Status = L.T("content.install.resolving");
                 if (_viaConnector)
                 {
                     var hasConnector = ConnectorInstaller.IsInstalled(new ModManager(instance.ModsDir).List().Where(m => m.Enabled).Select(m => m.Requirements));
@@ -368,24 +373,24 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             await _service.ContentInstaller.InstallAsync(plan, target, new Progress<DownloadProgress>(p =>
             {
                 Progress = 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles);
-                Status = $"下载 {p.CompletedFiles}/{p.TotalFiles}：{p.CurrentFile}";
+                Status = L.F("content.install.progress", p.CompletedFiles, p.TotalFiles, p.CurrentFile);
             }), _workCts.Token);
 
             await Ui.FlushAsync();
-            var extra = plan.Files.Count > 1 ? $"（含 {plan.Files.Count - 1} 个依赖）" : "";
-            var problems = plan.Problems.Count > 0 ? "。注意：" + string.Join("；", plan.Problems) : "";
-            var noLoader = CurrentType == ContentType.Mod && instance.Loader is null ? "。注意：这个版本没装加载器，模组不会生效" : "";
-            var where = IsDatapack ? $"{instance.Id} 的世界 {world!.Label}" : instance.Id;
-            Status = $"已把 {file.DisplayName}{extra} 安装到 {where}{problems}{noLoader}";
+            var extra = plan.Files.Count > 1 ? L.F("content.install.dependencies", plan.Files.Count - 1) : "";
+            var problems = plan.Problems.Count > 0 ? L.F("content.install.problems", string.Join(L.T("common.list_separator"), plan.Problems)) : "";
+            var noLoader = CurrentType == ContentType.Mod && instance.Loader is null ? L.T("content.install.no_loader") : "";
+            var where = IsDatapack ? L.F("content.install.world_target", instance.Id, world!.Label) : instance.Id;
+            Status = L.F("content.install.completed", file.DisplayName, extra, where, problems, noLoader);
             _service.NotifyContentChanged();
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
-            Status = "已取消";
+            Status = L.T("common.cancelled");
         }
         catch (Exception e)
         {
-            Status = "安装失败：" + Describe(e);
+            Status = L.F("common.install_failed", Describe(e));
         }
         finally
         {
@@ -401,17 +406,17 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         var temp = Path.Combine(Path.GetTempPath(), "amber-pack-" + Guid.NewGuid().ToString("N"), ContentInstaller.SafeFileName(file.FileName));
         try
         {
-            Status = "正在下载整合包……";
+            Status = L.T("content.modpack.downloading");
             await _service.Downloader.DownloadOneAsync(ContentInstaller.ToItem(file, Path.GetDirectoryName(temp)!), _workCts.Token);
             await ImportCoreAsync(temp, NewInstanceName, _workCts.Token);
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
-            Status = "已取消";
+            Status = L.T("common.cancelled");
         }
         catch (Exception e)
         {
-            Status = "安装失败：" + Describe(e);
+            Status = L.F("common.install_failed", Describe(e));
         }
         finally
         {
@@ -433,11 +438,11 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
-            Status = "已取消";
+            Status = L.T("common.cancelled");
         }
         catch (Exception e)
         {
-            Status = "导入失败：" + Describe(e);
+            Status = L.F("instance.worlds.import_failed", Describe(e));
         }
         finally
         {
@@ -448,7 +453,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
 
     private async Task ImportCoreAsync(string path, string name, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("请填写版本名字");
+        if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException(L.T("content.modpack.name_required"));
         var id = await _service.Modpacks.ImportAsync(path, name, _service.Directory.VersionDir, new Progress<LoaderProgress>(p =>
         {
             Status = p.Stage;
@@ -456,7 +461,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }), ct);
         await Ui.FlushAsync();
         _service.ForceIsolated(id);
-        Status = $"整合包已安装为 {id}";
+        Status = L.F("content.modpack.installed", id);
         _service.NotifyInstalledChanged();
     }
 
@@ -464,7 +469,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     private void Cancel() => _workCts?.Cancel();
 
     /// <summary>没点取消却收到取消，是网络请求超时。</summary>
-    private static string Describe(Exception e) => e is OperationCanceledException ? "网络请求超时，请稍后重试" : e.Message;
+    private static string Describe(Exception e) => e is OperationCanceledException ? L.T("common.request_timeout") : e.Message;
 
     public async Task RunSnapshotDemoAsync()
     {

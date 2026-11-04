@@ -6,6 +6,7 @@ using Amber.Core.Content;
 using Amber.Core.Game;
 using Amber.Core.Install;
 using Amber.Core.Launch;
+using Amber.Core.Localization;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -28,7 +29,7 @@ public sealed partial class ModItem(LocalMod mod) : ObservableObject
     public partial ModUpdate? Update { get; set; }
 
     public bool HasUpdate => Update is not null;
-    public string UpdateText => Update is null ? "" : "可更新到 " + Update.Latest.FileName;
+    public string UpdateText => Update is null ? "" : L.F("instance.mods.update_available", Update.Latest.FileName);
 
     [ObservableProperty]
     public partial Bitmap? Icon { get; set; }
@@ -39,7 +40,7 @@ public sealed partial class ModItem(LocalMod mod) : ObservableObject
     public partial CompatResult? Compat { get; set; }
 
     public ModRequirements? Requirements => Mod.Requirements;
-    public string CompatText => Compat is null || Compat.Level == CompatLevel.Ok && Compat.Text == "匹配" ? "" : Compat.Text;
+    public string CompatText => Compat is null || Compat.Level == CompatLevel.Ok && Compat.Text == CompatResult.MatchText ? "" : Compat.Text;
     public bool HasCompatProblem => Compat?.IsProblem == true;
 
     /// <summary>启用状态改了，实例页要重新检查前置。</summary>
@@ -69,14 +70,14 @@ public sealed partial class ModItem(LocalMod mod) : ObservableObject
 public sealed record WorldItem(WorldInfo World)
 {
     public string Name => World.Name;
-    public string Meta => $"{World.GameMode} · {World.Version ?? "未知版本"} · {World.LastPlayed?.LocalDateTime:yyyy-MM-dd HH:mm} · {World.FolderName}";
+    public string Meta => $"{World.GameMode} · {World.Version ?? L.T("instance.worlds.unknown_version")} · {World.LastPlayed?.LocalDateTime:yyyy-MM-dd HH:mm} · {World.FolderName}";
 }
 
 public sealed partial class DatapackItem(LocalDatapack pack, string worldPath, Action<string> report) : ObservableObject
 {
     public LocalDatapack Pack { get; } = pack;
     public string Name => Pack.FileName;
-    public string Meta => (Pack.IsFolder ? "文件夹" : "压缩包") + (string.IsNullOrWhiteSpace(Pack.Description) ? "" : " · " + Pack.Description.ReplaceLineEndings(" "));
+    public string Meta => (Pack.IsFolder ? L.T("common.folder") : L.T("common.archive")) + (string.IsNullOrWhiteSpace(Pack.Description) ? "" : " · " + Pack.Description.ReplaceLineEndings(" "));
 
     [ObservableProperty]
     public partial bool Enabled { get; set; } = pack.Enabled;
@@ -86,11 +87,11 @@ public sealed partial class DatapackItem(LocalDatapack pack, string worldPath, A
         try
         {
             DatapackManager.SetEnabled(worldPath, Pack.FileName, value);
-            report($"已{(value ? "启用" : "禁用")} {Pack.FileName}，下次进这个世界时生效");
+            report(L.F("instance.datapacks.toggled", value ? L.T("common.enabled") : L.T("common.disabled"), Pack.FileName));
         }
         catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
         {
-            report("修改失败：" + e.Message);
+            report(L.F("instance.status.change_failed", e.Message));
             Dispatcher.UIThread.Post(() => Enabled = !value);
         }
     }
@@ -124,8 +125,12 @@ public sealed partial class ServerItem(ServerEntry entry) : ObservableObject
     public string Name => Entry.Name;
     public string Address => Entry.Address;
 
-    [ObservableProperty]
-    public partial string StatusText { get; set; } = "正在查询……";
+    private string? _statusText;
+    public string StatusText
+    {
+        get => _statusText ?? L.T("instance.servers.querying");
+        set => SetProperty(ref _statusText, value);
+    }
 }
 
 public sealed partial class ExportOption(string name, bool include) : ObservableObject
@@ -136,7 +141,10 @@ public sealed partial class ExportOption(string name, bool include) : Observable
     public partial bool Include { get; set; } = include;
 }
 
-public sealed record JavaChoice(string Label, string? Path);
+public sealed record JavaChoice(string LabelValue, string? Path)
+{
+    public string Label => Path is null ? L.T("instance.settings.inherit") : LabelValue;
+}
 
 /// <summary>实例页：一个版本自己的设置、模组、世界、截图、资源包、光影、服务器和导出。</summary>
 public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
@@ -145,7 +153,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private readonly HashSet<int> _loadedTabs = [];
     private CancellationTokenSource? _workCts;
 
-    public override string Title => "实例";
+    public override string Title => L.T("instance.title");
     public override string Icon => "M4 4h16v5H4zM4 11h16v4H4zM4 17h16v3H4z";
 
     public ObservableCollection<string> Instances { get; } = [];
@@ -213,12 +221,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         try
         {
             Current = _service.GetInstance(value);
-            InfoText = $"游戏 {Current.McVersion} · {(Current.Loader is null ? "原版" : $"{Current.Loader} {Current.LoaderVersion}")} · {Current.WorkDir}";
+            InfoText = L.F("instance.version.info", Current.McVersion, Current.Loader is null ? L.T("home.version.vanilla") : $"{Current.Loader} {Current.LoaderVersion}", Current.WorkDir);
             LoadTab(TabIndex);
         }
         catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException)
         {
-            InfoText = "版本文件读取失败：" + e.Message;
+            InfoText = L.F("home.version.read_failed", e.Message);
         }
     }
 
@@ -283,11 +291,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
                 if (p.Stage == InstallStage.Files && p.Files.TotalFiles > 0)
                 {
                     Progress = 100.0 * p.Files.CompletedFiles / p.Files.TotalFiles;
-                    Status = $"校验并补全 {p.Files.CompletedFiles}/{p.Files.TotalFiles}";
+                    Status = L.F("instance.files.progress", p.Files.CompletedFiles, p.Files.TotalFiles);
                 }
             }), ct);
             await Ui.FlushAsync();
-            Status = "文件完整";
+            Status = L.T("instance.files.complete_status");
         });
     }
 
@@ -299,19 +307,19 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (!DeleteArmed)
         {
             DeleteArmed = true;
-            Status = $"再点一次“确认删除”，把 {c.Id} 的版本文件夹（含隔离的存档和模组）放进回收站";
+            Status = L.F("instance.version.confirm_delete", c.Id);
             return;
         }
         DeleteArmed = false;
         try
         {
             Recycle(_service.Directory.VersionDir(c.Id));
-            Status = $"已把 {c.Id} 放进回收站";
+            Status = L.F("instance.status.recycled", c.Id);
             _service.NotifyInstalledChanged();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
-            Status = "删除失败：" + e.Message;
+            Status = L.F("instance.status.delete_failed", e.Message);
         }
     }
 
@@ -360,7 +368,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             if (cts.IsCancellationRequested || Current != c) return;
             HasConnectorPending = pending.Count > 0;
             ConnectorPendingText = pending.Count == 0 ? "" :
-                $"{pending.Count} 个 Fabric 模组还没被 Connector 转换过（{string.Join("、", pending.Take(3).Select(m => m.Name))}{(pending.Count > 3 ? "……" : "")}），第一次启动会慢一些。";
+                L.F("instance.connector.pending", pending.Count, string.Join("、", pending.Take(3).Select(m => m.Name)), pending.Count > 3 ? "……" : "");
         }
     }
 
@@ -374,19 +382,19 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (_service.IsRunningIn(c.WorkDir))
         {
             // 同一个目录同时跑两个游戏，两边的 Connector 会一起写缓存。
-            Status = "这个实例（或同一个游戏目录里的版本）正在运行，关掉游戏后再预先处理。";
+            Status = L.T("instance.connector.running");
             return;
         }
         await RunWorkAsync(async ct =>
         {
             using var running = _service.MarkRunning(c.WorkDir);
-            Status = "正在检查游戏文件……";
+            Status = L.T("home.status.checking_game_files");
             await _service.Installer.CompleteAsync(c.Id, null, ct);
-            Status = "正在启动游戏做预处理（会短暂出现游戏的加载窗口，处理完自动关闭）……";
+            Status = L.T("instance.connector.starting");
             var options = await OfflineLaunchOptionsAsync(c, ct);
             var result = await ConnectorWarmup.RunAsync(new GameLauncher(_service.Directory), options,
                 new Progress<string>(p => Status = p), TimeSpan.FromMinutes(15), ct);
-            Status = result.Done ? result.Detail + "，下次启动就不用再转换了。" : "预处理没完成：" + result.Detail;
+            Status = result.Done ? L.F("instance.connector.done", result.Detail) : L.F("instance.connector.incomplete", result.Detail);
         });
         RecheckCompat();
     }
@@ -400,7 +408,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             var (launcher, options) = new GameLauncher(_service.Directory).ForCurrentCodePage(await OfflineLaunchOptionsAsync(c, ct));
             var args = launcher.BuildArguments(options);
             Toolbox.WriteLaunchScript(path, options.JavaPath, options.WorkingDirectory ?? launcher.GameDir.Root, args, options.Session.AccessToken);
-            Status = "启动脚本已导出（离线身份）：" + path;
+            Status = L.F("instance.export.script_saved", path);
         });
     }
 
@@ -415,15 +423,15 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (OperationCanceledException) when (_workCts.IsCancellationRequested)
         {
-            Status = "已取消";
+            Status = L.T("common.cancelled");
         }
         catch (OperationCanceledException)
         {
-            Status = "失败：网络请求超时，请稍后重试";
+            Status = L.T("instance.status.timeout");
         }
         catch (Exception e)
         {
-            Status = "失败：" + e.Message;
+            Status = L.F("instance.status.failed", e.Message);
         }
         finally
         {
@@ -437,8 +445,8 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     // ---- 设置 ----
 
-    public string[] TriState { get; } = ["沿用全局设置", "开启", "关闭"];
-    public string[] MemoryModes { get; } = ["沿用全局设置", "自动", "手动"];
+    public string[] TriState => [L.T("instance.settings.inherit"), L.T("common.on"), L.T("common.off")];
+    public string[] MemoryModes => [L.T("instance.settings.inherit"), L.T("common.automatic"), L.T("common.manual")];
     public ObservableCollection<JavaChoice> JavaChoices { get; } = [];
 
     [ObservableProperty] public partial int IsolateIndex { get; set; }
@@ -476,12 +484,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         // 扫描要一会儿，这期间下拉框不留空。
         if (JavaChoices.Count == 0)
         {
-            JavaChoices.Add(new JavaChoice("沿用全局设置", null));
+            JavaChoices.Add(new JavaChoice("", null));
             SelectedJava = JavaChoices[0];
         }
         var found = await _service.Java.ScanAsync();
         JavaChoices.Clear();
-        JavaChoices.Add(new JavaChoice("沿用全局设置", null));
+        JavaChoices.Add(new JavaChoice("", null));
         foreach (var j in found) JavaChoices.Add(new JavaChoice(j.ToString(), j.JavaPath));
         if (current is not null && !found.Any(j => j.JavaPath == current)) JavaChoices.Add(new JavaChoice(current, current));
         SelectedJava = JavaChoices.FirstOrDefault(c => c.Path == current) ?? JavaChoices[0];
@@ -509,7 +517,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         s.Save(_service.Directory, c.Id);
         var id = c.Id;
         OnSelectedIdChanged(id);
-        Status = $"{id} 的设置已保存";
+        Status = L.F("instance.settings.saved", id);
     }
 
     private static string? NullIfBlank(string text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
@@ -540,7 +548,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             Mods.Add(item);
             if (mod.Icon is { } icon) _ = DecodeIconAsync(item, icon);
         }
-        ModSummary = $"{list.Count} 个模组，启用 {list.Count(m => m.Enabled)} 个";
+        ModSummary = L.F("instance.mods.summary", list.Count, list.Count(m => m.Enabled));
         RecheckCompat();
     }
 
@@ -556,7 +564,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         foreach (var m in Mods) m.Compat = m.Enabled ? ModCompat.Check(m.Requirements, c.Loader, c.McVersion, ids, connector) : null;
         var problems = Mods.Count(m => m.HasCompatProblem);
         NeedsConnector = !connector && Mods.Any(m => m.Compat?.Level == CompatLevel.NeedsConnector);
-        CompatSummary = problems == 0 ? (Mods.Count > 0 ? "全部匹配这个实例" : "") : $"{problems} 个模组和这个实例不匹配，看下面标出的原因";
+        CompatSummary = problems == 0 ? (Mods.Count > 0 ? L.T("instance.mods.all_matching") : "") : L.F("instance.mods.mismatched", problems);
         RecheckConnectorPending(connector);
     }
 
@@ -566,11 +574,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c) return;
         await RunWorkAsync(async ct =>
         {
-            Status = "正在查找适合的 Sinytra Connector……";
+            Status = L.T("instance.connector.searching");
             var plan = await ConnectorInstaller.PlanAsync(c, _service.Modrinth, _service.ContentInstaller, null, ct)
-                       ?? throw new InvalidOperationException($"Modrinth 上没有适合 {c.McVersion} {c.Loader} 的 Sinytra Connector");
+                       ?? throw new InvalidOperationException(L.F("instance.connector.not_found", c.McVersion, c.Loader));
             await _service.ContentInstaller.InstallAsync(plan, c.ModsDir, null, ct);
-            Status = $"已装 {string.Join("、", plan.Files.Select(f => f.DisplayName))}。注意：不是每个 Fabric 模组都能经 Connector 运行。";
+            Status = L.F("instance.connector.installed", string.Join("、", plan.Files.Select(f => f.DisplayName)));
         });
         await LoadModsAsync();
     }
@@ -581,17 +589,17 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c || item is null) return;
         await RunWorkAsync(async ct =>
         {
-            Status = $"正在找 {item.Name} 适合这个实例的版本……";
+            Status = L.F("instance.mods.finding_matching", item.Name);
             var file = await ConnectorInstaller.FindMatchingVersionAsync(item.Mod.Path, c, _service.Modrinth, ct);
             if (file is null)
             {
-                Status = $"Modrinth 上没找到 {item.Name} 适合 {c.McVersion} {c.Loader ?? "原版"} 的版本" +
-                         (c.Loader is "fabric" or "quilt" && item.Requirements?.Loaders.Contains("fabric") != true ? "（Fabric / Quilt 上没有可靠的办法运行 Forge 模组）" : "");
+                Status = L.F("instance.mods.match_not_found", item.Name, c.McVersion, c.Loader ?? L.T("home.version.vanilla")) +
+                         (c.Loader is "fabric" or "quilt" && item.Requirements?.Loaders.Contains("fabric") != true ? L.T("instance.mods.forge_unsupported") : "");
                 return;
             }
             await _service.ContentInstaller.InstallAsync(new InstallPlan([file], []), c.ModsDir, null, ct);
             Recycle(item.Mod.Path);
-            Status = $"已把 {item.Name} 换成 {file.FileName}";
+            Status = L.F("instance.mods.replaced", item.Name, file.FileName);
         });
         await LoadModsAsync();
     }
@@ -623,13 +631,13 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         {
             Recycle(item.Mod.Path);
             Mods.Remove(item);
-            ModSummary = $"{Mods.Count} 个模组，启用 {Mods.Count(m => m.Enabled)} 个";
+            ModSummary = L.F("instance.mods.summary", Mods.Count, Mods.Count(m => m.Enabled));
             RecheckCompat();
-            Status = $"已把 {item.Name} 放进回收站";
+            Status = L.F("instance.status.recycled", item.Name);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
-            Status = "删除失败：" + e.Message;
+            Status = L.F("instance.status.delete_failed", e.Message);
         }
     }
 
@@ -639,11 +647,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c) return;
         await RunWorkAsync(async ct =>
         {
-            Status = "正在检查更新……";
+            Status = L.T("instance.mods.checking_updates");
             var mods = Mods.Select(m => m.Mod).ToList();
             var updates = await ModManager.CheckUpdatesAsync(mods, _service.Modrinth, _service.CurseForgeIfConfigured, c.McVersion, c.Loader, ct);
             foreach (var item in Mods) item.Update = updates.FirstOrDefault(u => u.LocalPath == item.Mod.Path);
-            Status = updates.Count == 0 ? "全部是最新版" : $"{updates.Count} 个模组可更新";
+            Status = updates.Count == 0 ? L.T("instance.mods.up_to_date") : L.F("instance.mods.updates_available", updates.Count);
         });
     }
 
@@ -656,11 +664,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             var done = 0;
             foreach (var item in pending)
             {
-                Status = $"更新 {item.Name}……";
+                Status = L.F("instance.mods.updating", item.Name);
                 await ModManager.ApplyUpdateAsync(item.Update!, _service.Downloader, ct);
                 Progress = 100.0 * ++done / pending.Count;
             }
-            Status = pending.Count == 0 ? "先点“检查更新”" : $"已更新 {done} 个模组";
+            Status = pending.Count == 0 ? L.T("instance.mods.check_first") : L.F("instance.mods.updated_count", done);
         });
         await LoadModsAsync();
     }
@@ -672,7 +680,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         await RunWorkAsync(async ct =>
         {
             await ModManager.ApplyUpdateAsync(update, _service.Downloader, ct);
-            Status = $"{item.Name} 已更新";
+            Status = L.F("instance.mods.updated", item.Name);
         });
         await LoadModsAsync();
     }
@@ -686,7 +694,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             File.Copy(path, Path.Combine(targetDir, Path.GetFileName(path)), true);
             count++;
         }
-        Status = $"已添加 {count} 个文件";
+        Status = L.F("instance.files.added", count);
         _loadedTabs.Clear();
         LoadTab(TabIndex);
     }
@@ -738,9 +746,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c || item is null) return;
         await RunWorkAsync(async _ =>
         {
-            Status = $"正在备份 {item.Name}……";
+            Status = L.F("instance.worlds.backing_up", item.Name);
             var target = await Task.Run(() => WorldManager.Backup(item.World, Path.Combine(c.WorkDir, "backups")));
-            Status = "备份完成：" + target;
+            Status = L.F("instance.worlds.backed_up", target);
         });
     }
 
@@ -759,11 +767,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             Recycle(item.World.Path);
             if (DatapackWorld == item) DatapackWorld = null;
             Worlds.Remove(item);
-            Status = $"已把 {item.Name} 放进回收站";
+            Status = L.F("instance.status.recycled", item.Name);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
-            Status = "删除失败：" + e.Message;
+            Status = L.F("instance.status.delete_failed", e.Message);
         }
     }
 
@@ -774,12 +782,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         {
             System.IO.Directory.CreateDirectory(c.SavesDir);
             var folder = WorldManager.Import(zipPath, c.SavesDir);
-            Status = $"已导入存档 {folder}";
+            Status = L.F("instance.worlds.imported", folder);
             LoadWorlds();
         }
         catch (Exception e) when (e is IOException or InvalidDataException)
         {
-            Status = "导入失败：" + e.Message;
+            Status = L.F("instance.worlds.import_failed", e.Message);
         }
     }
 
@@ -792,7 +800,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     public partial WorldItem? DatapackWorld { get; set; }
 
     public bool HasDatapackWorld => DatapackWorld is not null;
-    public string DatapackTitle => DatapackWorld is { } w ? $"{w.Name} 的数据包" : "";
+    public string DatapackTitle => DatapackWorld is { } w ? L.F("instance.datapacks.world_title", w.Name) : "";
     public string? DatapacksDir => DatapackWorld is { } w ? DatapackManager.DirectoryOf(w.World.Path) : null;
 
     /// <summary>主窗口设置：去资源页搜索数据包（版本 id，世界文件夹名）。</summary>
@@ -823,11 +831,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         {
             Recycle(item.Pack.Path);
             Datapacks.Remove(item);
-            Status = $"已把 {item.Name} 放进回收站";
+            Status = L.F("instance.status.recycled", item.Name);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
-            Status = "删除失败：" + e.Message;
+            Status = L.F("instance.status.delete_failed", e.Message);
         }
     }
 
@@ -860,7 +868,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
                 errors.Add(e.Message);
             }
         }
-        Status = $"已添加 {added} 个数据包" + (errors.Count > 0 ? "。" + string.Join("；", errors) : "");
+        Status = L.F("instance.datapacks.added", added) + (errors.Count > 0 ? "。" + string.Join("；", errors) : "");
         LoadDatapacks();
     }
 
@@ -914,7 +922,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
-            Status = "删除失败：" + e.Message;
+            Status = L.F("instance.status.delete_failed", e.Message);
         }
     }
 
@@ -954,7 +962,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
-            Status = "删除失败：" + e.Message;
+            Status = L.F("instance.status.delete_failed", e.Message);
         }
     }
 
@@ -980,8 +988,8 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     {
         var status = await ServerList.PingAsync(item.Address);
         item.StatusText = status.Online
-            ? $"{status.Players}/{status.MaxPlayers} 人在线 · {status.VersionName}{(status.PingMs is { } ms ? $" · {ms} ms" : "")}"
-            : "离线：" + status.Error;
+            ? L.F("instance.servers.online", status.Players, status.MaxPlayers, status.VersionName, status.PingMs is { } ms ? $" · {ms} ms" : "")
+            : L.F("instance.servers.offline", status.Error);
     }
 
     [RelayCommand]
@@ -1024,7 +1032,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     // ---- 导出 ----
 
-    public string[] ExportFormats { get; } = ["Modrinth（.mrpack）", "CurseForge（.zip）"];
+    public string[] ExportFormats => [L.T("instance.export.modrinth"), L.T("instance.export.curseforge")];
     public ObservableCollection<ExportOption> ExportOptions { get; } = [];
 
     [ObservableProperty] public partial int ExportFormatIndex { get; set; }
@@ -1052,12 +1060,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         await RunWorkAsync(async ct =>
         {
             var include = ExportOptions.Where(o => o.Include).Select(o => o.Name).ToList();
-            Status = "正在打包……";
+            Status = L.T("instance.export.packing");
             if (ExportFormatIndex == 0)
                 await _service.Modpacks.ExportMrpackAsync(c, path, ExportName, ExportVersion, include, ct);
             else
                 await _service.Modpacks.ExportCurseForgeAsync(c, path, ExportName, ExportVersion, Environment.UserName, include, ct);
-            Status = $"已导出 {path}（{new FileInfo(path).Length / 1024} KB）";
+            Status = L.F("instance.export.saved", path, new FileInfo(path).Length / 1024);
         });
     }
 

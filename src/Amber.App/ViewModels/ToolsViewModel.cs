@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using Amber.Core.Localization;
 using Amber.App.Services;
 using Amber.Core.Java;
 using Amber.Core.Launch;
@@ -25,13 +26,18 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
 {
     private CancellationTokenSource? _cts;
 
-    public override string Title => "工具箱";
+    public override string Title => L.T("tools.title");
     public override string Icon => "M21.500 7a5.500 5.500 0 0 1-7.600 5.100L7.200 18.800a2 2 0 0 1-2.800-2.800l6.700-6.700A5.500 5.500 0 0 1 17 2.500l-3.300 3.300 1 3.500 3.500 1 3.300-3.300c.3.600.5 1.300.5 2z";
 
     public ObservableCollection<JunkItem> Junk { get; } = [];
     public int[] JavaMajors { get; } = [8, 17, 21, 25];
 
-    [ObservableProperty] public partial string JunkStatus { get; set; } = "点“扫描”看看能清理多少";
+    private string? _junkStatus;
+    public string JunkStatus
+    {
+        get => _junkStatus ?? L.T("tools.junk.initial");
+        set => SetProperty(ref _junkStatus, value);
+    }
     [ObservableProperty] public partial string DownloadUrl { get; set; } = "";
     [ObservableProperty] public partial string DownloadFolder { get; set; } = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     [ObservableProperty] public partial string DownloadSha1 { get; set; } = "";
@@ -45,12 +51,12 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
     [RelayCommand]
     private async Task ScanJunkAsync()
     {
-        JunkStatus = "正在扫描……";
+        JunkStatus = L.T("tools.junk.scanning");
         var dir = service.Directory;
         var groups = await Task.Run(() => Toolbox.ScanJunk(dir));
         Junk.Clear();
         foreach (var g in groups) Junk.Add(new JunkItem(g));
-        JunkStatus = $"共 {groups.Sum(g => g.Bytes) / 1024.0 / 1024:F1} MB 可以清理。存档、模组和配置不在清理范围内。";
+        JunkStatus = L.F("tools.junk.summary", groups.Sum(g => g.Bytes) / 1024.0 / 1024);
     }
 
     [RelayCommand]
@@ -59,9 +65,9 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
         var selected = Junk.Where(j => j.Selected).Select(j => j.Group).ToList();
         if (selected.Count == 0) return;
         var freed = await Task.Run(() => Toolbox.Clean(selected));
-        JunkStatus = $"清理了 {freed / 1024.0 / 1024:F1} MB";
+        JunkStatus = L.F("tools.junk.cleaned", freed / 1024.0 / 1024);
         await ScanJunkAsync();
-        JunkStatus = $"清理了 {freed / 1024.0 / 1024:F1} MB，游戏运行中的文件会被跳过";
+        JunkStatus = L.F("tools.junk.cleaned_skipped", freed / 1024.0 / 1024);
     }
 
     private async Task RunAsync(Func<CancellationToken, Task> work)
@@ -75,11 +81,11 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
         }
         catch (OperationCanceledException)
         {
-            Status = "已取消";
+            Status = L.T("common.cancelled");
         }
         catch (Exception e)
         {
-            Status = "失败：" + e.Message;
+            Status = L.F("instance.status.failed", e.Message);
         }
         finally
         {
@@ -95,33 +101,33 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
     private Task DownloadFileAsync() => RunAsync(async ct =>
     {
         if (!Uri.TryCreate(DownloadUrl.Trim(), UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
-            throw new ArgumentException("请填写以 http 或 https 开头的下载地址");
+            throw new ArgumentException(L.T("tools.download.invalid_url"));
         var name = Path.GetFileName(Uri.UnescapeDataString(uri.AbsolutePath));
         if (string.IsNullOrWhiteSpace(name)) name = "download.bin";
         var target = Path.Combine(DownloadFolder.Trim(), name);
-        Status = $"正在下载 {name}……";
+        Status = L.F("tools.download.downloading", name);
         var item = new DownloadItem(uri.ToString(), target, string.IsNullOrWhiteSpace(DownloadSha1) ? null : DownloadSha1.Trim());
         await service.Downloader.DownloadOneAsync(item, new Progress<long>(bytes =>
         {
-            Status = $"正在下载 {name}：{bytes / 1024.0 / 1024:F1} MB";
+            Status = L.F("tools.download.progress", name, bytes / 1024.0 / 1024);
         }), ct);
         await Ui.FlushAsync();
-        Status = "已下载到 " + target;
+        Status = L.F("tools.download.completed", target);
     });
 
     [RelayCommand]
     private Task InstallJavaAsync() => RunAsync(async ct =>
     {
         var major = SelectedJavaMajor;
-        Status = $"正在下载 Java {major}……";
+        Status = L.F("tools.java.downloading", major);
         var path = await new JavaRuntimeInstaller(service.Downloader, service.Directory.Root).InstallAsync(null, major, new Progress<DownloadProgress>(p =>
         {
             Progress = 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles);
-            Status = $"下载 Java {major}：{p.CompletedFiles}/{p.TotalFiles}";
+            Status = L.F("tools.java.progress", major, p.CompletedFiles, p.TotalFiles);
         }), ct);
         await service.Java.ScanAsync(true);
         await Ui.FlushAsync();
-        Status = "已安装：" + path;
+        Status = L.F("tools.java.installed", path);
     });
 
     [RelayCommand]
@@ -131,7 +137,7 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
         var feed = service.Settings.UpdateFeedUrl;
         if (string.IsNullOrWhiteSpace(feed))
         {
-            UpdateStatus = $"当前版本 {UpdateChecker.CurrentVersion}。没有配置更新地址，所以不会联网检查（可以在设置页填写）。";
+            UpdateStatus = L.F("tools.update.no_feed", UpdateChecker.CurrentVersion);
             return;
         }
         try
@@ -139,17 +145,17 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
             var update = await new UpdateChecker(service.Http).CheckAsync(feed, UpdateChecker.CurrentVersion);
             if (update is null)
             {
-                UpdateStatus = $"当前版本 {UpdateChecker.CurrentVersion} 已是最新";
+                UpdateStatus = L.F("tools.update.latest", UpdateChecker.CurrentVersion);
             }
             else
             {
-                UpdateStatus = $"有新版本 {update.Version}（当前 {UpdateChecker.CurrentVersion}）。Amber 不会自动下载或替换，需要的话自己去更新。";
+                UpdateStatus = L.F("tools.update.available", update.Version, UpdateChecker.CurrentVersion);
                 UpdateUrl = update.Url;
             }
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or InvalidDataException)
         {
-            UpdateStatus = "检查失败：" + e.Message;
+            UpdateStatus = L.F("tools.update.failed", e.Message);
         }
     }
 

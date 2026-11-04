@@ -1,18 +1,19 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:l="using:Amber.App.Localization"
              xmlns:vm="using:Amber.App.ViewModels"
              x:Class="Amber.App.Views.InstancePage"
              x:DataType="vm:InstanceViewModel">
   <Grid RowDefinitions="Auto,Auto,*,Auto">
-    <TextBlock Classes="h1" Text="实例" />
+    <TextBlock Classes="h1" Text="{l:T instance.title}" />
 
     <StackPanel Grid.Row="1" Spacing="6" Margin="0,0,0,8">
       <Grid ColumnDefinitions="*,Auto">
-        <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedId}" HorizontalAlignment="Stretch" PlaceholderText="还没有安装版本" />
+        <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedId}" HorizontalAlignment="Stretch" PlaceholderText="{l:T instance.version.empty}" />
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="8,0,0,0">
-          <Button Content="打开文件夹" Command="{Binding OpenFolderCommand}" />
-          <Button Content="补全文件" Command="{Binding CompleteFilesCommand}" />
-          <Button Content="导出脚本…" Click="ExportScript_Click" />
+          <Button Content="{l:T common.open_folder}" Command="{Binding OpenFolderCommand}" />
+          <Button Content="{l:T instance.files.complete}" Command="{Binding CompleteFilesCommand}" />
+          <Button Content="{l:T instance.export.script}" Click="ExportScript_Click" />
           <Button Content="{Binding DeleteArmed, Converter={x:Static vm:Converters.DeleteLabel}}" Command="{Binding DeleteVersionCommand}" />
         </StackPanel>
       </Grid>
@@ -21,13 +22,13 @@
 
     <Border Grid.Row="2" Classes="card" Padding="10" IsVisible="{Binding HasInstance}">
       <TabControl SelectedIndex="{Binding TabIndex}" Padding="0,8,0,0">
-        <TabItem Header="设置" FontSize="14">
+        <TabItem Header="{l:T instance.settings.title}" FontSize="14">
           <ScrollViewer>
             <Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,0,14,0">
               <Grid.Styles>
                 <Style Selector="TextBlock.label"><Setter Property="VerticalAlignment" Value="Center" /><Setter Property="Margin" Value="0,8,0,0" /></Style>
               </Grid.Styles>
-              <TextBlock Classes="label" Text="版本隔离" />
+              <TextBlock Classes="label" Text="{l:T instance.settings.isolation}" />
               <ComboBox Grid.Column="1" ItemsSource="{Binding TriState}" SelectedIndex="{Binding IsolateIndex}" MinWidth="200" Margin="0,8,0,0" />
 
               <TextBlock Grid.Row="1" Classes="label" Text="Java" />
@@ -37,73 +38,73 @@
                 </ComboBox.ItemTemplate>
               </ComboBox>
 
-              <TextBlock Grid.Row="2" Classes="label" Text="内存" />
+              <TextBlock Grid.Row="2" Classes="label" Text="{l:T instance.settings.memory}" />
               <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
                 <ComboBox ItemsSource="{Binding MemoryModes}" SelectedIndex="{Binding MemoryModeIndex}" MinWidth="160" />
                 <TextBox Text="{Binding MemoryText}" Width="100" PlaceholderText="MB" />
-                <TextBlock Classes="hint" Text="手动时生效" VerticalAlignment="Center" />
+                <TextBlock Classes="hint" Text="{l:T instance.settings.manual_hint}" VerticalAlignment="Center" />
               </StackPanel>
 
-              <TextBlock Grid.Row="3" Classes="label" Text="JVM 参数" />
-              <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding JvmArgs}" Margin="0,8,0,0" PlaceholderText="例如 -XX:+UseZGC，留空沿用全局" />
+              <TextBlock Grid.Row="3" Classes="label" Text="{l:T instance.settings.jvm_args}" />
+              <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding JvmArgs}" Margin="0,8,0,0" PlaceholderText="{l:T instance.settings.jvm_hint}" />
 
-              <TextBlock Grid.Row="4" Classes="label" Text="游戏参数" />
-              <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding GameArgs}" Margin="0,8,0,0" PlaceholderText="留空沿用全局" />
+              <TextBlock Grid.Row="4" Classes="label" Text="{l:T instance.settings.game_args}" />
+              <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding GameArgs}" Margin="0,8,0,0" PlaceholderText="{l:T instance.settings.inherit_hint}" />
 
-              <TextBlock Grid.Row="5" Classes="label" Text="窗口大小" />
+              <TextBlock Grid.Row="5" Classes="label" Text="{l:T instance.settings.window_size}" />
               <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
-                <TextBox Text="{Binding WidthText}" Width="90" PlaceholderText="宽" />
+                <TextBox Text="{Binding WidthText}" Width="90" PlaceholderText="{l:T instance.settings.width}" />
                 <TextBlock Text="×" VerticalAlignment="Center" />
-                <TextBox Text="{Binding HeightText}" Width="90" PlaceholderText="高" />
+                <TextBox Text="{Binding HeightText}" Width="90" PlaceholderText="{l:T instance.settings.height}" />
               </StackPanel>
 
-              <TextBlock Grid.Row="6" Classes="label" Text="全屏" />
+              <TextBlock Grid.Row="6" Classes="label" Text="{l:T instance.settings.fullscreen}" />
               <ComboBox Grid.Row="6" Grid.Column="1" ItemsSource="{Binding TriState}" SelectedIndex="{Binding FullscreenIndex}" MinWidth="200" Margin="0,8,0,0" />
 
-              <TextBlock Grid.Row="7" Classes="label" Text="启动前命令" />
-              <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding PreLaunch}" Margin="0,8,0,0" PlaceholderText="等它运行完才启动游戏；可用环境变量 AMBER_VERSION、AMBER_GAME_DIR" />
+              <TextBlock Grid.Row="7" Classes="label" Text="{l:T instance.settings.pre_launch}" />
+              <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding PreLaunch}" Margin="0,8,0,0" PlaceholderText="{l:T instance.settings.pre_launch_hint}" />
 
-              <TextBlock Grid.Row="8" Classes="label" Text="退出后命令" />
+              <TextBlock Grid.Row="8" Classes="label" Text="{l:T instance.settings.post_exit}" />
               <TextBox Grid.Row="8" Grid.Column="1" Text="{Binding PostExit}" Margin="0,8,0,0" />
 
-              <TextBlock Grid.Row="9" Classes="label" Text="启动后进服" />
-              <TextBox Grid.Row="9" Grid.Column="1" Text="{Binding JoinServer}" Margin="0,8,0,0" PlaceholderText="每次启动直接进这个服务器，例如 play.example.com:25565" />
+              <TextBlock Grid.Row="9" Classes="label" Text="{l:T instance.settings.join_server}" />
+              <TextBox Grid.Row="9" Grid.Column="1" Text="{Binding JoinServer}" Margin="0,8,0,0" PlaceholderText="{l:T instance.settings.join_server_hint}" />
 
-              <Button Grid.Row="10" Grid.Column="1" Classes="amber" Content="保存这个版本的设置" Command="{Binding SaveSettingsCommand}" Margin="0,12,0,4" />
+              <Button Grid.Row="10" Grid.Column="1" Classes="amber" Content="{l:T instance.settings.save}" Command="{Binding SaveSettingsCommand}" Margin="0,12,0,4" />
             </Grid>
           </ScrollViewer>
         </TabItem>
 
-        <TabItem Header="模组" FontSize="14">
+        <TabItem Header="{l:T instance.mods.title}" FontSize="14">
           <Grid RowDefinitions="Auto,Auto,*">
             <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,6">
               <TextBlock Classes="hint" Text="{Binding ModSummary}" VerticalAlignment="Center" />
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
-                <Button Content="添加文件…" Click="AddMods_Click" />
-                <Button Content="打开文件夹" Command="{Binding OpenModsFolderCommand}" />
-                <Button Content="检查更新" Command="{Binding CheckModUpdatesCommand}" />
-                <Button Content="全部更新" Command="{Binding UpdateAllModsCommand}" />
+                <Button Content="{l:T common.add_files}" Click="AddMods_Click" />
+                <Button Content="{l:T common.open_folder}" Command="{Binding OpenModsFolderCommand}" />
+                <Button Content="{l:T common.check_updates}" Command="{Binding CheckModUpdatesCommand}" />
+                <Button Content="{l:T common.update_all}" Command="{Binding UpdateAllModsCommand}" />
               </StackPanel>
             </Grid>
             <StackPanel Grid.Row="1" Spacing="4" Margin="0,0,0,6" IsVisible="{Binding CompatSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
               <TextBlock Text="{Binding CompatSummary}" FontSize="12" TextWrapping="Wrap" />
               <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding NeedsConnector}">
                 <TextBlock Classes="hint" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"
-                           Text="有 Fabric 模组：装上开源的 Sinytra Connector 后，很多 Fabric 模组能在 Forge / NeoForge 上运行（不是全部）。" />
-                <Button Content="安装 Sinytra Connector" Command="{Binding InstallConnectorCommand}" />
+                           Text="{l:T instance.connector.hint}" />
+                <Button Content="{l:T instance.connector.install}" Command="{Binding InstallConnectorCommand}" />
               </StackPanel>
               <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasConnectorPending}">
                 <TextBlock Classes="hint" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="560" Text="{Binding ConnectorPendingText}" />
-                <Button Content="预先处理" Command="{Binding PrewarmConnectorCommand}"
-                        ToolTip.Tip="启动一次游戏，等 Connector 把 Fabric 模组转换完就自动关掉，之后正式启动就快了。期间会短暂出现游戏的加载窗口。" />
+                <Button Content="{l:T instance.connector.prewarm}" Command="{Binding PrewarmConnectorCommand}"
+                        ToolTip.Tip="{l:T instance.connector.prewarm_hint}" />
               </StackPanel>
             </StackPanel>
-            <TextBlock Grid.Row="2" Classes="hint" Text="还没有模组。去「资源」页搜索安装，或者点“添加文件”。" IsVisible="{Binding !Mods.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <TextBlock Grid.Row="2" Classes="hint" Text="{l:T instance.mods.empty}" IsVisible="{Binding !Mods.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
             <ListBox Grid.Row="2" ItemsSource="{Binding Mods}" Background="Transparent">
               <ListBox.ItemTemplate>
                 <DataTemplate DataType="vm:ModItem">
                   <Grid ColumnDefinitions="Auto,40,*,Auto" Margin="2">
-                    <CheckBox IsChecked="{Binding Enabled}" MinWidth="0" Margin="0,0,6,0" ToolTip.Tip="启用或禁用" />
+                    <CheckBox IsChecked="{Binding Enabled}" MinWidth="0" Margin="0,0,6,0" ToolTip.Tip="{l:T common.toggle_enabled}" />
                     <Border Grid.Column="1" Width="40" Height="40" CornerRadius="5" Background="{DynamicResource PageBackground}" ClipToBounds="True">
                       <Image Source="{Binding Icon}" />
                     </Border>
@@ -115,10 +116,10 @@
                                  Foreground="{Binding HasCompatProblem, Converter={x:Static vm:Converters.ProblemBrush}}" />
                     </StackPanel>
                     <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                      <Button Content="更新" IsVisible="{Binding HasUpdate}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).UpdateModCommand}" CommandParameter="{Binding}" />
-                      <Button Content="找对应版本" IsVisible="{Binding CanFindMatching}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).FindMatchingCommand}" CommandParameter="{Binding}"
-                              ToolTip.Tip="在 Modrinth 上找这个模组适合本实例游戏版本和加载器的版本，换掉现在这个" />
-                      <Button Content="删除" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteModCommand}" CommandParameter="{Binding}" />
+                      <Button Content="{l:T common.update}" IsVisible="{Binding HasUpdate}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).UpdateModCommand}" CommandParameter="{Binding}" />
+                      <Button Content="{l:T instance.mods.find_matching}" IsVisible="{Binding CanFindMatching}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).FindMatchingCommand}" CommandParameter="{Binding}"
+                              ToolTip.Tip="{l:T instance.mods.find_matching_hint}" />
+                      <Button Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteModCommand}" CommandParameter="{Binding}" />
                     </StackPanel>
                   </Grid>
                 </DataTemplate>
@@ -127,10 +128,10 @@
           </Grid>
         </TabItem>
 
-        <TabItem Header="世界" FontSize="14">
+        <TabItem Header="{l:T instance.worlds.title}" FontSize="14">
           <Grid RowDefinitions="Auto,*,Auto">
-            <Button Content="从压缩包导入存档…" Click="ImportWorld_Click" Margin="0,0,0,6" />
-            <TextBlock Grid.Row="1" Classes="hint" Text="这个版本还没有存档。" IsVisible="{Binding !Worlds.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <Button Content="{l:T instance.worlds.import}" Click="ImportWorld_Click" Margin="0,0,0,6" />
+            <TextBlock Grid.Row="1" Classes="hint" Text="{l:T instance.worlds.empty}" IsVisible="{Binding !Worlds.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
             <ListBox Grid.Row="1" ItemsSource="{Binding Worlds}" Background="Transparent">
               <ListBox.ItemTemplate>
                 <DataTemplate DataType="vm:WorldItem">
@@ -140,12 +141,12 @@
                       <TextBlock Text="{Binding Meta}" Classes="hint" FontSize="11" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                      <Button Content="进入" IsVisible="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).SupportsQuickPlay}"
+                      <Button Content="{l:T common.enter}" IsVisible="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).SupportsQuickPlay}"
                               Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).JoinWorldCommand}" CommandParameter="{Binding}" />
-                      <Button Content="数据包" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).ShowDatapacksCommand}" CommandParameter="{Binding}" />
-                      <Button Content="备份" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).BackupWorldCommand}" CommandParameter="{Binding}" />
-                      <Button Content="打开" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).OpenWorldCommand}" CommandParameter="{Binding}" />
-                      <Button Content="删除" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteWorldCommand}" CommandParameter="{Binding}" />
+                      <Button Content="{l:T instance.datapacks.title}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).ShowDatapacksCommand}" CommandParameter="{Binding}" />
+                      <Button Content="{l:T common.backup}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).BackupWorldCommand}" CommandParameter="{Binding}" />
+                      <Button Content="{l:T common.open}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).OpenWorldCommand}" CommandParameter="{Binding}" />
+                      <Button Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteWorldCommand}" CommandParameter="{Binding}" />
                     </StackPanel>
                   </Grid>
                 </DataTemplate>
@@ -156,25 +157,25 @@
                 <Grid ColumnDefinitions="*,Auto">
                   <TextBlock Text="{Binding DatapackTitle}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                   <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
-                    <Button Content="下载数据包…" Command="{Binding BrowseDatapacksCommand}" />
-                    <Button Content="添加文件…" Click="AddDatapacks_Click" />
-                    <Button Content="打开文件夹" Command="{Binding OpenDatapacksFolderCommand}" />
-                    <Button Content="收起" Command="{Binding CloseDatapacksCommand}" />
+                    <Button Content="{l:T instance.datapacks.download}" Command="{Binding BrowseDatapacksCommand}" />
+                    <Button Content="{l:T common.add_files}" Click="AddDatapacks_Click" />
+                    <Button Content="{l:T common.open_folder}" Command="{Binding OpenDatapacksFolderCommand}" />
+                    <Button Content="{l:T common.collapse}" Command="{Binding CloseDatapacksCommand}" />
                   </StackPanel>
                 </Grid>
                 <TextBlock Grid.Row="1" Classes="hint" FontSize="12" Margin="0,4" TextWrapping="Wrap"
-                           Text="勾选框和游戏里的数据包界面是同一个开关，请在游戏关闭时修改。没有数据包时，可以去资源页搜索，或添加 zip 文件。" />
+                           Text="{l:T instance.datapacks.hint}" />
                 <ScrollViewer Grid.Row="2">
                   <ItemsControl ItemsSource="{Binding Datapacks}">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate DataType="vm:DatapackItem">
                         <Grid ColumnDefinitions="Auto,*,Auto" Margin="2,3">
-                          <CheckBox IsChecked="{Binding Enabled}" MinWidth="0" Margin="0,0,6,0" ToolTip.Tip="启用或禁用" />
+                          <CheckBox IsChecked="{Binding Enabled}" MinWidth="0" Margin="0,0,6,0" ToolTip.Tip="{l:T common.toggle_enabled}" />
                           <StackPanel Grid.Column="1">
                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                             <TextBlock Text="{Binding Meta}" Classes="hint" FontSize="11" TextTrimming="CharacterEllipsis" />
                           </StackPanel>
-                          <Button Grid.Column="2" Content="删除" VerticalAlignment="Center"
+                          <Button Grid.Column="2" Content="{l:T common.delete}" VerticalAlignment="Center"
                                   Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).DeleteDatapackCommand}" CommandParameter="{Binding}" />
                         </Grid>
                       </DataTemplate>
@@ -186,9 +187,9 @@
           </Grid>
         </TabItem>
 
-        <TabItem Header="截图" FontSize="14">
+        <TabItem Header="{l:T instance.screenshots.title}" FontSize="14">
           <Grid RowDefinitions="Auto,*">
-            <Button Content="打开文件夹" Command="{Binding OpenScreenshotsFolderCommand}" Margin="0,0,0,6" />
+            <Button Content="{l:T common.open_folder}" Command="{Binding OpenScreenshotsFolderCommand}" Margin="0,0,0,6" />
             <ScrollViewer Grid.Row="1">
               <ItemsControl ItemsSource="{Binding Screenshots}">
                 <ItemsControl.ItemsPanel>
@@ -202,7 +203,7 @@
                       </Button>
                       <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0">
                         <TextBlock Text="{Binding Name}" Classes="hint" FontSize="11" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                        <Button Grid.Column="1" Content="删除" Padding="6,1" FontSize="11" Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).DeleteScreenshotCommand}" CommandParameter="{Binding}" />
+                        <Button Grid.Column="1" Content="{l:T common.delete}" Padding="6,1" FontSize="11" Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).DeleteScreenshotCommand}" CommandParameter="{Binding}" />
                       </Grid>
                     </StackPanel>
                   </DataTemplate>
@@ -212,11 +213,11 @@
           </Grid>
         </TabItem>
 
-        <TabItem Header="资源包" FontSize="14">
+        <TabItem Header="{l:T instance.resourcepacks.title}" FontSize="14">
           <Grid RowDefinitions="Auto,*">
             <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
-              <Button Content="添加文件…" Click="AddResourcePacks_Click" />
-              <Button Content="打开文件夹" Command="{Binding OpenResourcePacksFolderCommand}" />
+              <Button Content="{l:T common.add_files}" Click="AddResourcePacks_Click" />
+              <Button Content="{l:T common.open_folder}" Command="{Binding OpenResourcePacksFolderCommand}" />
             </StackPanel>
             <ListBox Grid.Row="1" ItemsSource="{Binding ResourcePacks}" Background="Transparent">
               <ListBox.ItemTemplate>
@@ -224,7 +225,7 @@
                   <Grid ColumnDefinitions="*,80,Auto">
                     <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="1" Text="{Binding Size}" Classes="hint" VerticalAlignment="Center" />
-                    <Button Grid.Column="2" Content="删除" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
+                    <Button Grid.Column="2" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
                   </Grid>
                 </DataTemplate>
               </ListBox.ItemTemplate>
@@ -232,11 +233,11 @@
           </Grid>
         </TabItem>
 
-        <TabItem Header="光影" FontSize="14">
+        <TabItem Header="{l:T instance.shaderpacks.title}" FontSize="14">
           <Grid RowDefinitions="Auto,*">
             <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
-              <Button Content="添加文件…" Click="AddShaderPacks_Click" />
-              <Button Content="打开文件夹" Command="{Binding OpenShaderPacksFolderCommand}" />
+              <Button Content="{l:T common.add_files}" Click="AddShaderPacks_Click" />
+              <Button Content="{l:T common.open_folder}" Command="{Binding OpenShaderPacksFolderCommand}" />
             </StackPanel>
             <ListBox Grid.Row="1" ItemsSource="{Binding ShaderPacks}" Background="Transparent">
               <ListBox.ItemTemplate>
@@ -244,7 +245,7 @@
                   <Grid ColumnDefinitions="*,80,Auto">
                     <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="1" Text="{Binding Size}" Classes="hint" VerticalAlignment="Center" />
-                    <Button Grid.Column="2" Content="删除" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
+                    <Button Grid.Column="2" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
                   </Grid>
                 </DataTemplate>
               </ListBox.ItemTemplate>
@@ -252,15 +253,15 @@
           </Grid>
         </TabItem>
 
-        <TabItem Header="服务器" FontSize="14">
+        <TabItem Header="{l:T instance.servers.title}" FontSize="14">
           <Grid RowDefinitions="Auto,*">
             <Grid ColumnDefinitions="160,*,Auto,Auto" Margin="0,0,0,6">
-              <TextBox Text="{Binding NewServerName}" PlaceholderText="名字" />
-              <TextBox Grid.Column="1" Text="{Binding NewServerAddress}" PlaceholderText="地址，例如 play.example.com:25565" Margin="6,0" />
-              <Button Grid.Column="2" Content="添加" Command="{Binding AddServerCommand}" />
-              <Button Grid.Column="3" Content="刷新" Command="{Binding RefreshServersCommand}" Margin="6,0,0,0" />
+              <TextBox Text="{Binding NewServerName}" PlaceholderText="{l:T common.name}" />
+              <TextBox Grid.Column="1" Text="{Binding NewServerAddress}" PlaceholderText="{l:T instance.servers.address_hint}" Margin="6,0" />
+              <Button Grid.Column="2" Content="{l:T common.add}" Command="{Binding AddServerCommand}" />
+              <Button Grid.Column="3" Content="{l:T common.refresh}" Command="{Binding RefreshServersCommand}" Margin="6,0,0,0" />
             </Grid>
-            <TextBlock Grid.Row="1" Classes="hint" Text="还没有服务器。这里和游戏里的多人游戏列表是同一份。" IsVisible="{Binding !Servers.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <TextBlock Grid.Row="1" Classes="hint" Text="{l:T instance.servers.empty}" IsVisible="{Binding !Servers.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
             <ListBox Grid.Row="1" ItemsSource="{Binding Servers}" Background="Transparent">
               <ListBox.ItemTemplate>
                 <DataTemplate DataType="vm:ServerItem">
@@ -271,8 +272,8 @@
                       <TextBlock Classes="hint" FontSize="11" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                      <Button Content="进入" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).JoinServerNowCommand}" CommandParameter="{Binding}" />
-                      <Button Content="移除" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).RemoveServerCommand}" CommandParameter="{Binding}" />
+                      <Button Content="{l:T common.enter}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).JoinServerNowCommand}" CommandParameter="{Binding}" />
+                      <Button Content="{l:T common.remove}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).RemoveServerCommand}" CommandParameter="{Binding}" />
                     </StackPanel>
                   </Grid>
                 </DataTemplate>
@@ -281,14 +282,14 @@
           </Grid>
         </TabItem>
 
-        <TabItem Header="导出" FontSize="14">
+        <TabItem Header="{l:T instance.export.title}" FontSize="14">
           <ScrollViewer>
             <StackPanel Spacing="8" Margin="0,0,14,0">
-              <TextBlock Text="导出为整合包" FontWeight="SemiBold" />
+              <TextBlock Text="{l:T instance.export.pack_heading}" FontWeight="SemiBold" />
               <ComboBox ItemsSource="{Binding ExportFormats}" SelectedIndex="{Binding ExportFormatIndex}" MinWidth="220" />
-              <TextBox Text="{Binding ExportName}" PlaceholderText="整合包名字" />
-              <TextBox Text="{Binding ExportVersion}" PlaceholderText="整合包版本号" />
-              <TextBlock Text="包含这些内容" FontWeight="SemiBold" Margin="0,6,0,0" />
+              <TextBox Text="{Binding ExportName}" PlaceholderText="{l:T instance.export.name_hint}" />
+              <TextBox Text="{Binding ExportVersion}" PlaceholderText="{l:T instance.export.version_hint}" />
+              <TextBlock Text="{l:T instance.export.include}" FontWeight="SemiBold" Margin="0,6,0,0" />
               <ItemsControl ItemsSource="{Binding ExportOptions}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate DataType="vm:ExportOption">
@@ -296,8 +297,8 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
-              <TextBlock Classes="hint" Text="能在平台上识别出来的模组只写下载信息，别的文件打进包里。分享前确认 config 里没有私人信息。存档默认不带。" />
-              <Button Classes="amber" Content="导出…" Click="ExportPack_Click" />
+              <TextBlock Classes="hint" Text="{l:T instance.export.hint}" />
+              <Button Classes="amber" Content="{l:T instance.export.save}" Click="ExportPack_Click" />
             </StackPanel>
           </ScrollViewer>
         </TabItem>
@@ -310,7 +311,7 @@
           <TextBlock Text="{Binding Status}" TextTrimming="CharacterEllipsis" MinHeight="18" />
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
         </StackPanel>
-        <Button Grid.Column="1" Content="取消" Command="{Binding CancelWorkCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />
+        <Button Grid.Column="1" Content="{l:T common.cancel}" Command="{Binding CancelWorkCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />
       </Grid>
     </Border>
   </Grid>

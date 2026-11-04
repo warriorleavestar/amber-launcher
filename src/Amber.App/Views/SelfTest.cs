@@ -58,6 +58,8 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
     public async Task RunAsync()
     {
         Directory.CreateDirectory(reportDir);
+        // 下面的检查按简体中文的文字判断，不管这台电脑是什么系统语言都先切到简体中文。
+        Amber.Core.Localization.L.SetLanguage(Amber.Core.Localization.L.Source);
         try
         {
             // 先检查每个页面在各种窗口大小下有没有被切掉的东西（截图放在报告目录的 layout 文件夹）。

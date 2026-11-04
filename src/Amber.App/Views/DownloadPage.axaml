@@ -1,15 +1,16 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:l="using:Amber.App.Localization"
              xmlns:vm="using:Amber.App.ViewModels"
              xmlns:install="using:Amber.Core.Install"
              x:Class="Amber.App.Views.DownloadPage"
              x:DataType="vm:DownloadViewModel">
   <Grid RowDefinitions="Auto,Auto,*,Auto">
-    <TextBlock Classes="h1" Text="下载游戏" />
+    <TextBlock Classes="h1" Text="{l:T download.heading}" />
     <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,10">
       <ComboBox ItemsSource="{Binding Filters}" SelectedItem="{Binding Filter}" MinWidth="110" />
-      <TextBox Grid.Column="1" Text="{Binding Search}" PlaceholderText="搜索版本号，例如 1.20" Margin="10,0" />
-      <Button Grid.Column="2" Content="刷新" Command="{Binding RefreshCommand}" />
+      <TextBox Grid.Column="1" Text="{Binding Search}" PlaceholderText="{l:T download.search.placeholder}" Margin="10,0" />
+      <Button Grid.Column="2" Content="{l:T common.refresh}" Command="{Binding RefreshCommand}" />
     </Grid>
 
     <Grid Grid.Row="2" ColumnDefinitions="*,Auto">
@@ -25,7 +26,7 @@
                 <TextBlock Grid.Column="1" Text="{Binding TypeText}" Classes="hint" VerticalAlignment="Center" />
                 <TextBlock Grid.Column="2" Text="{Binding Date}" Classes="hint" VerticalAlignment="Center" />
                 <Button Grid.Column="3" Width="96" HorizontalContentAlignment="Center"
-                        Content="安装…"
+                        Content="{l:T common.install_more}"
                         Command="{Binding $parent[ListBox].((vm:DownloadViewModel)DataContext).ConfigureCommand}"
                         CommandParameter="{Binding}" />
               </Grid>
@@ -38,8 +39,8 @@
       <Border Grid.Column="1" Classes="card" Width="300" Margin="14,0,0,14" IsVisible="{Binding IsConfiguring}">
         <ScrollViewer>
           <StackPanel Spacing="10">
-            <TextBlock Classes="h2" Text="{Binding Target.Id, StringFormat='安装 {0}'}" Margin="0" TextTrimming="CharacterEllipsis" />
-            <TextBlock Text="加载器" />
+            <TextBlock Classes="h2" Text="{Binding InstallTitle}" Margin="0" TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="{l:T download.loader.label}" />
             <ComboBox ItemsSource="{Binding LoaderChoices}" SelectedItem="{Binding SelectedLoader}" HorizontalAlignment="Stretch">
               <ComboBox.ItemTemplate>
                 <DataTemplate DataType="vm:LoaderChoice">
@@ -49,7 +50,7 @@
             </ComboBox>
 
             <StackPanel Spacing="10" IsVisible="{Binding NeedsLoaderVersion}">
-              <TextBlock Text="加载器版本" />
+              <TextBlock Text="{l:T download.loader.version}" />
               <ComboBox ItemsSource="{Binding LoaderVersions}" SelectedItem="{Binding SelectedLoaderVersion}" HorizontalAlignment="Stretch">
                 <ComboBox.ItemTemplate>
                   <DataTemplate DataType="install:LoaderVersion">
@@ -60,17 +61,17 @@
                   </DataTemplate>
                 </ComboBox.ItemTemplate>
               </ComboBox>
-              <CheckBox Content="显示测试版" IsChecked="{Binding ShowUnstableLoaders}" />
+              <CheckBox Content="{l:T common.show_unstable}" IsChecked="{Binding ShowUnstableLoaders}" />
               <TextBlock Classes="hint" Text="{Binding LoaderHint}" />
             </StackPanel>
 
-            <TextBlock Text="版本名字" />
+            <TextBlock Text="{l:T download.version.name}" />
             <TextBox Text="{Binding CustomName}" />
-            <TextBlock Classes="hint" Text="这个版本在列表里显示的名字，也是版本文件夹的名字。" />
+            <TextBlock Classes="hint" Text="{l:T download.version.name_hint}" />
 
             <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
-              <Button Classes="amber" Content="开始安装" Command="{Binding InstallCommand}" Padding="22,8" />
-              <Button Content="关闭" Command="{Binding CloseConfigureCommand}" />
+              <Button Classes="amber" Content="{l:T download.install.start}" Command="{Binding InstallCommand}" Padding="22,8" />
+              <Button Content="{l:T common.off}" Command="{Binding CloseConfigureCommand}" />
             </StackPanel>
           </StackPanel>
         </ScrollViewer>
@@ -83,7 +84,7 @@
           <TextBlock Text="{Binding Status}" TextTrimming="CharacterEllipsis" />
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
         </StackPanel>
-        <Button Grid.Column="1" Content="取消" Command="{Binding CancelInstallCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />
+        <Button Grid.Column="1" Content="{l:T common.cancel}" Command="{Binding CancelInstallCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />
       </Grid>
     </Border>
   </Grid>

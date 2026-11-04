@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Collections.ObjectModel;
 using System.Net.Sockets;
 using Amber.App.Services;
@@ -13,7 +14,7 @@ namespace Amber.App.ViewModels;
 
 public sealed record LanGameItem(LanGame Game, string Source)
 {
-    public string Label => $"{Game.Motd} · 端口 {Game.Port}（{Source}）";
+    public string Label => L.F("multiplayer.lan.game_label", Game.Motd, Game.Port, Source);
 }
 
 public sealed partial class NodeItem(string url) : ObservableObject
@@ -29,30 +30,30 @@ public sealed record ChatLine(ChatMessage Message, bool Mine)
     /// <summary>恢复的历史和新消息之间的分隔行。</summary>
     public bool IsSeparator { get; init; }
     public string Time => Message.Time.ToLocalTime().ToString("HH:mm");
-    public string Name => Mine ? "我" : Message.Name;
+    public string Name => Mine ? L.T("common.me") : Message.Name;
     public bool IsNotice => Message.Kind != ChatKind.Message || IsSeparator;
     public string Text => Message.Kind switch
     {
-        ChatKind.Join => $"{Message.Name} 进入了房间",
-        ChatKind.Leave => $"{Message.Name} 离开了房间",
+        ChatKind.Join => L.F("multiplayer.chat.member_joined", Message.Name),
+        ChatKind.Leave => L.F("multiplayer.chat.member_left", Message.Name),
         _ => Message.Text,
     };
 }
 
 public sealed record PeerItem(PeerInfo Peer)
 {
-    public string Name => Peer.Cost == "Local" ? "我" : Peer.Hostname switch
+    public string Name => Peer.Cost == "Local" ? L.T("common.me") : Peer.Hostname switch
     {
-        "amber-host" => "房主",
-        "amber-guest" => "玩家",
-        "" => "节点",
+        "amber-host" => L.T("multiplayer.peers.host"),
+        "amber-guest" => L.T("multiplayer.peers.player"),
+        "" => L.T("multiplayer.peers.node"),
         var h => h,
     };
     public string Meta => string.Join(" · ", new[]
     {
         Peer.Ip,
         Peer.LatencyMs is { } ms ? $"{ms:F0} ms" : null,
-        Peer.Cost switch { "Local" => null, var c when c.Contains("p2p", StringComparison.OrdinalIgnoreCase) => "直连", "" => null, _ => "经中继" },
+        Peer.Cost switch { "Local" => null, var c when c.Contains("p2p", StringComparison.OrdinalIgnoreCase) => L.T("multiplayer.peers.direct"), "" => null, _ => L.T("multiplayer.peers.relay") },
         Peer.Tunnel is "-" ? null : Peer.Tunnel,
     }.Where(s => !string.IsNullOrEmpty(s)));
 }
@@ -73,7 +74,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private bool _chatConnecting;
     private RoomCode? _room;
 
-    public override string Title => "联机";
+    public override string Title => L.T("multiplayer.title");
     public override string Icon => "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2c.9 0 2.2 1.900 2.700 5H9.300C9.800 6.900 11.100 5 12 5zM5.100 13h2.900c.1 1.600.4 3 .9 4.200A7 7 0 0 1 5.100 13zm0-2a7 7 0 0 1 3.800-4.200c-.5 1.200-.8 2.600-.9 4.200zm4.200 2h5.400c-.4 3.100-1.800 6-2.700 6s-2.300-2.900-2.700-6zm5.800 4.200c.5-1.200.8-2.600.9-4.200h2.900a7 7 0 0 1-3.800 4.200zM16 11c-.1-1.600-.4-3-.9-4.200A7 7 0 0 1 18.900 11z";
 
     public ObservableCollection<LanGameItem> LanGames { get; } = [];
@@ -93,7 +94,9 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     /// <summary>完整局域网模式：建虚拟网卡，每人一个虚拟 IP，要管理员权限。默认关闭。</summary>
     [ObservableProperty] public partial bool FullLanMode { get; set; }
 
-    [ObservableProperty] public partial string MyVirtualIp { get; set; } = "";
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(MyVirtualIpText))] public partial string MyVirtualIp { get; set; } = "";
+
+    public string MyVirtualIpText => L.F("multiplayer.room.virtual_ip", MyVirtualIp);
 
     // ---- 出口节点（只在完整局域网模式下）----
 
@@ -115,8 +118,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         {
             if (!UsingExit) return "";
             var exit = Peers.FirstOrDefault(p => p.Peer.Ip == ExitNodeIp);
-            var route = exit is null ? "" : exit.Peer.Cost.Contains("p2p", StringComparison.OrdinalIgnoreCase) ? "（直连）" : "（经其他成员或节点中转，会慢一些）";
-            return $"你的全部网络流量正经 {ExitNodeIp} 的电脑出去{route}。点“停止”恢复正常上网。";
+            var route = exit is null ? "" : exit.Peer.Cost.Contains("p2p", StringComparison.OrdinalIgnoreCase) ? L.T("multiplayer.exit.direct_route") : L.T("multiplayer.exit.relay_route");
+            return L.F("multiplayer.exit.banner", ExitNodeIp, route);
         }
     }
     public ObservableCollection<PeerItem> ExitCandidates { get; } = [];
@@ -140,7 +143,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         var lines = _chatHistory.Restore(room);
         if (lines.Count == 0) return;
         foreach (var line in lines) ChatLines.Add(line);
-        ChatLines.Add(new ChatLine(new ChatMessage(ChatKind.Message, "", "", "—— 以上是之前的消息（离开期间的消息看不到）——", DateTimeOffset.Now), false) { IsSeparator = true });
+        ChatLines.Add(new ChatLine(new ChatMessage(ChatKind.Message, "", "", L.T("multiplayer.chat.history_separator"), DateTimeOffset.Now), false) { IsSeparator = true });
     }
     [ObservableProperty] public partial string? TargetInstance { get; set; }
 
@@ -157,11 +160,11 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     [ObservableProperty] public partial string Status { get; set; } = "";
 
     public string ComponentText => IsComponentReady
-        ? $"EasyTier {EasyTierRelease.Version} 已就绪"
-        : $"联机需要先下载 EasyTier {EasyTierRelease.Version}（约 {EasyTierRelease.Size / 1024 / 1024} MB，来自 GitHub 官方发布页，下载后校验 SHA-256）";
+        ? L.F("multiplayer.component.ready", EasyTierRelease.Version)
+        : L.F("multiplayer.component.required", EasyTierRelease.Version, EasyTierRelease.Size / 1024 / 1024);
 
     public string LicenseText =>
-        $"联机由开源项目 EasyTier 实现（{EasyTierRelease.License}，{EasyTierRelease.ProjectUrl}）。不经过 Amber 的服务器；连不上直连时，数据经你添加的联机节点转发（用房间密钥加密）。默认模式不需要管理员权限，也不安装驱动。";
+        L.F("multiplayer.component.license", EasyTierRelease.License, EasyTierRelease.ProjectUrl);
 
     public MultiplayerViewModel(LauncherService service)
     {
@@ -194,10 +197,10 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (LanGames_PortFromLog(line) is not { } port) return;
         Dispatcher.UIThread.Post(() =>
         {
-            var item = new LanGameItem(new LanGame(versionId, port), "Amber 启动的游戏");
+            var item = new LanGameItem(new LanGame(versionId, port), L.T("multiplayer.lan.amber_source"));
             LanGames.Insert(0, item);
             SelectedLanGame = item;
-            if (IsIdle) Status = $"{versionId} 已对局域网开放，端口 {port}，可以创建房间了";
+            if (IsIdle) Status = L.F("multiplayer.lan.opened", versionId, port);
         });
     }
 
@@ -214,14 +217,14 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             foreach (var game in found)
             {
                 if (LanGames.Any(g => g.Game.Port == game.Port)) continue;
-                LanGames.Add(new LanGameItem(game, "局域网广播"));
+                LanGames.Add(new LanGameItem(game, L.T("multiplayer.lan.broadcast_source")));
             }
             SelectedLanGame ??= LanGames.FirstOrDefault();
-            if (IsIdle && LanGames.Count == 0) Status = "没找到开放到局域网的游戏：进入世界后，在暂停菜单点“对局域网开放”，再点“查找”";
+            if (IsIdle && LanGames.Count == 0) Status = L.T("multiplayer.lan.not_found");
         }
         catch (SocketException e)
         {
-            Status = "查找局域网游戏失败：" + e.Message + "。也可以手动填端口。";
+            Status = L.F("multiplayer.lan.scan_failed", e.Message);
         }
         finally
         {
@@ -237,21 +240,21 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _downloadCts = new CancellationTokenSource();
         try
         {
-            Status = "正在下载 EasyTier……";
+            Status = L.T("multiplayer.component.downloading");
             await _service.EasyTier.EnsureAsync(new Progress<DownloadProgress>(p =>
             {
                 DownloadPercent = Math.Min(100, 100.0 * p.BytesDownloaded / EasyTierRelease.Size);
             }), _downloadCts.Token);
             IsComponentReady = true;
-            Status = "EasyTier 已下载并校验通过";
+            Status = L.T("multiplayer.component.downloaded");
         }
         catch (OperationCanceledException) when (_downloadCts.IsCancellationRequested)
         {
-            Status = "已取消下载";
+            Status = L.T("multiplayer.component.download_cancelled");
         }
         catch (Exception e)
         {
-            Status = "下载失败：" + (e is OperationCanceledException ? "网络请求超时，请稍后重试" : e.Message);
+            Status = L.F("multiplayer.component.download_failed", e is OperationCanceledException ? L.T("common.request_timeout") : e.Message);
         }
         finally
         {
@@ -288,14 +291,14 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         var url = NewNodeUrl.Trim();
         if (!RelayNodes.IsValid(url))
         {
-            Status = $"节点地址格式不对：{url}（应该像 tcp://example.com:11010）";
+            Status = L.F("multiplayer.nodes.invalid_address", url);
             return;
         }
         if (Nodes.Any(n => n.Url == url)) return;
         Nodes.Add(new NodeItem(url));
         SaveNodes();
         NewNodeUrl = "";
-        Status = "节点已添加，下次创建或加入房间时生效";
+        Status = L.T("multiplayer.nodes.added");
     }
 
     [RelayCommand]
@@ -310,11 +313,11 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     [RelayCommand]
     private async Task TestNodesAsync()
     {
-        foreach (var node in Nodes) node.LatencyText = "测试中……";
+        foreach (var node in Nodes) node.LatencyText = L.T("multiplayer.nodes.testing");
         await Task.WhenAll(Nodes.ToList().Select(async node =>
         {
             var (ms, error) = await RelayNodes.ProbeAsync(node.Url);
-            node.LatencyText = ms is { } v ? $"{v:F0} ms" : error ?? "失败";
+            node.LatencyText = ms is { } v ? $"{v:F0} ms" : error ?? L.T("common.failed");
         }));
     }
 
@@ -324,7 +327,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         ShareCodeText = RelayNodes.Encode(null, Nodes.Select(n => n.Url));
         if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
             await clipboard.SetTextAsync(ShareCodeText);
-        Status = "节点分享码已复制。和朋友用同样的节点，联机更容易连上。";
+        Status = L.T("multiplayer.nodes.exported");
     }
 
     [RelayCommand]
@@ -332,7 +335,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     {
         if (!RelayNodes.TryDecode(ShareCodeText, out var name, out var urls))
         {
-            Status = "没认出节点分享码。粘贴 AMBNODE- 开头的分享码，或者直接粘贴节点地址。";
+            Status = L.T("multiplayer.nodes.invalid_share_code");
             return;
         }
         var added = 0;
@@ -343,7 +346,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         SaveNodes();
         ShareCodeText = "";
-        Status = $"导入了 {added} 个节点{(name is null ? "" : "（" + name + "）")}";
+        Status = L.F("multiplayer.nodes.imported", added, (name is null ? "" : "（" + name + "）"));
     }
 
     /// <summary>自检用：同一个程序里再开一个联机页（扮演加入方）。</summary>
@@ -359,23 +362,23 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (!IsIdle) return;
         if (!IsComponentReady)
         {
-            Status = "先下载联机组件";
+            Status = L.T("multiplayer.component.download_required");
             return;
         }
         var port = int.TryParse(ManualPort.Trim(), out var manual) && manual is > 0 and < 65536 ? manual : SelectedLanGame?.Game.Port;
         if (port is null)
         {
-            Status = "先在游戏里“对局域网开放”，或手动填写端口";
+            Status = L.T("multiplayer.lan.port_required");
             return;
         }
         if (!await CanConnectAsync(port.Value))
         {
-            Status = $"本机端口 {port} 上没有游戏在等待连接。确认世界已经“对局域网开放”，端口填对了。";
+            Status = L.F("multiplayer.lan.port_unavailable", port);
             return;
         }
         if ((TestPeers ?? _service.MultiplayerPeers).Count == 0 && TestListeners is null)
         {
-            Status = "还没有联机节点：在下面“联机节点”里添加一个（自己搭的，或导入朋友的节点分享码），双方要用同一个节点。";
+            Status = L.T("multiplayer.nodes.host_required");
             return;
         }
         var room = RoomCode.Create(port.Value);
@@ -386,8 +389,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         RestoreChatHistory(room);
         StartHub(room);
         Status = FullLanMode
-            ? "房间已创建（完整局域网模式）。把房间码发给朋友。如果朋友连不进来，在 Windows 防火墙里允许 Java（javaw.exe）通过“Amber LAN”网络。"
-            : "房间已创建。把房间码发给朋友；关掉 Amber 或点“结束联机”后房间就没了。";
+            ? L.T("multiplayer.room.created_full_lan")
+            : L.T("multiplayer.room.created");
     }
 
     [RelayCommand]
@@ -396,17 +399,17 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (!IsIdle) return;
         if (!IsComponentReady)
         {
-            Status = "先下载联机组件";
+            Status = L.T("multiplayer.component.download_required");
             return;
         }
         if (!RoomCode.TryParse(JoinCode, out var room))
         {
-            Status = "房间码格式不对，应该像 AMB-XXXXXXXX-XXXXXXXXXXXX-25565";
+            Status = L.T("multiplayer.room.invalid_code");
             return;
         }
         if ((TestPeers ?? _service.MultiplayerPeers).Count == 0)
         {
-            Status = "还没有联机节点：在下面“联机节点”里添加和房主相同的节点（可以让房主导出节点分享码发给你）。";
+            Status = L.T("multiplayer.nodes.join_required");
             return;
         }
         var local = FullLanMode ? (int?)null : EasyTierArgs.FreeTcpPort();
@@ -415,14 +418,14 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _room = room;
         RestoreChatHistory(room);
         _localChatPort = chatPort;
-        ChatStatus = "连上房主后自动进入聊天";
+        ChatStatus = L.T("multiplayer.chat.awaiting_host");
         Mode = "join";
         // 完整局域网模式下直接连房主的虚拟 IP；普通模式连本机转发端口。
         JoinAddress = local is { } l ? $"127.0.0.1:{l}" : $"{EasyTierArgs.HostIp}:{room.Port}";
         RoomCodeText = room.ToString();
         // 游戏的“多人游戏”列表里也会出现这个房间。
-        if (local is { } port) _ = Amber.Core.Multiplayer.LanGames.AnnounceAsync("Amber 联机房间", port, _sessionCts!.Token);
-        Status = "正在连接房主……";
+        if (local is { } port) _ = Amber.Core.Multiplayer.LanGames.AnnounceAsync(L.T("multiplayer.room.server_name"), port, _sessionCts!.Token);
+        Status = L.T("multiplayer.room.connecting");
     }
 
     private bool TryStartSession(EasyTierOptions options)
@@ -437,7 +440,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
         {
-            Status = "联机没有启动：" + e.Message;
+            Status = L.F("multiplayer.room.start_failed", e.Message);
             return false;
         }
         _sessionCts = new CancellationTokenSource();
@@ -461,7 +464,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         catch (System.Net.Sockets.SocketException e)
         {
-            ChatStatus = $"聊天不可用：本机端口 {RoomChat.Port} 被占用（{e.Message}）";
+            ChatStatus = L.F("multiplayer.chat.port_occupied", RoomChat.Port, e.Message);
         }
     }
 
@@ -476,7 +479,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             if (_chat != client) return;
             _chat = null;
             ChatReady = false;
-            ChatStatus = "聊天连接断开了，正在重连……";
+            ChatStatus = L.T("multiplayer.chat.reconnecting");
             _ = client.DisposeAsync();
         });
         try
@@ -490,12 +493,12 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             }
             _chat = client;
             ChatReady = true;
-            ChatStatus = "消息用房间密码加密，只有拿到房间码的人能看到；聊天记录只保存在内存里，关掉 Amber 就清空。";
+            ChatStatus = L.T("multiplayer.chat.privacy");
         }
         catch (Exception e) when (e is System.Net.Sockets.SocketException or OperationCanceledException or IOException)
         {
             await client.DisposeAsync();
-            if (_room == room) ChatStatus = "正在连接房间聊天……";
+            if (_room == room) ChatStatus = L.T("multiplayer.chat.connecting");
         }
         finally
         {
@@ -520,14 +523,14 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         {
             if (!await chat.SendAsync(text))
             {
-                ChatStatus = "发得太快了，稍等几秒再发";
+                ChatStatus = L.T("multiplayer.chat.rate_limited");
                 return;
             }
             ChatInput = "";
         }
         catch (Exception e) when (e is IOException or ObjectDisposedException or InvalidOperationException)
         {
-            ChatStatus = "发送失败：" + e.Message;
+            ChatStatus = L.F("multiplayer.chat.send_failed", e.Message);
         }
     }
 
@@ -536,7 +539,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     {
         var lines = ChatLines.Select(l => $"[{l.Message.Time.ToLocalTime():yyyy-MM-dd HH:mm:ss}] {(l.IsNotice ? "" : l.Name + "：")}{l.Text}");
         File.WriteAllLines(path, lines);
-        Status = "聊天记录已导出：" + path;
+        Status = L.F("multiplayer.chat.exported", path);
     }
 
     /// <summary>每次刷新时看看聊天要不要连：房主在完整局域网模式下等虚拟网卡就绪后再监听虚拟 IP；加入方看到房主后连。</summary>
@@ -582,7 +585,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         {
             // 用户拒绝了权限确认：旧会话已经停了，按“结束联机”处理，网络恢复正常。
             StopSession();
-            Status = "没有切换出口，联机已结束：" + e.Message;
+            Status = L.F("multiplayer.exit.switch_failed", e.Message);
             return false;
         }
     }
@@ -594,7 +597,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (RestartWithExit(peer.Peer.Ip))
         {
             ExitNodeIp = peer.Peer.Ip;
-            Status = $"正在切换：之后你的网络流量会经 {peer.Name}（{peer.Peer.Ip}）的电脑出去。对方必须先开启“允许成员通过我的电脑上网”，否则会暂时上不了网，点“停止”即可恢复。";
+            Status = L.F("multiplayer.exit.switching", peer.Name, peer.Peer.Ip);
         }
     }
 
@@ -602,7 +605,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private void StopExitNode()
     {
         if (!UsingExit) return;
-        if (RestartWithExit(null)) Status = "已停止经别人上网，网络恢复正常";
+        if (RestartWithExit(null)) Status = L.T("multiplayer.exit.stopped");
         ExitNodeIp = "";
     }
 
@@ -615,7 +618,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         {
             var last = session.RecentOutput.LastOrDefault(l => !string.IsNullOrWhiteSpace(l)) ?? "";
             StopSession();
-            Status = (session.Options.Tun ? "完整局域网模式已结束：" : "联机组件意外退出：") + last;
+            Status = session.Options.Tun ? L.F("multiplayer.room.full_lan_ended", last) : L.F("multiplayer.component.exited", last);
             return;
         }
         _refreshing = true;
@@ -638,10 +641,10 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             var host = Peers.FirstOrDefault(p => p.Peer.Ip == EasyTierArgs.HostIp && p.Peer.Cost != "Local");
             TickChat(host is not null);
             if (IsJoined)
-                Status = host is null ? "正在连接房主……（第一次可能要十几秒）"
-                    : $"已连上房主{(host.Peer.LatencyMs is { } ms ? $"，延迟 {ms:F0} ms" : "")}。在游戏里添加服务器 {JoinAddress}，或点下面的按钮直接进入";
+                Status = host is null ? L.T("multiplayer.room.connecting_first_time")
+                    : L.F("multiplayer.room.connected", (host.Peer.LatencyMs is { } ms ? L.F("multiplayer.room.latency", ms) : ""), JoinAddress);
             else if (IsHosting)
-                Status = Peers.Count(p => p.Peer.Ip != EasyTierArgs.HostIp) is var n and > 0 ? $"房间里有 {n} 位玩家" : "等待朋友加入……";
+                Status = Peers.Count(p => p.Peer.Ip != EasyTierArgs.HostIp) is var n and > 0 ? L.F("multiplayer.room.player_count", n) : L.T("multiplayer.room.waiting");
         }
         finally
         {
@@ -670,7 +673,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
         {
             await clipboard.SetTextAsync(RoomCodeText);
-            Status = "房间码已复制";
+            Status = L.T("multiplayer.room.code_copied");
         }
     }
 
@@ -681,8 +684,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (TargetInstance is not { } id || JoinAddress.Length == 0) return;
         var workDir = _service.WorkDirFor(id);
         Directory.CreateDirectory(workDir);
-        ServerList.Add(workDir, new ServerEntry("Amber 联机房间", JoinAddress));
-        Status = $"已加到 {id} 的多人游戏列表（地址 {JoinAddress}，每次加入房间端口会变）";
+        ServerList.Add(workDir, new ServerEntry(L.T("multiplayer.room.server_name"), JoinAddress));
+        Status = L.F("multiplayer.room.added_to_servers", id, JoinAddress);
     }
 
     /// <summary>主窗口设置：启动请求发出后切回启动页。</summary>
@@ -700,7 +703,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private void Stop()
     {
         StopSession();
-        Status = "已结束联机";
+        Status = L.T("multiplayer.room.stopped");
     }
 
     private void StopSession()

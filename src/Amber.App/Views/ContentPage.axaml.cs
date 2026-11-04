@@ -1,4 +1,5 @@
 using Amber.App.ViewModels;
+using Amber.Core.Localization;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -20,8 +21,8 @@ public partial class ContentPage : UserControl
         if (DataContext is not ContentViewModel vm || TopLevel.GetTopLevel(this) is not { } top) return;
         var files = await top.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "选择整合包（mrpack、CurseForge、MultiMC / Prism、HMCL、MCBBS）",
-            FileTypeFilter = [new FilePickerFileType("整合包") { Patterns = ["*.mrpack", "*.zip"] }],
+            Title = L.T("content.modpack.picker"),
+            FileTypeFilter = [new FilePickerFileType(L.T("content.type.modpack")) { Patterns = ["*.mrpack", "*.zip"] }],
         });
         if (files.Count > 0 && files[0].TryGetLocalPath() is { } path) await vm.ImportLocalPackAsync(path);
     }

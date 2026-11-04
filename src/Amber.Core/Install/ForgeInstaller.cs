@@ -278,6 +278,9 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
 
 public sealed class ForgeInstaller(LoaderContext ctx) : ForgeLikeInstaller(ctx)
 {
+    /// <summary>加载器版本列表里“推荐”那一版的备注（界面按它选默认版本）。</summary>
+    public const string RecommendedNote = "推荐";
+
     private const string MetadataUrl = "https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.json";
     private const string PromotionsUrl = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json";
 
@@ -299,7 +302,7 @@ public sealed class ForgeInstaller(LoaderContext ctx) : ForgeLikeInstaller(ctx)
             foreach (var p in promos.RootElement.GetProperty("promos").EnumerateObject())
             {
                 if (!p.Name.StartsWith(mcVersion + "-", StringComparison.Ordinal)) continue;
-                notes[p.Value.GetString()!] = p.Name.EndsWith("recommended", StringComparison.Ordinal) ? "推荐" : "最新";
+                notes[p.Value.GetString()!] = p.Name.EndsWith("recommended", StringComparison.Ordinal) ? RecommendedNote : "最新";
             }
         }
         catch (Exception e) when (e is HttpRequestException or JsonException or KeyNotFoundException) { }
