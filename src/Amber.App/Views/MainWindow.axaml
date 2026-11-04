@@ -27,7 +27,7 @@
         <ScrollViewer Grid.Row="1">
           <StackPanel Margin="0,0,14,0">
             <Border Classes="card">
-              <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+              <Grid ColumnDefinitions="120,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
                 <TextBlock Text="游戏目录" VerticalAlignment="Center" />
                 <TextBox Grid.Column="1" Text="{Binding GameDirectory}" />
                 <Button Grid.Column="2" Content="浏览…" Margin="8,0,0,0" Click="BrowseGameDir_Click" />
@@ -38,6 +38,9 @@
 
                 <TextBlock Grid.Row="2" Text="同时下载" VerticalAlignment="Center" Margin="0,12,0,0" />
                 <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Concurrency}" Width="90" HorizontalAlignment="Left" Margin="0,12,0,0" />
+
+                <TextBlock Grid.Row="5" Text="语言 / Language" VerticalAlignment="Center" Margin="0,12,0,0" />
+                <ComboBox Grid.Row="5" Grid.Column="1" ItemsSource="{Binding LanguageOptions}" SelectedIndex="{Binding SelectedLanguageIndex}" MinWidth="160" Margin="0,12,0,0" />
 
                 <TextBlock Grid.Row="4" Text="主题" VerticalAlignment="Center" Margin="0,12,0,0" />
                 <ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{Binding ThemeOptions}" SelectedIndex="{Binding SelectedThemeIndex}" MinWidth="160" Margin="0,12,0,0" />

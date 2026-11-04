@@ -12,6 +12,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 界面文字：每种语言一个 JSON，嵌进程序集（Native AOT 版本也能读） -->
+    <EmbeddedResource Include="Localization\*.json" LogicalName="Amber.Core.Localization.%(Filename).json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="Amber.Core.Tests" />
   </ItemGroup>
 

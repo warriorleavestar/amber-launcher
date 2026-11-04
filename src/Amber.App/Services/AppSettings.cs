@@ -47,6 +47,9 @@ public sealed class AppSettings
     /// <summary>system / light / dark</summary>
     public string Theme { get; set; } = "system";
 
+    /// <summary>界面语言：zh-Hans / zh-Hant / en / ja；null 表示跟随系统。</summary>
+    public string? Language { get; set; }
+
     /// <summary>启动器窗口上次的位置和大小（逻辑像素，按当时那块屏幕记）。</summary>
     public WindowPlacement? LauncherWindow { get; set; }
 

@@ -34,6 +34,7 @@ public sealed class App : Application
         {
             var settings = AppSettings.Load();
             ApplyTheme(settings.Theme);
+            Amber.Core.Localization.L.SetLanguage(settings.Language);
             var service = new LauncherService(settings);
             var viewModel = new MainViewModel(service);
             StartupTrace.Mark("viewmodels");

@@ -12,6 +12,12 @@ namespace Amber.App.ViewModels;
 
 public abstract class PageViewModel : ObservableObject
 {
+    protected PageViewModel()
+    {
+        // 换语言时让这个页面的所有绑定重新取值（标题、下拉选项这些在 C# 里生成的文字跟着换）。
+        Amber.Core.Localization.L.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(() => OnPropertyChanged((string?)null));
+    }
+
     public abstract string Title { get; }
 
     /// <summary>导航图标的路径数据（24×24）。</summary>
@@ -180,6 +186,22 @@ public sealed partial class SettingsViewModel : PageViewModel
         CurseForgeRoot = s.CurseForgeApiRoot ?? "";
         UpdateFeed = s.UpdateFeedUrl ?? "";
         SelectedThemeIndex = Math.Max(0, Array.IndexOf(ThemeKeys, s.Theme));
+        SelectedLanguageIndex = Math.Max(0, Array.IndexOf(LanguageKeys, s.Language ?? "system"));
+    }
+
+    /// <summary>界面语言：第一项跟随系统，其余每种语言用自己的文字写名字（不管现在是什么语言都认得出来）。</summary>
+    public string[] LanguageOptions { get; } = ["跟随系统 / System", .. Amber.Core.Localization.L.Languages.Select(l => l.Name)];
+    private static readonly string[] LanguageKeys = ["system", .. Amber.Core.Localization.L.Languages.Select(l => l.Code)];
+
+    [ObservableProperty] public partial int SelectedLanguageIndex { get; set; }
+
+    /// <summary>选了就立刻换（不用点保存），同时记进设置。</summary>
+    partial void OnSelectedLanguageIndexChanged(int value)
+    {
+        var code = LanguageKeys[Math.Clamp(value, 0, LanguageKeys.Length - 1)];
+        _service.Settings.Language = code == "system" ? null : code;
+        Amber.Core.Localization.L.SetLanguage(_service.Settings.Language);
+        try { _service.Settings.Save(); } catch (IOException) { }
     }
 
     protected override void OnFirstActivated() => _ = LoadJavaAsync(false);
