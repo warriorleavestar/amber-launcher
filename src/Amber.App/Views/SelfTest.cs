@@ -472,7 +472,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         host.AllowGameProxy = true;
         host.ManualPort = gamePort.ToString();
         await host.CreateRoomCommand.ExecuteAsync(null);
-        Check("封装：创建高加密 + 伪装的房间", host.IsHosting && host.RoomCodeText.EndsWith("-T2D", StringComparison.Ordinal) && host.TransportText.Contains("高加密"), host.TransportText + " / " + host.Status);
+        Check("封装：创建高加密 + 伪装的房间", host.IsHosting && host.RoomCodeText.StartsWith("AMB-T2D-", StringComparison.Ordinal) && host.TransportText.Contains("高加密"), host.TransportText + " / " + host.Status);
         guest.JoinCode = host.RoomCodeText;
         guest.JoinCommand.Execute(null);
         Check("封装：加入方按房间码用同样的封装", guest.IsJoined && guest.TransportText.Contains("高加密") && guest.TransportText.Contains("伪装"), guest.TransportText);
