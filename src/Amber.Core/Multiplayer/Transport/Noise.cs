@@ -17,6 +17,7 @@ public sealed class CipherState
     public const int KeyLength = 32;
     public const int TagLength = 16;
     private byte[]? _k;
+    private ChaCha20Poly1305? _aead;
     private ulong _n;
 
     public bool HasKey => _k is not null;
@@ -25,6 +26,8 @@ public sealed class CipherState
     public void InitializeKey(byte[]? key)
     {
         _k = key;
+        _aead?.Dispose();
+        _aead = key is null ? null : new ChaCha20Poly1305(key);
         _n = 0;
     }
 
@@ -44,8 +47,7 @@ public sealed class CipherState
         // 2^64-1 留给 Rekey 用，不能拿来加密。
         if (_n == ulong.MaxValue) throw new CryptographicException("nonce 用完了，必须换钥");
         var output = new byte[plaintext.Length + TagLength];
-        using (var aead = new ChaCha20Poly1305(_k))
-            aead.Encrypt(NonceBytes(_n), plaintext, output.AsSpan(0, plaintext.Length), output.AsSpan(plaintext.Length), ad);
+        _aead!.Encrypt(NonceBytes(_n), plaintext, output.AsSpan(0, plaintext.Length), output.AsSpan(plaintext.Length), ad);
         _n++;
         return output;
     }
@@ -57,8 +59,7 @@ public sealed class CipherState
         if (_n == ulong.MaxValue) throw new CryptographicException("nonce 用完了，必须换钥");
         if (ciphertext.Length < TagLength) throw new CryptographicException("密文太短");
         var plain = new byte[ciphertext.Length - TagLength];
-        using (var aead = new ChaCha20Poly1305(_k))
-            aead.Decrypt(NonceBytes(_n), ciphertext[..plain.Length], ciphertext[plain.Length..], plain, ad);
+        _aead!.Decrypt(NonceBytes(_n), ciphertext[..plain.Length], ciphertext[plain.Length..], plain, ad);
         _n++;
         return plain;
     }
@@ -70,9 +71,11 @@ public sealed class CipherState
         var zeros = new byte[KeyLength];
         var output = new byte[KeyLength];
         var tag = new byte[TagLength];
-        using (var aead = new ChaCha20Poly1305(_k)) aead.Encrypt(NonceBytes(ulong.MaxValue), zeros, output, tag);
+        _aead!.Encrypt(NonceBytes(ulong.MaxValue), zeros, output, tag);
         CryptographicOperations.ZeroMemory(_k);
-        _k = output;
+        var n = _n;
+        InitializeKey(output);
+        _n = n;
     }
 }
 

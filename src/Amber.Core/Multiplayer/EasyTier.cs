@@ -99,7 +99,19 @@ public sealed record EasyTierOptions(
     bool AllowExit = false,
     string? ExitNode = null,
     IReadOnlyList<string>? ExtraArgs = null,
-    IReadOnlyList<(int Local, int Remote)>? ExtraForwards = null);
+    IReadOnlyList<(int Local, int Remote)>? ExtraForwards = null)
+{
+    /// <summary>封装模式下加入方：本机这个端口经 EasyTier 转发到房主的封装端口（游戏和聊天都走它）。</summary>
+    public int? LocalTunnelPort { get; init; }
+    /// <summary>允许房间里的人经自己“仅游戏”转发（只开 SOCKS5，不用建网卡）。</summary>
+    public bool AllowProxy { get; init; }
+    /// <summary>“仅游戏”转发经过的成员（虚拟 IP）。</summary>
+    public string? ProxyExit { get; init; }
+    /// <summary>本机给游戏用的 SOCKS5 端口。</summary>
+    public int? LocalSocksPort { get; init; }
+    /// <summary>不建网卡时：本机这个端口经 EasyTier 转发到出口成员的封装 / SOCKS5 端口。</summary>
+    public int? LocalExitPort { get; init; }
+}
 
 public static class EasyTierArgs
 {
@@ -145,12 +157,25 @@ public static class EasyTierArgs
         // EasyTier 默认把出站连接绑到物理网卡上，连本机回环地址会报 10049；节点在本机时（自测、或者节点和游戏在同一台电脑）关掉绑定。
         if (o.Peers.Concat(o.Listeners ?? []).Any(IsLoopback)) args.AddRange(["--bind-device", "false"]);
         if (o.ExtraArgs is { } extra) args.AddRange(extra);
-        if (!o.IsHost && !o.Tun)
+        if (!o.IsHost && !o.Tun && o.Room.Tunnel.Wraps)
+        {
+            // 封装模式：游戏和聊天都由 Amber 先封装，再经这一个转发连到房主的封装端口。
+            var tunnel = o.LocalTunnelPort ?? throw new ArgumentException("加入方需要封装通道的本机转发端口");
+            args.AddRange(["--port-forward", $"tcp://127.0.0.1:{tunnel}/{HostIp}:{Transport.TunnelSettings.Port}"]);
+        }
+        else if (!o.IsHost && !o.Tun)
         {
             var local = o.LocalForwardPort ?? throw new ArgumentException("加入方需要本机转发端口");
             args.AddRange(["--port-forward", $"tcp://127.0.0.1:{local}/{HostIp}:{o.Room.Port}"]);
             // 房间聊天：本机另一个端口转发到房主的聊天服务。
             if (o.LocalChatPort is { } chat) args.AddRange(["--port-forward", $"tcp://127.0.0.1:{chat}/{HostIp}:{RoomChat.Port}"]);
+        }
+        if (!o.Tun && o.ProxyExit is { } proxyExit)
+        {
+            if (!System.Net.IPAddress.TryParse(proxyExit, out _) || !proxyExit.StartsWith(Subnet, StringComparison.Ordinal)) throw new ArgumentException($"转发出口必须是房间里成员的虚拟 IP：{proxyExit}");
+            var exitLocal = o.LocalExitPort ?? throw new ArgumentException("转发需要出口的本机转发端口");
+            var exitPort = o.Room.Tunnel.Wraps ? Transport.TunnelSettings.Port : Transport.TunnelSettings.PlainSocksPort;
+            args.AddRange(["--port-forward", $"tcp://127.0.0.1:{exitLocal}/{proxyExit}:{exitPort}"]);
         }
         if (!o.IsHost)
         {
@@ -158,6 +183,9 @@ public static class EasyTierArgs
         }
         return args;
     }
+
+    /// <summary>这次会话里本机的虚拟 IP。</summary>
+    public static string VirtualIp(EasyTierOptions o) => o.IsHost ? HostIp : Subnet + JoinerHost(o.MachineId);
 
     private static bool IsLoopback(string url) =>
         Uri.TryCreate(url.Trim(), UriKind.Absolute, out var u) && (u.IsLoopback || u.Host == "localhost");

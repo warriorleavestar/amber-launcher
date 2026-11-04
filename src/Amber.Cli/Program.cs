@@ -380,11 +380,19 @@ try
             var peers = TakeAll(argList, "--peer");
             var listen = TakeAll(argList, "--listen");
             var seconds = int.Parse(TakeOption(argList, "--seconds") ?? "0");
+            // 封装模式：--transport 0..3（通用 / MC 专用 / 高加密 / 极端加密），--disguise 伪装成 MC。
+            var transportMode = TakeOption(argList, "--transport") is { } tm ? (Amber.Core.Multiplayer.Transport.TransportMode)int.Parse(tm) : Amber.Core.Multiplayer.Transport.TransportMode.General;
+            var disguise = argList.Remove("--disguise");
+            var allowProxy = argList.Remove("--allow-proxy");
+            var proxyExit = TakeOption(argList, "--proxy-exit");
+            // --echo：房主在游戏端口上开一个回显服务代替游戏；--probe N：加入方连上后测 N 次往返延迟和一次吞吐。
+            var echo = argList.Remove("--echo");
+            var probe = int.Parse(TakeOption(argList, "--probe") ?? "0");
             RoomCode room;
             int? local = null;
             if (host)
             {
-                room = RoomCode.Create(int.Parse(argList[1]));
+                room = RoomCode.Create(int.Parse(argList[1])) with { Tunnel = new Amber.Core.Multiplayer.Transport.TunnelSettings(transportMode, disguise) };
             }
             else
             {
@@ -396,8 +404,18 @@ try
             // --peer none：不连任何节点（本机测试时房主只开监听）。
             List<string> effectivePeers = peers.Contains("none") ? [] : peers.Count > 0 ? peers : EasyTierRelease.DefaultPeers.ToList();
             var options = new EasyTierOptions(room, host, effectivePeers, EasyTierArgs.FreeTcpPort(), local,
-                listen.Count > 0 ? listen : null, Guid.NewGuid().ToString());
+                listen.Count > 0 ? listen : null, Guid.NewGuid().ToString(), LocalChatPort: host ? null : EasyTierArgs.FreeTcpPort())
+            {
+                LocalTunnelPort = !host && room.Tunnel.Wraps ? EasyTierArgs.FreeTcpPort() : null,
+                AllowProxy = allowProxy,
+                ProxyExit = proxyExit,
+                LocalSocksPort = proxyExit is null ? null : EasyTierArgs.FreeTcpPort(),
+                LocalExitPort = proxyExit is null ? null : EasyTierArgs.FreeTcpPort(),
+            };
+            using var echoServer = host && echo ? EchoServer.Start(room.Port) : null;
             using var session = EasyTierSession.Start(et, options, Path.Combine(AmberDataDir(), "easytier", "run-cli-" + options.RpcPort));
+            await using var transport = Amber.Core.Multiplayer.Transport.RoomTransport.Start(options, l => Console.WriteLine("  tunnel| " + l));
+            Console.WriteLine($"TRANSPORT {room.Tunnel.Mode} disguise={room.Tunnel.Disguise} server={transport.Server?.Port.ToString() ?? "-"} socks={transport.Socks?.Port.ToString() ?? "-"}");
             if (Environment.GetEnvironmentVariable("AMBER_ET_VERBOSE") == "1") session.Output += l => Console.WriteLine("  et| " + l);
             Console.WriteLine($"RPC {options.RpcPort}");
             Console.WriteLine($"CLI {et.CliPath}");
@@ -412,6 +430,20 @@ try
                     await Task.Delay(3000, stop.Token);
                     var list = await session.PeersAsync(stop.Token);
                     Console.WriteLine($"PEERS {list.Count}: " + string.Join("; ", list.Select(p => $"{p.Hostname} {p.Ip} {p.Cost} {p.LatencyMs}ms {p.Tunnel}")));
+                    if (probe > 0 && local is { } probePort && list.Count > 0)
+                    {
+                        try
+                        {
+                            Console.WriteLine("PROBE " + await EchoServer.ProbeAsync(probePort, probe, stop.Token));
+                            probe = 0;
+                        }
+                        catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException)
+                        {
+                            Console.WriteLine("PROBE 还连不上：" + e.Message);
+                        }
+                    }
+                    if (transport.Socks is { } sx) Console.WriteLine($"SOCKS 127.0.0.1:{sx.Port} 连接 {sx.Connections} 失败 {sx.Failures}");
+                    if (transport.Server is { } sv) Console.WriteLine($"TUNNEL-SERVER 接受 {sv.Accepted} 拒绝 {sv.Rejected}");
                 }
                 Console.WriteLine("easytier-core 退出了：");
                 foreach (var l in session.RecentOutput.TakeLast(20)) Console.WriteLine("  " + l);
@@ -566,4 +598,85 @@ static string? TakeOption(List<string> list, string name)
 sealed class SyncProgress<T>(Action<T> action) : IProgress<T>
 {
     public void Report(T value) => action(value);
+}
+
+
+/// <summary>测试用的回显服务（代替游戏）和延迟 / 吞吐测量。</summary>
+internal sealed class EchoServer : IDisposable
+{
+    private readonly System.Net.Sockets.TcpListener _listener;
+    private readonly CancellationTokenSource _cts = new();
+
+    private EchoServer(int port)
+    {
+        _listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, port);
+        _listener.Start();
+        _ = LoopAsync();
+    }
+
+    public static EchoServer Start(int port) => new(port);
+
+    private async Task LoopAsync()
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            System.Net.Sockets.TcpClient c;
+            try { c = await _listener.AcceptTcpClientAsync(_cts.Token); } catch (Exception) { return; }
+            _ = Task.Run(async () =>
+            {
+                using (c)
+                {
+                    c.NoDelay = true;
+                    try { await c.GetStream().CopyToAsync(c.GetStream(), _cts.Token); } catch (Exception) { }
+                }
+            });
+        }
+    }
+
+    /// <summary>经本机端口连到回显服务：count 次 64 字节往返的中位数 / p95，再测 8 MB 的往返吞吐。</summary>
+    public static async Task<string> ProbeAsync(int port, int count, CancellationToken ct)
+    {
+        using var c = new System.Net.Sockets.TcpClient();
+        await c.ConnectAsync(System.Net.IPAddress.Loopback, port, ct);
+        c.NoDelay = true;
+        var s = c.GetStream();
+        var buf = new byte[64];
+        var rtts = new List<double>();
+        for (var i = 0; i < count; i++)
+        {
+            var w = System.Diagnostics.Stopwatch.StartNew();
+            await s.WriteAsync(buf, ct);
+            var read = 0;
+            while (read < buf.Length)
+            {
+                var n = await s.ReadAsync(buf.AsMemory(read), ct);
+                if (n == 0) throw new IOException("连接被关闭");
+                read += n;
+            }
+            rtts.Add(w.Elapsed.TotalMilliseconds);
+        }
+        rtts.Sort();
+        var data = new byte[8 * 1024 * 1024];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(data);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var writer = Task.Run(async () => { await s.WriteAsync(data, ct); });
+        var got = new byte[data.Length];
+        var total = 0;
+        while (total < got.Length)
+        {
+            var n = await s.ReadAsync(got.AsMemory(total), ct);
+            if (n == 0) throw new IOException("连接被关闭");
+            total += n;
+        }
+        await writer;
+        var seconds = watch.Elapsed.TotalSeconds;
+        var ok = data.AsSpan().SequenceEqual(got);
+        return $"往返中位数 {rtts[rtts.Count / 2]:F2} ms p95 {rtts[(int)(rtts.Count * 0.95)]:F2} ms；8 MB 往返 {seconds:F2} s（{8 / seconds:F1} MB/s）数据一致 {ok}";
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _listener.Stop();
+    }
 }

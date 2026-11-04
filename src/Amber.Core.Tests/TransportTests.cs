@@ -367,3 +367,104 @@ public class TunnelTests
         }
     }
 }
+
+public class ForwardingTests
+{
+    [Theory]
+    [InlineData("8.8.8.8", true)]
+    [InlineData("2606:4700:4700::1111", true)]
+    [InlineData("127.0.0.1", false)]
+    [InlineData("10.233.144.1", false)]
+    [InlineData("192.168.1.10", false)]
+    [InlineData("172.20.0.5", false)]
+    [InlineData("169.254.1.1", false)]
+    [InlineData("100.64.0.1", false)]
+    [InlineData("224.0.0.251", false)]
+    [InlineData("::1", false)]
+    [InlineData("fe80::1", false)]
+    [InlineData("fd00::1", false)]
+    [InlineData("::ffff:192.168.0.1", false)]
+    public void OnlyPublicDestinationsAreForwarded(string address, bool allowed) =>
+        Assert.Equal(allowed, Socks5.IsPublic(System.Net.IPAddress.Parse(address)));
+
+    [Fact]
+    public async Task RelayRewritesHandshakeAndKeepsForgeMarker()
+    {
+        // 假的 MC 服务器：读第一个包，把里面的地址发回来。
+        var server = new TcpListener(IPAddress.Loopback, 0);
+        server.Start();
+        var serverPort = ((IPEndPoint)server.LocalEndpoint).Port;
+        var seen = new TaskCompletionSource<string>();
+        _ = Task.Run(async () =>
+        {
+            using var c = await server.AcceptTcpClientAsync();
+            var p = new McDisguise.PacketReader(await McDisguise.ReadPacketAsync(c.GetStream(), default));
+            p.VarInt();
+            p.VarInt();
+            var address = p.String(255);
+            var port = p.UShort();
+            seen.SetResult($"{address}|{port}");
+            await c.GetStream().WriteAsync("ok"u8.ToArray());
+        });
+
+        // 出口这边的 SOCKS5（测试里允许连回环），经一对内存里的 TCP 连接接到加入方的转发。
+        var exit = new TcpListener(IPAddress.Loopback, 0);
+        exit.Start();
+        var exitPort = ((IPEndPoint)exit.LocalEndpoint).Port;
+        _ = Task.Run(async () =>
+        {
+            using var c = await exit.AcceptTcpClientAsync();
+            await Socks5.ServeAsync(c.GetStream(), default, allow: _ => true);
+        });
+        Func<CancellationToken, Task<Stream>> open = async ct =>
+        {
+            var t = new TcpClient();
+            await t.ConnectAsync(IPAddress.Loopback, exitPort, ct);
+            return t.GetStream();
+        };
+        await using var relay = new TunnelClient(0, open, prepare: McHandshakeRewriter.ViaSocks("127.0.0.1", serverPort));
+
+        using var game = new TcpClient();
+        await game.ConnectAsync(IPAddress.Loopback, relay.Port);
+        var hs = new McDisguise.PacketWriter().VarInt(0).VarInt(767).String("127.0.0.1\0FML3\0").UShort((ushort)relay.Port).VarInt(2).ToPacket();
+        await game.GetStream().WriteAsync(hs);
+        Assert.Equal($"127.0.0.1\0FML3\0|{serverPort}", await seen.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        var reply = new byte[2];
+        Assert.True(await SecureStream.ReadExactAsync(game.GetStream(), reply, default));
+        Assert.Equal("ok"u8.ToArray(), reply);
+        server.Stop();
+        exit.Stop();
+    }
+
+    [Fact]
+    public async Task SocksRefusesPrivateTargetsWithReason()
+    {
+        var exit = new TcpListener(IPAddress.Loopback, 0);
+        exit.Start();
+        var port = ((IPEndPoint)exit.LocalEndpoint).Port;
+        _ = Task.Run(async () =>
+        {
+            using var c = await exit.AcceptTcpClientAsync();
+            await Socks5.ServeAsync(c.GetStream(), default);
+        });
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port);
+        var e = await Assert.ThrowsAsync<IOException>(() => Socks5.ConnectAsync(client.GetStream(), "192.168.0.1", 80, default));
+        Assert.Contains("局域网", e.Message);
+        exit.Stop();
+    }
+
+    [Fact]
+    public void RoomCodeCarriesTransport()
+    {
+        var room = RoomCode.Create(25565) with { Tunnel = new TunnelSettings(TransportMode.Extreme, true) };
+        Assert.EndsWith("-25565-T3D", room.ToString());
+        Assert.True(RoomCode.TryParse("朋友发来的：" + room + " 快来", out var parsed));
+        Assert.Equal(room, parsed);
+        // 通用模式的房间码和以前完全一样，老版本也能用。
+        var plain = RoomCode.Create(25565);
+        Assert.Matches("^AMB-[0-9A-Z]{8}-[0-9A-Z]{12}-25565$", plain.ToString());
+        Assert.True(RoomCode.TryParse(plain.ToString(), out var p2));
+        Assert.Equal(TransportMode.General, p2.Tunnel.Mode);
+    }
+}
