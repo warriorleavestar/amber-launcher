@@ -42,6 +42,13 @@ jobs:
       - name: Publish (Native AOT)
         run: dotnet publish Amber.App -c Release -r win-x64 -p:PublishAot=true -p:DebugType=none -o ../out/aot
 
+      # 原生库（SkiaSharp 等）的 .pdb 调试符号不需要发出去。AOT 版是 4 个文件，另外打成一个 zip 方便下载。
+      - name: Package
+        shell: pwsh
+        run: |
+          Get-ChildItem ../out -Recurse -Filter *.pdb | Remove-Item
+          Compress-Archive -Path ../out/aot/* -DestinationPath ../out/Amber-win-x64-aot.zip
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: amber-r2r
@@ -52,4 +59,10 @@ jobs:
         with:
           name: amber-aot
           path: out/aot
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: amber-aot-zip
+          path: out/Amber-win-x64-aot.zip
           if-no-files-found: error

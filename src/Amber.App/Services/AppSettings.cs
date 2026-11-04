@@ -50,7 +50,7 @@ public sealed class AppSettings
     /// <summary>联机用的 EasyTier 中继节点，空表示用 EasyTier 社区的公共节点。</summary>
     public List<string>? MultiplayerPeers { get; set; }
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
@@ -101,3 +101,10 @@ public sealed class AppSettings
 
 [System.Text.Json.Serialization.JsonSerializable(typeof(AppSettings))]
 internal sealed partial class AppJsonContext : System.Text.Json.Serialization.JsonSerializerContext;
+
+/// <summary>测试用：比较新旧两种读写方式。</summary>
+internal static class AppSettingsJson
+{
+    internal static JsonSerializerOptions Options => AppSettings.JsonOptions;
+    internal static System.Text.Json.Serialization.Metadata.IJsonTypeInfoResolver Generated => AppJsonContext.Default;
+}

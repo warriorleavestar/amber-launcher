@@ -396,9 +396,10 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c) return;
         await RunWorkAsync(async ct =>
         {
-            var options = await OfflineLaunchOptionsAsync(c, ct);
-            var args = new GameLauncher(_service.Directory).BuildArguments(options);
-            Toolbox.WriteLaunchScript(path, options.JavaPath, c.WorkDir, args, options.Session.AccessToken);
+            // 脚本里的路径也要能被 Java 按当前系统语言读出来（和正式启动用同一套英文联接）。
+            var (launcher, options) = new GameLauncher(_service.Directory).ForCurrentCodePage(await OfflineLaunchOptionsAsync(c, ct));
+            var args = launcher.BuildArguments(options);
+            Toolbox.WriteLaunchScript(path, options.JavaPath, options.WorkingDirectory ?? launcher.GameDir.Root, args, options.Session.AccessToken);
             Status = "启动脚本已导出（离线身份）：" + path;
         });
     }
