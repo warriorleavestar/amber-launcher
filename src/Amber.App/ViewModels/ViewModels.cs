@@ -201,7 +201,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         SelectedThemeIndex = Math.Max(0, Array.IndexOf(ThemeKeys, s.Theme));
         // 启动时只把选单对上已经生效的语言，不再重新应用、不写设置文件。
         _initializing = true;
-        SelectedLanguageIndex = Math.Max(0, Array.IndexOf(LanguageKeys, s.Language ?? "system"));
+        SelectedLanguageIndex = Math.Max(0, Array.IndexOf(LanguageKeys, Amber.Core.Localization.L.Resolve(s.Language) ?? "system"));
         _initializing = false;
     }
 

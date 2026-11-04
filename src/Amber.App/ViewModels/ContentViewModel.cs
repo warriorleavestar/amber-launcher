@@ -24,21 +24,27 @@ public sealed partial class ProjectItem(ContentProject project) : ObservableObje
     [ObservableProperty]
     public partial Bitmap? Icon { get; set; }
 
-    /// <summary>下载数：中文和日文按“万 / 亿”，英文按 K / M / B。</summary>
-    private static string FormatCount(long n) => L.Language == "en"
-        ? n switch
+    /// <summary>下载数：中文和日文按“万 / 亿”，英文按 K / M / B。按当前界面语言的区域写数字。</summary>
+    internal static string FormatCount(long n) => L.Language == "en"
+        ? Compact(n, 1_000, [("K", 1_000), ("M", 1_000_000), ("B", 1_000_000_000)], (unit, v) => v.ToString("0.#", L.Culture) + unit)
+        : Compact(n, 10_000, [("content.count.ten_thousand", 10_000), ("content.count.hundred_million", 100_000_000)], (key, v) => L.F(key, v));
+
+    /// <summary>
+    /// 选单位：先按能用的最大单位四舍五入到一位小数，结果到了下一级（比如 999,960 → “1000.0K”）就换成下一级的单位。
+    /// </summary>
+    private static string Compact(long n, long first, (string Unit, long Size)[] units, Func<string, double, string> format)
+    {
+        if (n < first) return n.ToString("N0", L.Culture);
+        var index = units.Length - 1;
+        while (index > 0 && n < units[index].Size) index--;
+        var value = Math.Round(n / (double)units[index].Size, 1);
+        if (index + 1 < units.Length && value * units[index].Size >= units[index + 1].Size)
         {
-            >= 1_000_000_000 => $"{n / 1_000_000_000.0:0.#}B",
-            >= 1_000_000 => $"{n / 1_000_000.0:0.#}M",
-            >= 1_000 => $"{n / 1_000.0:0.#}K",
-            _ => n.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            index++;
+            value = Math.Round(n / (double)units[index].Size, 1);
         }
-        : n switch
-        {
-            >= 100_000_000 => L.F("content.count.hundred_million", n / 100_000_000.0),
-            >= 10_000 => L.F("content.count.ten_thousand", n / 10_000.0),
-            _ => n.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        };
+        return format(units[index].Unit, value);
+    }
 }
 
 public sealed record FileItem(ContentFile File)
