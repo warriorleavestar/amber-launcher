@@ -39,7 +39,7 @@ public partial class LocalizationTests
     [GeneratedRegex(@"\bSetIdleStatus\(\s*""([^""]+)""")]
     private static partial Regex IdleStatusKey();
 
-    [GeneratedRegex(@"\bL\.F\(\s*""([^""]+)""")]
+    [GeneratedRegex(@"\bL\.([FP])\(\s*""([^""]+)""")]
     private static partial Regex FormatCall();
 
     private static IEnumerable<string> UiFiles() =>
@@ -174,9 +174,13 @@ public partial class LocalizationTests
             foreach (Match m in FormatCall().Matches(text))
             {
                 if (CountArguments(text, m.Index + m.Length) is not { } count) continue;
+                // L.P 的第一个参数是数量（选单复数用），后面的才给文字。
+                if (m.Groups[1].Value == "P") count--;
+                var key = m.Groups[2].Value;
                 foreach (var (code, table) in tables)
-                    if (table.TryGetValue(m.Groups[1].Value, out var value) && MaxIndex(value) + 1 > count)
-                        bad.Add($"{Path.GetFileName(file)}: {m.Groups[1].Value} 传了 {count} 个参数，{code} 要 {MaxIndex(value) + 1} 个");
+                    foreach (var form in new[] { key, key + ".one", key + ".other" })
+                        if (table.TryGetValue(form, out var value) && MaxIndex(value) + 1 > count)
+                            bad.Add($"{Path.GetFileName(file)}: {form} 传了 {count} 个参数，{code} 要 {MaxIndex(value) + 1} 个");
             }
         }
         Assert.True(bad.Count == 0, string.Join("\n", bad.Distinct().Take(30)));

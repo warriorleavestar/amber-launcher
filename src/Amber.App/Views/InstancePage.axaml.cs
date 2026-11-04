@@ -13,27 +13,27 @@ public partial class InstancePage : UserControl
     private InstanceViewModel? Vm => DataContext as InstanceViewModel;
     private IStorageProvider? Storage => TopLevel.GetTopLevel(this)?.StorageProvider;
 
-    private async Task PickAndAddAsync(string title, string[] patterns, string? target)
+    private async Task PickAndAddAsync(string title, string filterName, string[] patterns, string? target)
     {
         if (Vm is not { } vm || Storage is not { } storage || target is null) return;
         var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = title,
             AllowMultiple = true,
-            FileTypeFilter = [new FilePickerFileType(title) { Patterns = patterns }],
+            FileTypeFilter = [new FilePickerFileType(filterName) { Patterns = patterns }],
         });
         var paths = files.Select(f => f.TryGetLocalPath()).OfType<string>().ToList();
         if (paths.Count > 0) vm.AddFiles(paths, target);
     }
 
     private async void AddMods_Click(object? sender, RoutedEventArgs e) =>
-        await PickAndAddAsync(L.T("instance.mods.picker"), ["*.jar", "*.zip"], Vm?.ModsDir);
+        await PickAndAddAsync(L.T("instance.mods.picker"), L.T("instance.picker.mods_filter"), ["*.jar", "*.zip"], Vm?.ModsDir);
 
     private async void AddResourcePacks_Click(object? sender, RoutedEventArgs e) =>
-        await PickAndAddAsync(L.T("instance.resourcepacks.picker"), ["*.zip"], Vm?.ResourcePacksDir);
+        await PickAndAddAsync(L.T("instance.resourcepacks.picker"), L.T("instance.picker.resourcepacks_filter"), ["*.zip"], Vm?.ResourcePacksDir);
 
     private async void AddShaderPacks_Click(object? sender, RoutedEventArgs e) =>
-        await PickAndAddAsync(L.T("instance.shaderpacks.picker"), ["*.zip"], Vm?.ShaderPacksDir);
+        await PickAndAddAsync(L.T("instance.shaderpacks.picker"), L.T("instance.picker.shaderpacks_filter"), ["*.zip"], Vm?.ShaderPacksDir);
 
     private async void AddDatapacks_Click(object? sender, RoutedEventArgs e)
     {
@@ -42,7 +42,7 @@ public partial class InstancePage : UserControl
         {
             Title = L.T("instance.datapacks.picker"),
             AllowMultiple = true,
-            FileTypeFilter = [new FilePickerFileType(L.T("instance.datapacks.title")) { Patterns = ["*.zip"] }],
+            FileTypeFilter = [new FilePickerFileType(L.T("instance.picker.datapacks_filter")) { Patterns = ["*.zip"] }],
         });
         var paths = files.Select(f => f.TryGetLocalPath()).OfType<string>().ToList();
         if (paths.Count > 0) vm.AddDatapacks(paths);

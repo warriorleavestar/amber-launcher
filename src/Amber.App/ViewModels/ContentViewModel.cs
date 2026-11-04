@@ -14,12 +14,12 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace Amber.App.ViewModels;
 
-public sealed partial class ProjectItem(ContentProject project) : ObservableObject
+public sealed partial class ProjectItem(ContentProject project) : LocalizedObservable
 {
     public ContentProject Project { get; } = project;
     public string Title => Project.Title;
     public string Summary => Project.Summary;
-    public string Meta => L.F("content.project.downloads", (Project.Author is null ? "" : Project.Author + " · "), FormatCount(Project.Downloads));
+    public string Meta => L.P("content.project.downloads", Project.Downloads, (Project.Author is null ? "" : Project.Author + " · "), FormatCount(Project.Downloads));
 
     [ObservableProperty]
     public partial Bitmap? Icon { get; set; }
@@ -47,14 +47,14 @@ public sealed partial class ProjectItem(ContentProject project) : ObservableObje
     }
 }
 
-public sealed record FileItem(ContentFile File)
+public sealed record FileItem(ContentFile File) : LocalizedRecord
 {
     public string Name => File.DisplayName;
     public string Meta => $"{ChannelText} · {File.Date.LocalDateTime:yyyy-MM-dd} · {string.Join(", ", File.Loaders)} · {string.Join(", ", File.GameVersions.Take(3))}{(File.GameVersions.Count > 3 ? "…" : "")}";
     private string ChannelText => File.Channel switch { "release" => L.T("download.filter.release"), "beta" => L.T("content.channel.beta"), "alpha" => L.T("content.channel.alpha"), var c => c };
 }
 
-public sealed record WorldChoice(WorldInfo World)
+public sealed record WorldChoice(WorldInfo World) : LocalizedRecord
 {
     public string Label => World.Name == World.FolderName ? World.Name : L.F("content.world.label", World.Name, World.FolderName);
 }
@@ -250,7 +250,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
                 Results.Add(item);
                 _ = LoadIconAsync(item);
             }
-            Status = result.Total == 0 ? L.T("content.search.no_results") : L.F("content.search.results", result.Total, Page + 1);
+            Status = result.Total == 0 ? L.T("content.search.no_results") : L.P("content.search.results", result.Total, result.Total, Page + 1);
         }
         catch (OperationCanceledException) { }
         catch (Exception e)
@@ -397,7 +397,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             }), _workCts.Token);
 
             await Ui.FlushAsync();
-            var extra = plan.Files.Count > 1 ? L.F("content.install.dependencies", plan.Files.Count - 1) : "";
+            var extra = plan.Files.Count > 1 ? L.P("content.install.dependencies", plan.Files.Count - 1, plan.Files.Count - 1) : "";
             var problems = plan.Problems.Count > 0 ? L.F("content.install.problems", string.Join(L.T("common.list_separator"), plan.Problems)) : "";
             var noLoader = CurrentType == ContentType.Mod && instance.Loader is null ? L.T("content.install.no_loader") : "";
             var where = IsDatapack ? L.F("content.install.world_target", instance.Id, world!.Label) : instance.Id;

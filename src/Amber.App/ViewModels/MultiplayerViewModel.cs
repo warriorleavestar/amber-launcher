@@ -1,3 +1,4 @@
+using Amber.App.Localization;
 using Amber.Core.Localization;
 using Amber.Core.Multiplayer.Transport;
 using System.Collections.ObjectModel;
@@ -13,7 +14,7 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace Amber.App.ViewModels;
 
-public sealed record LanGameItem(LanGame Game, string Source)
+public sealed record LanGameItem(LanGame Game, string Source) : LocalizedRecord
 {
     public string Label => L.F("multiplayer.lan.game_label", Game.Motd, Game.Port, Source);
 }
@@ -26,7 +27,7 @@ public sealed partial class NodeItem(string url) : ObservableObject
     public partial string LatencyText { get; set; } = "";
 }
 
-public sealed record ChatLine(ChatMessage Message, bool Mine)
+public sealed record ChatLine(ChatMessage Message, bool Mine) : LocalizedRecord
 {
     /// <summary>恢复的历史和新消息之间的分隔行。</summary>
     public bool IsSeparator { get; init; }
@@ -41,7 +42,21 @@ public sealed record ChatLine(ChatMessage Message, bool Mine)
     };
 }
 
-public sealed record PeerItem(PeerInfo Peer)
+/// <summary>联机页的数据封装选项。</summary>
+public sealed record TransportChoice(TransportMode Mode) : LocalizedRecord
+{
+    public string Label => L.T(Mode switch
+    {
+        TransportMode.Minecraft => "multiplayer.transport.mode.minecraft",
+        TransportMode.High => "multiplayer.transport.mode.high",
+        TransportMode.Extreme => "multiplayer.transport.mode.extreme",
+        _ => "multiplayer.transport.mode.general",
+    });
+    public string Detail => TransportProfile.Describe(Mode);
+    public override string ToString() => Label;
+}
+
+public sealed record PeerItem(PeerInfo Peer) : LocalizedRecord
 {
     public string Name => Peer.Cost == "Local" ? L.T("common.me") : Peer.Hostname switch
     {
@@ -127,19 +142,14 @@ public sealed partial class MultiplayerViewModel : PageViewModel
 
     // ---- 数据封装和“仅游戏”转发 ----
 
-    public sealed record TransportChoice(TransportMode Mode, string Label)
-    {
-        public string Detail => TransportProfile.Describe(Mode);
-        public override string ToString() => Label;
-    }
 
     /// <summary>极端加密要系统支持 ML-KEM（较新的 Windows 11）；不支持时不列出来。</summary>
     public IReadOnlyList<TransportChoice> TransportChoices { get; } =
     [
-        new(TransportMode.General, L.T("multiplayer.transport.mode.general")),
-        new(TransportMode.Minecraft, L.T("multiplayer.transport.mode.minecraft")),
-        new(TransportMode.High, L.T("multiplayer.transport.mode.high")),
-        .. NoiseHandshake.HybridSupported ? [new TransportChoice(TransportMode.Extreme, L.T("multiplayer.transport.mode.extreme"))] : Array.Empty<TransportChoice>(),
+        new(TransportMode.General),
+        new(TransportMode.Minecraft),
+        new(TransportMode.High),
+        .. NoiseHandshake.HybridSupported ? [new TransportChoice(TransportMode.Extreme)] : Array.Empty<TransportChoice>(),
     ];
 
     /// <summary>开房间时用的封装方式；加入时跟着房间码走。</summary>
@@ -406,7 +416,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         SaveNodes();
         ShareCodeText = "";
-        Status = name is null ? L.F("multiplayer.nodes.imported", added, "") : L.F("multiplayer.nodes.imported_named", added, name);
+        Status = name is null ? L.P("multiplayer.nodes.imported", added, added, "") : L.P("multiplayer.nodes.imported_named", added, added, name);
     }
 
     /// <summary>自检用：同一个程序里再开一个联机页（扮演加入方）。</summary>
@@ -825,7 +835,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
                 Status = host is null ? L.T("multiplayer.room.connecting_first_time")
                     : L.F("multiplayer.room.connected", (host.Peer.LatencyMs is { } ms ? L.F("multiplayer.room.latency", ms) : ""), JoinAddress);
             else if (IsHosting)
-                Status = Peers.Count(p => p.Peer.Ip != EasyTierArgs.HostIp) is var n and > 0 ? L.F("multiplayer.room.player_count", n) : L.T("multiplayer.room.waiting");
+                Status = Peers.Count(p => p.Peer.Ip != EasyTierArgs.HostIp) is var n and > 0 ? L.P("multiplayer.room.player_count", n, n) : L.T("multiplayer.room.waiting");
         }
         finally
         {

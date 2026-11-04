@@ -128,3 +128,33 @@ public sealed class OptionItem : ObservableObject
 
     public override string ToString() => Label;
 }
+
+/// <summary>
+/// 列表行这类对象的基类：换语言时发 PropertyChanged("")，界面上绑定的所有属性都重新取一次（文字是按当前语言算出来的属性）。
+/// 只被弱引用着，列表清掉之后正常回收。
+/// </summary>
+public abstract class LocalizedObservable : ObservableObject
+{
+    protected LocalizedObservable() => LanguageListeners.Add(this, static o => ((LocalizedObservable)o).OnPropertyChanged(string.Empty));
+}
+
+/// <summary>
+/// 同上，给 record 用（列表项、下拉框选项）。相等比较只看派生 record 自己的字段，不比较事件。
+/// </summary>
+public abstract record LocalizedRecord : System.ComponentModel.INotifyPropertyChanged
+{
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    protected LocalizedRecord() => Track();
+
+    /// <summary>with 表达式复制出来的新对象也要单独登记，事件不跟着复制。</summary>
+    protected LocalizedRecord(LocalizedRecord original) => Track();
+
+    private void Track() => LanguageListeners.Add(this, static o => ((LocalizedRecord)o).Raise());
+
+    private void Raise() => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(string.Empty));
+
+    public virtual bool Equals(LocalizedRecord? other) => other is not null && EqualityContract == other.EqualityContract;
+
+    public override int GetHashCode() => EqualityContract.GetHashCode();
+}

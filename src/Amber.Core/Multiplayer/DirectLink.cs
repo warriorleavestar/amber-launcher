@@ -160,7 +160,9 @@ public static class DirectGatherer
 
         var watch = Stopwatch.StartNew();
         var stun = await Stun.DetectAsync(socket, stunServers, ct);
-        log(L.F("core.mp.gather.stun", watch.ElapsedMilliseconds, stun.Detail, stun.Mapped is { } m ? L.T("core.mp.gather.external") + m : ""));
+        log(stun.Mapped is { } m
+            ? L.F("core.mp.gather.stun_external", watch.ElapsedMilliseconds, stun.Detail, m)
+            : L.F("core.mp.gather.stun", watch.ElapsedMilliseconds, stun.Detail));
         if (stun.Mapped is { } reported) Transport.ExitPolicy.ReportPublicAddress(reported.Address);
         if (stun.Mapped is { } mapped && mapped.AddressFamily == AddressFamily.InterNetwork)
             list.Add(new Candidate(PathKind.Punch, mapped));
@@ -287,7 +289,9 @@ public sealed class DirectBridge : IAsyncDisposable
         var targets = remote.Where(c => AllowedPaths.Contains(c.Kind)).ToList();
         var spray = AllowedPaths.Contains(PathKind.PunchSpray) && remoteNat == NatKind.Symmetric
                     && remote.FirstOrDefault(c => c.Kind == PathKind.Punch) is { } punch ? punch.EndPoint : null;
-        _log(L.F("core.mp.punch.start", targets.Count) + (spray is null ? "" : L.F("core.mp.punch.spray", spray.Address, SprayPorts)));
+        var startMessage = L.P("core.mp.punch.start", targets.Count, targets.Count);
+        _log(spray is null ? startMessage : L.F("core.mp.punch.start_spray", startMessage,
+            L.P("core.mp.punch.spray", SprayPorts, spray.Address, SprayPorts)));
         foreach (var t in targets) _log(L.T("core.mp.punch.try") + t);
         var known = _peers.Count;
         var start = _clock.ElapsedMilliseconds;
@@ -319,7 +323,7 @@ public sealed class DirectBridge : IAsyncDisposable
                 var newest = _peers.Values.Where(p => p.ConnectedMs >= start).OrderBy(p => p.ConnectedMs).FirstOrDefault();
                 if (newest is not null && (!_isHost || _peers.Count > known))
                 {
-                    _log(L.F("core.mp.punch.success", DirectText.Path(newest.Path), newest.Remote, newest.ConnectedMs - start, sent));
+                    _log(L.P("core.mp.punch.success", sent, DirectText.Path(newest.Path), newest.Remote, newest.ConnectedMs - start, sent));
                     return newest;
                 }
                 await Task.Delay(tick < 20 ? 100 : 300, limit.Token);
@@ -329,7 +333,7 @@ public sealed class DirectBridge : IAsyncDisposable
         {
             // 超时。
         }
-        _log(L.F("core.mp.punch.timeout", timeout.TotalSeconds, sent));
+        _log(L.P("core.mp.punch.timeout", (long)Math.Round(timeout.TotalSeconds), timeout.TotalSeconds, sent));
         return null;
     }
 

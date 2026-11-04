@@ -10,7 +10,7 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace Amber.App.ViewModels;
 
-public sealed partial class AccountItem(Account account) : ObservableObject
+public sealed partial class AccountItem(Account account) : LocalizedObservable
 {
     public Account Account { get; } = account;
     public string Name => Account.Name;

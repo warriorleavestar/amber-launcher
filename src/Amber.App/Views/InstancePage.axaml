@@ -144,7 +144,7 @@
                       <TextBlock Text="{Binding Meta}" Classes="hint" FontSize="11" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                     <WrapPanel Grid.Column="1" ItemSpacing="6" LineSpacing="4" VerticalAlignment="Center" MaxWidth="300">
-                      <Button Content="{l:T common.enter}" IsVisible="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).SupportsQuickPlay}"
+                      <Button Content="{l:T common.play}" IsVisible="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).SupportsQuickPlay}"
                               Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).JoinWorldCommand}" CommandParameter="{Binding}" />
                       <Button Content="{l:T instance.datapacks.title}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).ShowDatapacksCommand}" CommandParameter="{Binding}" />
                       <Button Content="{l:T common.backup}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).BackupWorldCommand}" CommandParameter="{Binding}" />
@@ -156,7 +156,7 @@
               </ListBox.ItemTemplate>
             </ListBox>
             <Border Grid.Row="2" IsVisible="{Binding HasDatapackWorld}" BorderBrush="{DynamicResource PageBackground}" BorderThickness="0,1,0,0" Padding="0,8,0,0" Margin="0,6,0,0">
-              <Grid RowDefinitions="Auto,Auto,Auto" MaxHeight="260">
+              <Grid RowDefinitions="Auto,*" MaxHeight="260">
                 <StackPanel Spacing="6">
                   <TextBlock Text="{Binding DatapackTitle}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                   <WrapPanel ItemSpacing="6" LineSpacing="6">
@@ -166,9 +166,11 @@
                     <Button Content="{l:T common.collapse}" Command="{Binding CloseDatapacksCommand}" />
                   </WrapPanel>
                 </StackPanel>
-                <TextBlock Grid.Row="1" Classes="hint" FontSize="12" Margin="0,4" TextWrapping="Wrap"
-                           Text="{l:T instance.datapacks.hint}" />
-                <ScrollViewer Grid.Row="2">
+                <!-- 说明和列表一起滚动：小窗口、长译文时不会把面板撑出窗口。 -->
+                <ScrollViewer Grid.Row="1">
+                  <StackPanel>
+                  <TextBlock Classes="hint" FontSize="12" Margin="0,4" TextWrapping="Wrap"
+                             Text="{l:T instance.datapacks.hint}" />
                   <ItemsControl ItemsSource="{Binding Datapacks}">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate DataType="vm:DatapackItem">
@@ -184,6 +186,7 @@
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
+                  </StackPanel>
                 </ScrollViewer>
               </Grid>
             </Border>
@@ -275,7 +278,7 @@
                       <TextBlock Classes="hint" FontSize="11" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                      <Button Content="{l:T common.enter}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).JoinServerNowCommand}" CommandParameter="{Binding}" />
+                      <Button Content="{l:T common.connect}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).JoinServerNowCommand}" CommandParameter="{Binding}" />
                       <Button Content="{l:T common.remove}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).RemoveServerCommand}" CommandParameter="{Binding}" />
                     </StackPanel>
                   </Grid>

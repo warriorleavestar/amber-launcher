@@ -56,6 +56,15 @@ public sealed partial class HomeViewModel : PageViewModel
     private bool _stoppedByUser;
     private List<string> _lastRunFiles = [];
     private bool _refreshingAccounts;
+    private (string WorkDir, DateTime Started, string[] Output)? _crashInput;
+
+    protected override void OnLanguageChanged()
+    {
+        if (Crash is null || _crashInput is not { } input) return;
+        _ = Task.Run(() => CrashAnalyzer.AnalyzeRun(input.WorkDir, input.Started, input.Output)).ContinueWith(
+            t => { if (t.IsCompletedSuccessfully && Crash is not null) Crash = t.Result; },
+            TaskScheduler.FromCurrentSynchronizationContext());
+    }
 
     public override string Title => L.T("home.title");
     public override string Icon => "M8 5v14l11-7z";
@@ -168,7 +177,7 @@ public sealed partial class HomeViewModel : PageViewModel
             var instance = _service.GetInstance(value);
             var loader = instance.Loader is null ? L.T("home.version.vanilla") : $"{instance.Loader} {instance.LoaderVersion}";
             var mods = new ModManager(instance.ModsDir).CountEnabled();
-            VersionInfo = L.F("home.version.info", instance.McVersion, loader, mods switch { 0 => "", 1 => L.T("home.version.mod_count_one"), _ => L.F("home.version.mod_count", mods) });
+            VersionInfo = L.F("home.version.info", instance.McVersion, loader, mods == 0 ? "" : L.P("home.version.mod_count", mods, mods));
         }
         catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException)
         {
@@ -296,6 +305,8 @@ public sealed partial class HomeViewModel : PageViewModel
                 string[] output;
                 lock (parser) output = _recentOutput.ToArray();
                 var analysis = await Task.Run(() => CrashAnalyzer.AnalyzeRun(workDir, started, output));
+                // 崩溃分析的标题和建议是按当时的语言写的：记下输入，换语言时重新分析一遍。
+                _crashInput = (workDir, started, output);
                 _lastRunFiles = [.. analysis.SourceFiles];
                 _log.AddRaw(L.F("home.log.crash_analysis", analysis.Summary));
                 Crash = analysis;

@@ -106,7 +106,11 @@
             <!-- 窄窗口、长译文时自动换行。 -->
             <WrapPanel ItemSpacing="8" LineSpacing="4">
               <TextBlock Text="{l:T multiplayer.transport.label}" VerticalAlignment="Center" FontWeight="SemiBold" />
-              <ComboBox ItemsSource="{Binding TransportChoices}" SelectedItem="{Binding SelectedTransport}" MinWidth="140" />
+              <ComboBox ItemsSource="{Binding TransportChoices}" SelectedItem="{Binding SelectedTransport}" MinWidth="140">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate DataType="vm:TransportChoice"><TextBlock Text="{Binding Label}" /></DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
               <CheckBox Content="{l:T multiplayer.transport.disguise}" IsChecked="{Binding DisguiseAsMinecraft}" IsEnabled="{Binding CanDisguise}" />
             </WrapPanel>
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding SelectedTransport.Detail}" />
@@ -167,7 +171,7 @@
             </Grid>
             <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsDirectHost}">
               <TextBox Text="{Binding DirectReplyInput}" PlaceholderText="{l:T multiplayer.direct.reply_placeholder}" />
-              <Button Grid.Column="1" Content="{l:T common.connect}" Command="{Binding AddDirectReplyCommand}" Margin="6,0,0,0" />
+              <Button Grid.Column="1" Content="{l:T multiplayer.direct.connect}" Command="{Binding AddDirectReplyCommand}" Margin="6,0,0,0" />
             </Grid>
             <StackPanel Spacing="6" IsVisible="{Binding IsDirectHost}">
               <TextBlock Text="{l:T multiplayer.matrix.title}" FontWeight="SemiBold" Margin="0,6,0,0" />

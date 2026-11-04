@@ -16,8 +16,15 @@ public abstract class PageViewModel : ObservableObject
     protected PageViewModel()
     {
         // 换语言时让这个页面的所有绑定重新取值（标题、下拉选项这些在 C# 里生成的文字跟着换）。
-        Amber.Core.Localization.L.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(() => OnPropertyChanged((string?)null));
+        Amber.Core.Localization.L.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            OnLanguageChanged();
+            OnPropertyChanged((string?)null);
+        });
     }
+
+    /// <summary>换语言后（界面线程上）：把存成文字的内容（汇总、提示）按新语言重新算一遍。</summary>
+    protected virtual void OnLanguageChanged() { }
 
     public abstract string Title { get; }
 

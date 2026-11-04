@@ -194,10 +194,10 @@ public sealed class DirectSession : IAsyncDisposable
     {
         var noV6 = !aCands.Any(c => c.Kind == PathKind.IPv6) || !bCands.Any(c => c.Kind == PathKind.IPv6);
         if (a == NatKind.Symmetric && b == NatKind.Symmetric)
-            return L.T("core.mp.failure.symmetric") + (noV6 ? L.T("core.mp.failure.missingipv6") : "") + L.T("core.mp.failure.suggestions");
+            return L.T(noV6 ? "core.mp.failure.symmetric_noipv6" : "core.mp.failure.symmetric");
         if (a == NatKind.Unknown || b == NatKind.Unknown)
-            return L.T("core.mp.failure.unknown") + (noV6 ? L.T("core.mp.failure.noipv6") : "");
-        return L.T("core.mp.failure.timeout") + (noV6 ? L.T("core.mp.failure.nosharedipv6") : "");
+            return L.T(noV6 ? "core.mp.failure.unknown_noipv6" : "core.mp.failure.unknown");
+        return L.T(noV6 ? "core.mp.failure.timeout_noipv6" : "core.mp.failure.timeout");
     }
 
     private void OnConnected(DirectPeer peer)
@@ -251,7 +251,7 @@ public sealed class DirectSession : IAsyncDisposable
         {
             var host = peers.FirstOrDefault(p => p.Ip == EasyTierArgs.HostIp && p.Cost != "Local");
             if (host is null) return UsingFallbackNode ? L.T("core.mp.session.nodeconnecting") : L.T("core.mp.session.connecting");
-            if (UsingFallbackNode || bridgePeer is null) return L.T("core.mp.session.vianode") + (host.Cost.StartsWith("relay", StringComparison.Ordinal) ? L.T("core.mp.session.relay") : L.T("core.mp.session.introduced"));
+            if (UsingFallbackNode || bridgePeer is null) return L.T(host.Cost.StartsWith("relay", StringComparison.Ordinal) ? "core.mp.path.vianode_relay" : "core.mp.path.vianode_introduced");
             return L.F("core.mp.session.path", DirectText.Path(bridgePeer.Path), bridgePeer.RttMs is { } r ? $"{r:F0} ms" : "-", bridgePeer.LossPercent);
         }
         var guests = Bridge?.Peers ?? [];
@@ -272,7 +272,7 @@ public sealed class DirectSession : IAsyncDisposable
         }
         var members = (await (EasyTier?.PeersAsync(ct) ?? Task.FromResult(new List<PeerInfo>()))).Count(p => p.Ip.StartsWith(EasyTierArgs.Subnet, StringComparison.Ordinal));
         var plan = TestMatrix.Plan(new MatrixInputs(_gathered!.Candidates, _guestCandidates, members, Options.FallbackNodes.Count > 0, fullLan, Options.Simulated));
-        Log(L.F("core.mp.matrix.plan", plan.Count));
+        Log(L.P("core.mp.matrix.plan", plan.Count, plan.Count));
         _chatProbe = chatProbe;
         var results = await TestMatrix.RunAsync(plan, new HostRunner(this), TimeSpan.FromSeconds(120), progress, Options.Simulated, ct);
         // 恢复：所有路径、原来的模式。

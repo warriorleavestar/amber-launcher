@@ -15,7 +15,7 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace Amber.App.ViewModels;
 
-public sealed partial class ModItem(LocalMod mod) : ObservableObject
+public sealed partial class ModItem(LocalMod mod) : LocalizedObservable
 {
     public LocalMod Mod { get; private set; } = mod;
     public string Name => Mod.Name;
@@ -68,13 +68,13 @@ public sealed partial class ModItem(LocalMod mod) : ObservableObject
     partial void OnUpdateChanged(ModUpdate? value) => OnPropertyChanged(nameof(UpdateText));
 }
 
-public sealed record WorldItem(WorldInfo World)
+public sealed record WorldItem(WorldInfo World) : LocalizedRecord
 {
     public string Name => World.Name;
     public string Meta => $"{World.GameMode} · {World.Version ?? L.T("instance.worlds.unknown_version")} · {World.LastPlayed?.LocalDateTime:yyyy-MM-dd HH:mm} · {World.FolderName}";
 }
 
-public sealed partial class DatapackItem(LocalDatapack pack, string worldPath, Action<string> report) : ObservableObject
+public sealed partial class DatapackItem(LocalDatapack pack, string worldPath, Action<string> report) : LocalizedObservable
 {
     public LocalDatapack Pack { get; } = pack;
     public string Name => Pack.FileName;
@@ -120,7 +120,7 @@ public sealed record PackFileItem(string Path)
     }
 }
 
-public sealed partial class ServerItem(ServerEntry entry) : ObservableObject
+public sealed partial class ServerItem(ServerEntry entry) : LocalizedObservable
 {
     public ServerEntry Entry { get; } = entry;
     public string Name => Entry.Name;
@@ -142,7 +142,7 @@ public sealed partial class ExportOption(string name, bool include) : Observable
     public partial bool Include { get; set; } = include;
 }
 
-public sealed record JavaChoice(string LabelValue, string? Path)
+public sealed record JavaChoice(string LabelValue, string? Path) : LocalizedRecord
 {
     public string Label => Path is null ? L.T("instance.settings.inherit") : LabelValue;
 }
@@ -222,7 +222,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         try
         {
             Current = _service.GetInstance(value);
-            InfoText = L.F("instance.version.info", Current.McVersion, Current.Loader is null ? L.T("home.version.vanilla") : $"{Current.Loader} {Current.LoaderVersion}", Current.WorkDir);
+            UpdateInfoText();
             LoadTab(TabIndex);
         }
         catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException)
@@ -369,7 +369,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             if (cts.IsCancellationRequested || Current != c) return;
             HasConnectorPending = pending.Count > 0;
             ConnectorPendingText = pending.Count == 0 ? "" :
-                L.F("instance.connector.pending", pending.Count, string.Join(L.T("common.list_separator"), pending.Take(3).Select(m => m.Name)), pending.Count > 3 ? L.T("common.ellipsis") : "");
+                L.P("instance.connector.pending", pending.Count, pending.Count, string.Join(L.T("common.list_separator"), pending.Take(3).Select(m => m.Name)), pending.Count > 3 ? L.T("common.ellipsis") : "");
         }
     }
 
@@ -551,11 +551,28 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             Mods.Add(item);
             if (mod.Icon is { } icon) _ = DecodeIconAsync(item, icon);
         }
-        ModSummary = L.F("instance.mods.summary", list.Count, list.Count(m => m.Enabled));
+        ModSummary = L.P("instance.mods.summary", list.Count, list.Count, list.Count(m => m.Enabled));
         RecheckCompat();
     }
 
     /// <summary>按当前启用的模组重新算一遍每个模组的匹配情况（启用、禁用、删除之后也要重算）。</summary>
+    private void UpdateInfoText()
+    {
+        if (Current is { } c)
+            InfoText = L.F("instance.version.info", c.McVersion, c.Loader is null ? L.T("home.version.vanilla") : $"{c.Loader} {c.LoaderVersion}", c.WorkDir);
+    }
+
+    protected override void OnLanguageChanged()
+    {
+        UpdateInfoText();
+        if (Mods.Count > 0)
+        {
+            ModSummary = L.P("instance.mods.summary", Mods.Count, Mods.Count, Mods.Count(m => m.Enabled));
+            // 兼容提示是检查时按当时的语言写的，重新检查一遍（只读已经扫描好的信息，很快）。
+            RecheckCompat();
+        }
+    }
+
     private void RecheckCompat()
     {
         if (Current is not { } c) return;
@@ -567,7 +584,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         foreach (var m in Mods) m.Compat = m.Enabled ? ModCompat.Check(m.Requirements, c.Loader, c.McVersion, ids, connector) : null;
         var problems = Mods.Count(m => m.HasCompatProblem);
         NeedsConnector = !connector && Mods.Any(m => m.Compat?.Level == CompatLevel.NeedsConnector);
-        CompatSummary = problems == 0 ? (Mods.Count > 0 ? L.T("instance.mods.all_matching") : "") : L.F("instance.mods.mismatched", problems);
+        CompatSummary = problems == 0 ? (Mods.Count > 0 ? L.T("instance.mods.all_matching") : "") : L.P("instance.mods.mismatched", problems, problems);
         RecheckConnectorPending(connector);
     }
 
@@ -596,8 +613,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             var file = await ConnectorInstaller.FindMatchingVersionAsync(item.Mod.Path, c, _service.Modrinth, ct);
             if (file is null)
             {
-                Status = L.F("instance.mods.match_not_found", item.Name, c.McVersion, c.Loader ?? L.T("home.version.vanilla")) +
-                         (c.Loader is "fabric" or "quilt" && item.Requirements?.Loaders.Contains("fabric") != true ? L.T("instance.mods.forge_unsupported") : "");
+                Status = L.F(c.Loader is "fabric" or "quilt" && item.Requirements?.Loaders.Contains("fabric") != true
+                    ? "instance.mods.match_not_found_forge_unsupported" : "instance.mods.match_not_found",
+                    item.Name, c.McVersion, c.Loader ?? L.T("home.version.vanilla"));
                 return;
             }
             await _service.ContentInstaller.InstallAsync(new InstallPlan([file], []), c.ModsDir, null, ct);
@@ -634,7 +652,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         {
             Recycle(item.Mod.Path);
             Mods.Remove(item);
-            ModSummary = L.F("instance.mods.summary", Mods.Count, Mods.Count(m => m.Enabled));
+            ModSummary = L.P("instance.mods.summary", Mods.Count, Mods.Count, Mods.Count(m => m.Enabled));
             RecheckCompat();
             Status = L.F("instance.status.recycled", item.Name);
         }
@@ -654,7 +672,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             var mods = Mods.Select(m => m.Mod).ToList();
             var updates = await ModManager.CheckUpdatesAsync(mods, _service.Modrinth, _service.CurseForgeIfConfigured, c.McVersion, c.Loader, ct);
             foreach (var item in Mods) item.Update = updates.FirstOrDefault(u => u.LocalPath == item.Mod.Path);
-            Status = updates.Count == 0 ? L.T("instance.mods.up_to_date") : L.F("instance.mods.updates_available", updates.Count);
+            Status = updates.Count == 0 ? L.T("instance.mods.up_to_date") : L.P("instance.mods.updates_available", updates.Count, updates.Count);
         });
     }
 
@@ -671,7 +689,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
                 await ModManager.ApplyUpdateAsync(item.Update!, _service.Downloader, ct);
                 Progress = 100.0 * ++done / pending.Count;
             }
-            Status = pending.Count == 0 ? L.T("instance.mods.check_first") : L.F("instance.mods.updated_count", done);
+            Status = pending.Count == 0 ? L.T("instance.mods.check_first") : L.P("instance.mods.updated_count", done, done);
         });
         await LoadModsAsync();
     }
@@ -697,7 +715,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             File.Copy(path, Path.Combine(targetDir, Path.GetFileName(path)), true);
             count++;
         }
-        Status = L.F("instance.files.added", count);
+        Status = L.P("instance.files.added", count, count);
         _loadedTabs.Clear();
         LoadTab(TabIndex);
     }
@@ -872,8 +890,8 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             }
         }
         Status = errors.Count > 0
-            ? L.F("instance.datapacks.added_with_errors", L.F("instance.datapacks.added", added), string.Join(L.T("common.error_separator"), errors))
-            : L.F("instance.datapacks.added", added);
+            ? L.F("instance.datapacks.added_with_errors", L.P("instance.datapacks.added", added, added), string.Join(L.T("common.error_separator"), errors))
+            : L.P("instance.datapacks.added", added, added);
         LoadDatapacks();
     }
 

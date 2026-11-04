@@ -10,12 +10,12 @@ public enum RouteKind { Direct, Relay, Node }
 /// <summary>全条件测试里的一步：走哪条路、用不用完整局域网模式、开不开出口。</summary>
 public sealed record MatrixStep(int Index, RouteKind Route, PathKind? Path, bool FullLan, bool Exit)
 {
-    public string Label => (Route switch
+    public string Label => L.F(Exit ? "core.mp.matrix.label_exit" : "core.mp.matrix.label", Route switch
     {
         RouteKind.Direct => DirectText.Path(Path!.Value),
         RouteKind.Relay => L.T("core.mp.matrix.relay"),
         _ => L.T("core.mp.matrix.node"),
-    }) + (FullLan ? L.T("core.mp.matrix.fulllan") : L.T("core.mp.matrix.defaultmode")) + (Exit ? L.T("core.mp.matrix.exiton") : "");
+    }, FullLan ? L.T("core.mp.matrix.fulllan") : L.T("core.mp.matrix.defaultmode"));
 }
 
 public sealed record MatrixResult(
@@ -109,7 +109,7 @@ public static class TestMatrix
                 }
                 catch (Exception e) when (e is OperationCanceledException or TimeoutException && !ct.IsCancellationRequested)
                 {
-                    result = new MatrixResult(step, false, Reason: L.F("core.mp.matrix.timeout", stepTimeout.TotalSeconds), Simulated: simulated);
+                    result = new MatrixResult(step, false, Reason: L.P("core.mp.matrix.timeout", (long)Math.Round(stepTimeout.TotalSeconds), stepTimeout.TotalSeconds), Simulated: simulated);
                 }
                 catch (Exception e) when (!ct.IsCancellationRequested && e is not OperationCanceledException)
                 {

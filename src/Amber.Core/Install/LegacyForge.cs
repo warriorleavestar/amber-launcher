@@ -80,7 +80,7 @@ public static class LegacyForge
             var libs = ReadFmlLibraries(forgeZip, mc);
             if (libs.Count > 0)
             {
-                progress?.Report(new(L.F("core.install.legacyforge.downloadlibraries", libs.Count)));
+                progress?.Report(new(L.P("core.install.legacyforge.downloadlibraries", libs.Count, libs.Count)));
                 var cache = FmlCacheDir(dir.Root);
                 Directory.CreateDirectory(cache);
                 var done = 0;

@@ -257,7 +257,7 @@ public sealed class Downloader
         Report(null, true);
 
         if (failures.Count > 0)
-            throw new DownloadException(L.F("core.net.download.filesfailed", failures.Count, failures[0].Item1.Url, failures[0].Item2.Message), failures);
+            throw new DownloadException(L.P("core.net.download.filesfailed", failures.Count, failures.Count, failures[0].Item1.Url, failures[0].Item2.Message), failures);
     }
 
     /// <summary>返回实际下载的字节数（跳过则为 0）。</summary>
@@ -506,7 +506,7 @@ public sealed class Downloader
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
-                    throw new IOException(L.F("core.net.download.stalled", StallTimeout.TotalSeconds));
+                    throw new IOException(L.P("core.net.download.stalled", (long)Math.Round(StallTimeout.TotalSeconds), StallTimeout.TotalSeconds));
                 }
                 if (read == 0) return total;
                 await write(buffer.AsMemory(0, read), ct);

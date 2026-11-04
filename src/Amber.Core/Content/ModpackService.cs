@@ -120,7 +120,7 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
 
         var overrides = manifest["overrides"]?.GetValue<string>() ?? "overrides";
         ExtractPrefix(zip, overrides.TrimEnd('/') + "/", workDir);
-        if (missing > 0) throw new InvalidDataException(L.F("core.content.modpack.missingcursefiles", missing));
+        if (missing > 0) throw new InvalidDataException(L.P("core.content.modpack.missingcursefiles", missing, missing));
     }
 
     /// <summary>导出 mrpack：能在 Modrinth 上按哈希识别的模组写成下载项，其余放进 overrides。</summary>

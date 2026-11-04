@@ -11,7 +11,7 @@ using CommunityToolkit.Mvvm.Input;
 namespace Amber.App.ViewModels;
 
 /// <summary>下载页的一行。</summary>
-public sealed partial class RemoteVersionItem(ManifestEntry entry, bool installed) : ObservableObject
+public sealed partial class RemoteVersionItem(ManifestEntry entry, bool installed) : LocalizedObservable
 {
     public ManifestEntry Entry { get; } = entry;
     public string Id => Entry.Id;
@@ -29,7 +29,7 @@ public sealed partial class RemoteVersionItem(ManifestEntry entry, bool installe
     public partial bool Installed { get; set; } = installed;
 }
 
-public sealed record LoaderChoice(string Name, LoaderKind? Kind)
+public sealed record LoaderChoice(string Name, LoaderKind? Kind) : LocalizedRecord
 {
     public string Label => Kind is null ? L.T("home.version.vanilla") : Name;
 }
@@ -95,6 +95,28 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
 
     [ObservableProperty]
     public partial string LoaderHint { get; set; } = "";
+
+    /// <summary>加载器提示的写法（换语言时重新算）。</summary>
+    private Func<string>? _loaderHint;
+
+    private void SetLoaderHint(Func<string>? text)
+    {
+        _loaderHint = text;
+        LoaderHint = text?.Invoke() ?? "";
+    }
+
+    protected override void OnLanguageChanged()
+    {
+        if (_loaderHint is not null) LoaderHint = _loaderHint();
+        // Forge 的“推荐 / 最新”备注是取列表时按当时的语言写的。
+        for (var i = 0; i < LoaderVersions.Count; i++)
+            if (LoaderVersions[i] is { Note: not null } v)
+            {
+                var selected = SelectedLoaderVersion == v;
+                LoaderVersions[i] = v with { Note = L.T(v.Recommended ? "core.install.forge.recommended" : "core.install.forge.latest") };
+                if (selected) SelectedLoaderVersion = LoaderVersions[i];
+            }
+    }
 
     [ObservableProperty]
     public partial string CustomName { get; set; } = "";
@@ -174,26 +196,29 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         _listCts?.Cancel();
         LoaderVersions.Clear();
         SelectedLoaderVersion = null;
-        LoaderHint = "";
+        SetLoaderHint(null);
         UpdateDefaultName();
         if (Target is not { } target || SelectedLoader.Kind is not { } kind) return;
 
         var cts = _listCts = new CancellationTokenSource();
-        LoaderHint = L.T("download.status.fetching_versions");
+        SetLoaderHint(() => L.T("download.status.fetching_versions"));
         try
         {
             var versions = await LoaderInstallers.Create(kind, _service.Loaders).ListAsync(target.Id, cts.Token);
             if (cts.IsCancellationRequested) return;
             foreach (var v in versions.Where(v => v.Stable || ShowUnstableLoaders)) LoaderVersions.Add(v);
             SelectedLoaderVersion = LoaderVersions.FirstOrDefault(v => v.Recommended) ?? LoaderVersions.FirstOrDefault();
-            LoaderHint = versions.Count == 0 ? L.F("download.loader.unsupported", SelectedLoader.Label, target.Id)
-                : LoaderVersions.Count == 0 ? L.T("download.loader.only_unstable")
-                : "";
+            var loader = SelectedLoader;
+            var targetId = target.Id;
+            SetLoaderHint(versions.Count == 0 ? () => L.F("download.loader.unsupported", loader.Label, targetId)
+                : LoaderVersions.Count == 0 ? () => L.T("download.loader.only_unstable")
+                : null);
         }
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            LoaderHint = L.F("download.loader.fetch_failed", e.Message);
+            var message = e.Message;
+            SetLoaderHint(() => L.F("download.loader.fetch_failed", message));
         }
     }
 
@@ -247,7 +272,8 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
                 item.Installed = true;
             }
             await Ui.FlushAsync();
-            Status = L.F("download.status.installed", id, watch.Elapsed.TotalSeconds);
+            var elapsedSeconds = watch.Elapsed.TotalSeconds;
+            Status = L.P("download.status.installed", (long)Math.Round(elapsedSeconds), id, elapsedSeconds);
             Target = null;
             _service.NotifyInstalledChanged();
         }
