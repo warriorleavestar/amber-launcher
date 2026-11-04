@@ -84,6 +84,11 @@ public sealed class ExitPolicy : IDisposable
         }
     }
 
+    /// <summary>发邮件的端口（SMTP 25、465、587）：不许借别人的 IP 发垃圾邮件。其他端口都放行（游戏服务器端口各不相同）。</summary>
+    public static readonly IReadOnlySet<int> DeniedPorts = new HashSet<int> { 25, 465, 587 };
+
+    public static bool AllowsPort(int port) => port is > 0 and < 65536 && !DeniedPorts.Contains(port);
+
     /// <summary>这个目标能不能经出口连。</summary>
     public bool Allows(IPAddress address)
     {

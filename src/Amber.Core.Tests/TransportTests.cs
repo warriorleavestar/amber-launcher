@@ -559,3 +559,35 @@ public class ExitPolicyTests
         exit.Stop();
     }
 }
+
+public class ExitPortTests
+{
+    [Theory]
+    [InlineData(25, false)]
+    [InlineData(465, false)]
+    [InlineData(587, false)]
+    [InlineData(0, false)]
+    [InlineData(443, true)]
+    [InlineData(80, true)]
+    [InlineData(25565, true)]
+    [InlineData(19132, true)]
+    public void SmtpPortsAreDenied(int port, bool allowed) => Assert.Equal(allowed, ExitPolicy.AllowsPort(port));
+
+    [Fact]
+    public async Task SocksRefusesSmtpEvenToPublicHost()
+    {
+        var exit = new TcpListener(IPAddress.Loopback, 0);
+        exit.Start();
+        var port = ((IPEndPoint)exit.LocalEndpoint).Port;
+        _ = Task.Run(async () =>
+        {
+            using var c = await exit.AcceptTcpClientAsync();
+            await Socks5.ServeAsync(c.GetStream(), default, allow: _ => true);
+        });
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port);
+        var e = await Assert.ThrowsAsync<IOException>(() => Socks5.ConnectAsync(client.GetStream(), "8.8.8.8", 25, default));
+        Assert.Contains("发邮件", e.Message);
+        exit.Stop();
+    }
+}

@@ -14,8 +14,9 @@ public static class Socks5
     private const byte Version = 5;
 
     /// <summary>出口成员：处理一条已经接上的 SOCKS5 连接。</summary>
-    public static async Task ServeAsync(Stream client, CancellationToken ct, Action<string>? log = null, Func<IPAddress, bool>? allow = null)
+    public static async Task ServeAsync(Stream client, CancellationToken ct, Action<string>? log = null, Func<IPAddress, bool>? allow = null, Func<int, bool>? allowPort = null)
     {
+        allowPort ??= ExitPolicy.AllowsPort;
         allow ??= IsPublic;
         var head = new byte[2];
         if (!await SecureStream.ReadExactAsync(client, head, ct) || head[0] != Version) return;
@@ -37,6 +38,12 @@ public static class Socks5
             return;
         }
         var (host, port) = await ReadAddressAsync(client, request[3], ct);
+        if (!allowPort(port))
+        {
+            log?.Invoke($"[转发] 拒绝连接 {host}:{port}（发邮件的端口不能经别人转发）");
+            await ReplyAsync(client, 2, ct);
+            return;
+        }
         IPAddress[] addresses;
         try
         {
@@ -100,7 +107,7 @@ public static class Socks5
         await ReadAddressAsync(stream, reply[3], ct);
         if (reply[1] != 0) throw new IOException(reply[1] switch
         {
-            2 => $"出口拒绝连接 {host}（本机、局域网或保留地址不能经别人转发）",
+            2 => $"出口拒绝连接 {host}:{port}（本机、局域网、保留地址和发邮件的端口不能经别人转发）",
             4 => $"出口那边找不到 {host}",
             5 => $"{host}:{port} 拒绝连接",
             _ => $"出口连不上 {host}:{port}（代码 {reply[1]}）",
