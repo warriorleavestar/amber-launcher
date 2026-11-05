@@ -41,6 +41,25 @@ public sealed class DirectSession : IAsyncDisposable
     private TaskCompletionSource<JsonObject>? _testAnswer;
     private string? _hostRun;
     private Timer? _consentWatch;
+    private CancellationTokenSource? _hostAbort;
+
+    // 启动、换参数重启 EasyTier 一次只做一个（测试步骤、提权、结束恢复可能同时触发）。
+    private readonly SemaphoreSlim _startLock = new(1, 1);
+
+    // 加入方：每次同意的测试一个取消源。步骤和提权都用它；测试结束（房主说结束、超时、用户点停止）时取消，
+    // 还在路上的步骤不会在恢复之后又把 EasyTier 切回测试模式。
+    private readonly object _runGate = new();
+    private CancellationTokenSource? _runCts;
+    private string? _runCtsRun;
+
+    /// <summary>测试用：代替真的启动 EasyTier。</summary>
+    internal Func<EasyTierOptions, CancellationToken, Task<IEasyTierSession>>? StartForTest { get; init; }
+
+    /// <summary>房主：加入方是 0.5.9 以前的版本（hello 里带完整房间码、没有会话 id）。全条件测试需要对方升级。</summary>
+    public bool GuestIsLegacy { get; private set; }
+
+    /// <summary>加入方：开始执行测试的一步（界面显示“测试中”和完整局域网/出口提示）。</summary>
+    public event Action<MatrixStep>? GuestStepStarted;
 
     /// <summary>加入方：全条件测试要本机用户同意（见 <see cref="GuestTestConsent"/>）。</summary>
     public GuestTestConsent TestConsent { get; } = new();
@@ -139,28 +158,77 @@ public sealed class DirectSession : IAsyncDisposable
     private IReadOnlyList<string> Verbose(IReadOnlyList<string>? extra) =>
         [.. extra ?? [], .. Options.Verbose ? new[] { "--console-log-level", "debug" } : []];
 
-    /// <summary>启动或换参数重启 EasyTier。完整局域网第一次启动会弹权限确认；已经提权的会话换参数不再弹。</summary>
-    private async Task StartEasyTierAsync(EasyTierOptions options, CancellationToken ct)
+    /// <summary>
+    /// 启动或换参数重启 EasyTier。完整局域网第一次启动会弹权限确认；已经提权的会话换参数不再弹。
+    /// 一次只做一个；拿到锁之后 ct 已经取消（比如测试已经结束）就不再启动。
+    /// 和“正在跑的参数”比较（EasyTier.Options），不是上一次要求的参数；force 时总是重启（测试结束恢复）。
+    /// </summary>
+    internal async Task StartEasyTierAsync(EasyTierOptions options, CancellationToken ct, bool force = false)
     {
-        if (_currentOptions is { } current && SameConfig(current, options) && EasyTier is { HasExited: false }) return;
-        Log(L.T("core.mp.session.start") + string.Join(' ', EasyTierArgs.Build(options).Select(a => Room.Secrets.Contains(a) ? L.T("core.mp.diagnostics.secret") : a)));
-        if (EasyTier is EasyTierElevatedSession elevated && !elevated.HasExited)
+        await _startLock.WaitAsync(ct);
+        try
         {
-            elevated.Restart(options);
-            for (var i = 0; i < 40 && elevated.RestartPending; i++) await Task.Delay(250, ct);
+            ct.ThrowIfCancellationRequested();
+            if (!force && EasyTier is { HasExited: false } running && SameConfig(running.Options, options)) return;
+            Log(L.T("core.mp.session.start") + string.Join(' ', EasyTierArgs.Build(options).Select(a => Room.Secrets.Contains(a) ? L.T("core.mp.diagnostics.secret") : a)));
+            if (StartForTest is { } start)
+            {
+                var next = await start(options, ct);
+                EasyTier?.Dispose();
+                EasyTier = next;
+            }
+            else if (EasyTier is EasyTierElevatedSession elevated && !elevated.HasExited)
+            {
+                elevated.Restart(options);
+                for (var i = 0; i < 40 && elevated.RestartPending; i++) await Task.Delay(250, ct);
+            }
+            else
+            {
+                EasyTier?.Dispose();
+                EasyTier = options.Tun || _elevated
+                    ? EasyTierElevatedSession.Start(_installer, options, Path.Combine(_workDir, "run-lan"))
+                    : EasyTierSession.Start(_installer, options, Path.Combine(_workDir, IsHost ? "run-direct-host" : "run-direct-guest"));
+                if (EasyTier is EasyTierElevatedSession) _elevated = true;
+                if (EasyTier is EasyTierSession plain && Options.Verbose) plain.Output += line => _log.Add("EasyTier", line);
+            }
+            _currentOptions = options;
+            EasyTierStarts++;
         }
-        else
+        finally
         {
-            EasyTier?.Dispose();
-            EasyTier = options.Tun || _elevated
-                ? EasyTierElevatedSession.Start(_installer, options, Path.Combine(_workDir, "run-lan"))
-                : EasyTierSession.Start(_installer, options, Path.Combine(_workDir, IsHost ? "run-direct-host" : "run-direct-guest"));
-            if (EasyTier is EasyTierElevatedSession) _elevated = true;
-            if (EasyTier is EasyTierSession plain && Options.Verbose) plain.Output += line => _log.Add("EasyTier", line);
+            _startLock.Release();
         }
-        _currentOptions = options;
-        EasyTierStarts++;
         StateChanged?.Invoke();
+    }
+
+    /// <summary>加入方：同意了一次测试，给它一个取消源（最长 <see cref="GuestTestConsent.MaxDuration"/>）。</summary>
+    internal void BeginRun(string run)
+    {
+        lock (_runGate)
+        {
+            _runCts?.Cancel();
+            _runCts?.Dispose();
+            _runCts = new CancellationTokenSource(GuestTestConsent.MaxDuration);
+            _runCtsRun = run;
+        }
+    }
+
+    /// <summary>测试用：按这次测试的取消令牌切换（和测试步骤一样）。</summary>
+    internal Task StartForRunAsync(string run, EasyTierOptions options) => StartEasyTierAsync(options, RunToken(run));
+
+    /// <summary>这次测试的取消令牌；不是正在进行的测试时返回已取消的令牌（什么都不执行）。</summary>
+    private CancellationToken RunToken(string? run)
+    {
+        lock (_runGate) return _runCts is { } cts && run is not null && _runCtsRun == run ? cts.Token : new CancellationToken(true);
+    }
+
+    private void CancelRun(string? run)
+    {
+        lock (_runGate)
+        {
+            if (_runCts is null || run is not null && _runCtsRun != run) return;
+            _runCts.Cancel();
+        }
     }
 
     /// <summary>EasyTier 启动或重启过几次（包括已提权会话的原地重启）：界面按它判断要不要重新计时。</summary>
@@ -248,6 +316,15 @@ public sealed class DirectSession : IAsyncDisposable
     {
         switch (Str(message, "op"))
         {
+            case "hello" when IsHost && IsLegacyHello(message):
+                // 0.5.9 以前的加入方：hello 里是完整的邀请码（含房间密钥，明文经过网络）。不解析它，只记下来提醒用户。
+                if (!GuestIsLegacy)
+                {
+                    GuestIsLegacy = true;
+                    Log(L.T("core.mp.session.legacyguest"));
+                    StateChanged?.Invoke();
+                }
+                break;
             case "hello" when IsHost:
                 if (LocalCode is { } local && TryParseHello(message, local.Session, out var nat, out var candidates))
                 {
@@ -273,6 +350,10 @@ public sealed class DirectSession : IAsyncDisposable
             case "elevate" when !IsHost:
                 _ = GuestElevateAsync(peer, Str(message, "run"));
                 break;
+            case "test-abort" when IsHost:
+                // 加入方的用户点了“停止测试”。
+                if (Str(message, "run") is { } abortRun && abortRun == _hostRun) _hostAbort?.Cancel();
+                break;
             case "test-answer" when IsHost:
                 if (Str(message, "run") is { } answerRun && answerRun == _hostRun) _testAnswer?.TrySetResult(message);
                 break;
@@ -288,6 +369,9 @@ public sealed class DirectSession : IAsyncDisposable
         }
     }
 
+    /// <summary>0.5.9 以前的 hello：带 code（完整邀请码），没有 s（会话 id）。</summary>
+    internal static bool IsLegacyHello(JsonObject message) => message.ContainsKey("code") && !message.ContainsKey("s");
+
     // 对方发来的 JSON 字段类型不对时当作没有，不抛异常。
     private static string? Str(JsonObject m, string key) => (m[key] as JsonValue)?.TryGetValue<string>(out var v) == true ? v : null;
     private static bool? Bool(JsonObject m, string key) => (m[key] as JsonValue)?.TryGetValue<bool>(out var v) == true ? v : null;
@@ -301,10 +385,20 @@ public sealed class DirectSession : IAsyncDisposable
     public async Task AnswerTestRequestAsync(bool accept, bool allowFullLan, bool allowExit)
     {
         var run = TestConsent.Pending?.Run;
-        var answer = TestConsent.Answer(accept, allowFullLan, allowExit, _currentOptions);
-        if (run is null || Bridge?.Peers.FirstOrDefault() is not { } peer) return;
+        if (run is null) return;
+        if (Bridge?.Peers.FirstOrDefault() is not { } peer)
+        {
+            // 和房主断开了：当作拒绝（不留下一个没人知道的“已同意”）。
+            TestConsent.Answer(false, false, false, null);
+            Log(L.T("core.mp.matrix.nopeerdeclined"));
+            TestEnded?.Invoke();
+            return;
+        }
+        // 记下现在真正在跑的参数（不是上次要求的），测完恢复成它。
+        var answer = TestConsent.Answer(accept, allowFullLan, allowExit, EasyTier?.Options ?? _currentOptions);
         if (answer is { } a)
         {
+            BeginRun(run);
             Log(L.T("core.mp.matrix.accepted"));
             _consentWatch?.Dispose();
             _consentWatch = new Timer(_ =>
@@ -326,12 +420,29 @@ public sealed class DirectSession : IAsyncDisposable
         });
     }
 
-    /// <summary>加入方：测试结束（房主说结束、太久没动静）：清掉同意，恢复所有路径和原来的联机设置。</summary>
-    private async Task EndGuestTestAsync(string? run)
+    /// <summary>加入方：用户点了“停止测试”。告诉房主（尽力而为），然后自己结束并恢复。</summary>
+    public async Task StopGuestTestAsync()
+    {
+        if (TestConsent.ActiveRun is not { } run) return;
+        Log(L.T("core.mp.matrix.gueststopped"));
+        if (Bridge?.Peers.FirstOrDefault() is { } peer)
+        {
+            try { await Bridge.SendControlAsync(peer, new JsonObject { ["op"] = "test-abort", ["run"] = run }); }
+            catch (Exception e) when (e is SocketException or ObjectDisposedException or OperationCanceledException) { }
+        }
+        await EndGuestTestAsync(run);
+    }
+
+    /// <summary>
+    /// 加入方：测试结束（房主说结束、太久没动静、超过最长时间、用户点停止）：清掉同意，取消还在路上的步骤，
+    /// 在启动锁里无条件恢复所有路径和原来的联机设置。
+    /// </summary>
+    internal async Task EndGuestTestAsync(string? run)
     {
         var ended = TestConsent.End(run, out var original);
         if (ended)
         {
+            CancelRun(run);
             _consentWatch?.Dispose();
             _consentWatch = null;
             if (Bridge is { } bridge)
@@ -343,7 +454,7 @@ public sealed class DirectSession : IAsyncDisposable
             {
                 try
                 {
-                    await StartEasyTierAsync(original with { RpcPort = EasyTierArgs.FreeTcpPort() }, CancellationToken.None);
+                    await StartEasyTierAsync(original with { RpcPort = EasyTierArgs.FreeTcpPort() }, CancellationToken.None, force: true);
                     Log(L.T("core.mp.matrix.restored"));
                 }
                 catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
@@ -382,7 +493,12 @@ public sealed class DirectSession : IAsyncDisposable
     public async Task<List<MatrixResult>> RunMatrixAsync(bool wantFullLan, IProgress<MatrixResult>? progress, Func<MatrixStep, bool, CancellationToken, Task<bool?>>? chatProbe, CancellationToken ct)
     {
         if (!IsHost || Bridge?.Peers.FirstOrDefault() is not { } peer) throw new InvalidOperationException(L.T("core.mp.matrix.peerrequired"));
+        if (GuestIsLegacy) throw new InvalidOperationException(L.T("core.mp.matrix.legacyguest"));
         var run = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
+        using var abort = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _hostAbort = abort;
+        var callerCt = ct;
+        ct = abort.Token;
         _hostRun = run;
         _testAnswer = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
@@ -414,9 +530,14 @@ public sealed class DirectSession : IAsyncDisposable
             _chatProbe = chatProbe;
             return await TestMatrix.RunAsync(plan, new HostRunner(this, run), TimeSpan.FromSeconds(120), progress, Options.Simulated, ct);
         }
+        catch (OperationCanceledException) when (abort.IsCancellationRequested && !callerCt.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(L.T("core.mp.matrix.guestaborted"));
+        }
         finally
         {
             _hostRun = null;
+            _hostAbort = null;
             // 恢复：所有路径、原来的模式；通知加入方结束（它会恢复自己的设置）。
             Bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
             if (Bridge.Peers.FirstOrDefault() is { } back)
@@ -464,7 +585,7 @@ public sealed class DirectSession : IAsyncDisposable
         {
             try
             {
-                if (!_elevated) await StartEasyTierAsync(GuestOptions(!UsingFallbackNode, true, null), CancellationToken.None);
+                if (!_elevated) await StartEasyTierAsync(GuestOptions(!UsingFallbackNode, true, null), RunToken(run));
             }
             catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
             {
@@ -574,6 +695,7 @@ public sealed class DirectSession : IAsyncDisposable
         }
         try
         {
+            GuestStepStarted?.Invoke(step);
             await GuestRunStepAsync(step, Str(message, "hostIp"), run);
         }
         finally
@@ -586,7 +708,10 @@ public sealed class DirectSession : IAsyncDisposable
     {
         Log(L.F("core.mp.matrix.step", step.Index, step.Label));
         var result = new JsonObject { ["op"] = "result", ["run"] = run, ["i"] = step.Index };
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(100));
+        // 测试结束（取消这次测试）时这一步跟着停，不会在恢复之后再切换。
+        var runToken = RunToken(run);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(runToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(100));
         var watch = Stopwatch.StartNew();
         try
         {
@@ -652,6 +777,8 @@ public sealed class DirectSession : IAsyncDisposable
             result["reason"] = e is OperationCanceledException ? L.T("core.mp.matrix.steptimeout") : e.Message;
             Log(L.F("core.mp.matrix.stepfailed", step.Index, result["reason"]));
         }
+        // 测试已经结束：恢复由 EndGuestTestAsync 做，这里不再打洞、不再回结果。
+        if (runToken.IsCancellationRequested) return;
         // 恢复全部路径，确保能把结果发回去。
         var bridge = Bridge!;
         bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
@@ -664,6 +791,12 @@ public sealed class DirectSession : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _consentWatch?.Dispose();
+        lock (_runGate)
+        {
+            _runCts?.Cancel();
+            _runCts?.Dispose();
+            _runCts = null;
+        }
         EasyTier?.Dispose();
         if (_speed is not null) await _speed.DisposeAsync();
         if (Bridge is not null) await Bridge.DisposeAsync();

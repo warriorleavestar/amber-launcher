@@ -1091,5 +1091,15 @@
   "core.net.download.unsafetarget": "The download target isn't safe, so the download was stopped: {0}",
   "core.mp.punch.localerror": "Direct mode's local forwarding failed ({0})",
   "core.mp.punch.toomanypeers": "Already connected to {1} guests, so {0} wasn't accepted",
-  "accounts.external.insecure_saved": "This account's server uses http, which sends passwords and tokens unencrypted, so it can no longer be used. Remove it and add it again with an https address."
+  "accounts.external.insecure_saved": "This account's server uses http, which sends passwords and tokens unencrypted, so it can no longer be used. Remove it and add it again with an https address.",
+  "core.mp.matrix.nopeerdeclined": "The connection to the host was lost, so the test request was declined",
+  "core.mp.matrix.gueststopped": "Test stopped. Restoring the previous multiplayer settings",
+  "core.mp.matrix.guestaborted": "The guest stopped the test",
+  "core.mp.matrix.legacyguest": "The guest is running Amber older than 0.5.9. The full test needs 0.5.9 or later on both sides",
+  "core.mp.session.legacyguest": "The guest is running a version older than 0.5.9. Its hello contained the full room code in clear text",
+  "multiplayer.direct.legacy_guest": "The guest is running Amber older than 0.5.9. The full test needs the guest to update to 0.5.9. Note: the older version sent the room code in clear text when joining, so others on the network may have seen it. Consider opening a new room afterwards.",
+  "multiplayer.matrix.banner_running": "The host is running a full test. The connection method will switch automatically",
+  "multiplayer.matrix.banner_full_lan": "Full test in progress: testing full LAN mode (virtual network adapter is on)",
+  "multiplayer.matrix.banner_exit": "Full test in progress: testing the exit node. During this step your internet traffic goes through the host's computer",
+  "multiplayer.matrix.stop_test": "Stop test"
 }

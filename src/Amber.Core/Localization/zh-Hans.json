@@ -1063,5 +1063,15 @@
   "core.net.download.unsafetarget": "下载目标位置不安全，已停止：{0}",
   "core.mp.punch.localerror": "直连的本机转发出错（{0}）",
   "core.mp.punch.toomanypeers": "已经连着 {1} 个加入方，不再接受 {0}",
-  "accounts.external.insecure_saved": "这个账号的服务器地址是 http，密码和令牌会明文传输，已不能使用。请删掉后用 https 地址重新添加。"
+  "accounts.external.insecure_saved": "这个账号的服务器地址是 http，密码和令牌会明文传输，已不能使用。请删掉后用 https 地址重新添加。",
+  "core.mp.matrix.nopeerdeclined": "和房主的连接断了，这次测试请求按拒绝处理",
+  "core.mp.matrix.gueststopped": "已停止测试，恢复原来的联机设置",
+  "core.mp.matrix.guestaborted": "加入方停止了测试",
+  "core.mp.matrix.legacyguest": "加入方的 Amber 低于 0.5.9，全条件测试需要对方升级到 0.5.9 或更新",
+  "core.mp.session.legacyguest": "加入方是 0.5.9 以前的版本：它发来的 hello 里带着完整房间码（明文）",
+  "multiplayer.direct.legacy_guest": "加入方的 Amber 低于 0.5.9：全条件测试需要对方升级到 0.5.9。注意：旧版本加入时把房间码明文发了过来，路上的人可能看到，建议之后换一个新房间。",
+  "multiplayer.matrix.banner_running": "房主正在进行全条件测试，联机方式会自动切换",
+  "multiplayer.matrix.banner_full_lan": "全条件测试中：正在测完整局域网模式（虚拟网卡已开启）",
+  "multiplayer.matrix.banner_exit": "全条件测试中：正在测出口，这一步你的网络流量经房主的电脑上网",
+  "multiplayer.matrix.stop_test": "停止测试"
 }

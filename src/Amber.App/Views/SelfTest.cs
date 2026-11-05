@@ -651,7 +651,11 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         // 加入方要先确认：确认前房主一步也不发。
         Check("直连：全条件测试先请加入方确认", await WaitAsync(() => guest.TestRequestPending, 20) && host.MatrixLines.Count == 0, guest.Status);
         await guest.AcceptTestRequestCommand.ExecuteAsync(null);
+        // 测试进行时加入方能看到“测试中”横幅和停止按钮；结束后收起。
+        var sawBanner = await WaitAsync(() => guest.GuestTestRunning && guest.GuestTestBanner.Length > 0, 60);
         await matrix;
+        Check("直连：加入方测试中显示横幅，结束后收起", sawBanner && await WaitAsync(() => !guest.GuestTestRunning && !guest.TestRequestPending, 10),
+            $"横幅 {sawBanner}，结束后 {guest.GuestTestRunning}");
         Check("直连：全条件测试（模拟）跑完", host.MatrixLines.Count >= 2 && host.MatrixLines.Skip(1).All(l => l.Contains("（模拟）")), string.Join(" / ", host.MatrixLines));
         Check("直连：模拟的局域网路径通过", host.MatrixLines.Any(l => l.Contains("同一局域网") && l.Contains("通过")), host.Status);
         await ShotAsync("直连全条件测试");

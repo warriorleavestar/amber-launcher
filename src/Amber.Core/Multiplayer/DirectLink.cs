@@ -487,7 +487,12 @@ public sealed class DirectBridge : IAsyncDisposable
 
     private void Accept(IPEndPoint from)
     {
-        if (_peers.ContainsKey(from)) return;
+        if (_peers.TryGetValue(from, out var known))
+        {
+            // 已经连着的对方回了探测（心跳断了之后补发的探测）：算它还活着。
+            known.LastSeen = DateTime.UtcNow;
+            return;
+        }
         if (!_isHost && !_peers.IsEmpty) return;
         if (_isHost && _peers.Count >= MaxHostPeers)
         {
@@ -593,7 +598,13 @@ public sealed class DirectBridge : IAsyncDisposable
         }
     }
 
-    /// <summary>每秒一次心跳：测延迟和丢包，也保持路由器上的映射不过期。</summary>
+    /// <summary>对方这么久没回任何东西（心跳停了）就同时补发探测包。</summary>
+    internal static readonly TimeSpan ReprobeAfter = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// 每秒一次心跳：测延迟和丢包，也保持路由器上的映射不过期。对方的回应停了（对方换了版本、路由器映射被回收、
+    /// 对方重启了桥）时，每次心跳再补一个探测包：探测包任何版本都会回，回了就重新算连着。
+    /// </summary>
     private async Task PingLoopAsync()
     {
         uint seq = 0;
@@ -618,6 +629,8 @@ public sealed class DirectBridge : IAsyncDisposable
                 var payload = new byte[4];
                 BinaryPrimitives.WriteUInt32BigEndian(payload, seq);
                 await SendRawAsync(Seal(Ping, payload), peer.Remote, _cts.Token);
+                if (DateTime.UtcNow - peer.LastSeen > ReprobeAfter)
+                    await SendRawAsync(Seal(Probe, BuildProbePayload(_probeRound)), peer.Remote, _cts.Token);
             }
         }
     }

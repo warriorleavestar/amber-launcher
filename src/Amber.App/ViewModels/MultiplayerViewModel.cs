@@ -794,6 +794,12 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private void StopExitNode()
     {
         if (!UsingExit) return;
+        // 出口是测试设的：停止整个测试（由测试恢复原来的设置）。
+        if (GuestTestRunning)
+        {
+            _ = StopGuestTestAsync();
+            return;
+        }
         if (RestartWithExit(null)) Status = L.T("multiplayer.exit.stopped");
         ExitNodeIp = "";
     }
