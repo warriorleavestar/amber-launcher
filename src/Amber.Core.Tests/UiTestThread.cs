@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using Avalonia;
+using Avalonia.Headless;
 
 namespace Amber.Core.Tests;
 
@@ -23,8 +24,9 @@ internal static class UiTestThread
         {
             try
             {
-                if (OperatingSystem.IsWindows())
-                    AppBuilder.Configure<Application>().UsePlatformDetect().SetupWithoutStarting();
+                AppBuilder.Configure<Application>()
+                    .UseHeadless(new AvaloniaHeadlessPlatformOptions())
+                    .SetupWithoutStarting();
             }
             catch (Exception ex) { _setupFailure = ex; }
             finally { ready.Set(); }
