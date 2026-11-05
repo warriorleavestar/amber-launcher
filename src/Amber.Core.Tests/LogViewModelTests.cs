@@ -33,7 +33,9 @@ public class LogViewModelTests
     }
 
     [Fact]
-    public void RawAndStructuredLogsUseTheSameSeverityRules()
+    public void RawAndStructuredLogsUseTheSameSeverityRules() => UiTestThread.Run(RawAndStructuredLogsUseTheSameSeverityRulesOnUiThread);
+
+    private static void RawAndStructuredLogsUseTheSameSeverityRulesOnUiThread()
     {
         var vm = new LogViewModel();
         vm.AddRaw("[12:34:56] [Render thread/WARN]: warning");
@@ -49,7 +51,9 @@ public class LogViewModelTests
     }
 
     [Fact]
-    public void FilteringKeepsCountsAndRestoresAllRetainedRows()
+    public void FilteringKeepsCountsAndRestoresAllRetainedRows() => UiTestThread.Run(FilteringKeepsCountsAndRestoresAllRetainedRowsOnUiThread);
+
+    private static void FilteringKeepsCountsAndRestoresAllRetainedRowsOnUiThread()
     {
         var vm = new LogViewModel();
         vm.AddRaw("[main/INFO]: ready");
@@ -76,7 +80,9 @@ public class LogViewModelTests
     }
 
     [Fact]
-    public void EvictedProblemsDisappearEvenWhileTheFilterIsEnabled()
+    public void EvictedProblemsDisappearEvenWhileTheFilterIsEnabled() => UiTestThread.Run(EvictedProblemsDisappearEvenWhileTheFilterIsEnabledOnUiThread);
+
+    private static void EvictedProblemsDisappearEvenWhileTheFilterIsEnabledOnUiThread()
     {
         var vm = new LogViewModel { OnlyProblems = true };
         vm.AddRaw("[main/WARN]: old warning");
@@ -98,7 +104,9 @@ public class LogViewModelTests
     }
 
     [Fact]
-    public void OversizedBatchRetainsOnlyTheNewestRows()
+    public void OversizedBatchRetainsOnlyTheNewestRows() => UiTestThread.Run(OversizedBatchRetainsOnlyTheNewestRowsOnUiThread);
+
+    private static void OversizedBatchRetainsOnlyTheNewestRowsOnUiThread()
     {
         var vm = new LogViewModel();
         vm.AddRaw("[main/ERROR]: evicted error");
@@ -114,7 +122,9 @@ public class LogViewModelTests
     }
 
     [Fact]
-    public void BadgeCountsOnlyErrorsReceivedWhileAwayAndResetsOnEntry()
+    public void BadgeCountsOnlyErrorsReceivedWhileAwayAndResetsOnEntry() => UiTestThread.Run(BadgeCountsOnlyErrorsReceivedWhileAwayAndResetsOnEntryOnUiThread);
+
+    private static void BadgeCountsOnlyErrorsReceivedWhileAwayAndResetsOnEntryOnUiThread()
     {
         var vm = new LogViewModel();
         vm.AddRaw("[main/WARN]: warning");
@@ -143,7 +153,9 @@ public class LogViewModelTests
     }
 
     [Fact]
-    public void EnteringBeforeABatchIsShownDoesNotLeaveAnUnreadBadge()
+    public void EnteringBeforeABatchIsShownDoesNotLeaveAnUnreadBadge() => UiTestThread.Run(EnteringBeforeABatchIsShownDoesNotLeaveAnUnreadBadgeOnUiThread);
+
+    private static void EnteringBeforeABatchIsShownDoesNotLeaveAnUnreadBadgeOnUiThread()
     {
         var vm = new LogViewModel();
         vm.AddRaw("[main/ERROR]: queued error");
@@ -156,7 +168,9 @@ public class LogViewModelTests
     }
 
     [Fact]
-    public void ClearDropsRetainedAndQueuedErrorsButKeepsSubsequentOutput()
+    public void ClearDropsRetainedAndQueuedErrorsButKeepsSubsequentOutput() => UiTestThread.Run(ClearDropsRetainedAndQueuedErrorsButKeepsSubsequentOutputOnUiThread);
+
+    private static void ClearDropsRetainedAndQueuedErrorsButKeepsSubsequentOutputOnUiThread()
     {
         var vm = new LogViewModel();
         vm.AddRaw("[main/ERROR]: retained error");
@@ -174,7 +188,9 @@ public class LogViewModelTests
     }
 
     [Fact]
-    public void CountChangesNotifyTheBoundSummaries()
+    public void CountChangesNotifyTheBoundSummaries() => UiTestThread.Run(CountChangesNotifyTheBoundSummariesOnUiThread);
+
+    private static void CountChangesNotifyTheBoundSummariesOnUiThread()
     {
         var vm = new LogViewModel();
         var changed = new List<string?>();

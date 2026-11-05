@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:l="using:Amber.App.Localization"
              xmlns:vm="using:Amber.App.ViewModels"
+             xmlns:c="using:Amber.App.Views.Controls"
              x:Class="Amber.App.Views.ContentPage"
              x:DataType="vm:ContentViewModel">
   <Grid RowDefinitions="Auto,Auto,*,Auto">
@@ -71,7 +72,7 @@
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:FileItem">
                 <StackPanel>
-                  <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" FontSize="13" />
+                  <c:MiddleEllipsisTextBlock FullText="{Binding Name}" FontSize="13" />
                   <TextBlock Text="{Binding Meta}" Classes="caption" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Meta}" />
                 </StackPanel>
               </DataTemplate>

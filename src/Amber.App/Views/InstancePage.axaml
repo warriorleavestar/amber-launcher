@@ -230,7 +230,7 @@
               <ListBox.ItemTemplate>
                 <DataTemplate DataType="vm:PackFileItem">
                   <Grid ColumnDefinitions="*,80,Auto">
-                    <TextBlock Text="{Binding Name}" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                    <c:MiddleEllipsisTextBlock FullText="{Binding Name}" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="1" Text="{Binding Size}" Classes="hint" VerticalAlignment="Center" />
                     <Button Grid.Column="2" Classes="danger" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
                   </Grid>
@@ -250,7 +250,7 @@
               <ListBox.ItemTemplate>
                 <DataTemplate DataType="vm:PackFileItem">
                   <Grid ColumnDefinitions="*,80,Auto">
-                    <TextBlock Text="{Binding Name}" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                    <c:MiddleEllipsisTextBlock FullText="{Binding Name}" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="1" Text="{Binding Size}" Classes="hint" VerticalAlignment="Center" />
                     <Button Grid.Column="2" Classes="danger" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
                   </Grid>
