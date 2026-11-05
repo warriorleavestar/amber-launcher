@@ -70,13 +70,16 @@ public static partial class ModCompat
     /// 读一个 jar 的元数据。nested 为真时，再看 META-INF/jarjar/metadata.json 里列出的内嵌 jar（只看一层）：
     /// Sinytra Connector 这类“外壳”jar 自己没有元数据，真正的模组 id 在内嵌 jar 里。
     /// </summary>
-    internal static ModRequirements? ReadZip(ZipArchive zip, bool nested)
+    internal static ModRequirements? ReadZip(ZipArchive zip, bool nested) =>
+        ReadZip(zip, nested, new ArchiveMetadata.Budget(ArchiveMetadata.MaxNestedTotalBytes));
+
+    private static ModRequirements? ReadZip(ZipArchive zip, bool nested, ArchiveMetadata.Budget budget)
     {
         var loaders = new HashSet<string>(StringComparer.Ordinal);
         var ids = new List<string>();
         var per = new Dictionary<string, LoaderRequirement>(StringComparer.Ordinal);
 
-        if (ReadJson(zip, "fabric.mod.json") is JsonObject fabric)
+        if (ReadJson(zip, "fabric.mod.json", budget) is JsonObject fabric)
         {
             loaders.Add("fabric");
             AddId(ids, fabric["id"]);
@@ -93,7 +96,7 @@ public static partial class ModCompat
             }
             per["fabric"] = new LoaderRequirement(mc, "fabric", deps);
         }
-        if (ReadJson(zip, "quilt.mod.json")?["quilt_loader"] is JsonObject quilt)
+        if (ReadJson(zip, "quilt.mod.json", budget)?["quilt_loader"] is JsonObject quilt)
         {
             loaders.Add("quilt");
             AddId(ids, quilt["id"]);
@@ -112,8 +115,7 @@ public static partial class ModCompat
         {
             if (zip.GetEntry(entry) is not { } e) continue;
             loaders.Add(loader);
-            using var reader = new StreamReader(e.Open());
-            var toml = reader.ReadToEnd();
+            var toml = ArchiveMetadata.ReadText(e, budget: budget);
             foreach (Match m in TomlModId().Matches(toml)) if (!ids.Contains(m.Groups[1].Value)) ids.Add(m.Groups[1].Value);
             string? mc = null;
             var deps = new List<string>();
@@ -128,21 +130,22 @@ public static partial class ModCompat
         if (nested)
         {
             // 有 metadata.json 就按它列的；老一点的（比如 1.20.1 的 Connector）没有，就看 META-INF/jarjar/ 下所有 jar。
-            var paths = ReadJson(zip, "META-INF/jarjar/metadata.json")?["jars"] is JsonArray listed
-                ? listed.Select(j => Str(j?["path"])).OfType<string>().ToList()
-                : zip.Entries.Where(e => e.FullName.StartsWith("META-INF/jarjar/", StringComparison.Ordinal) && e.FullName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase)).Select(e => e.FullName).ToList();
+            IEnumerable<string> paths = ReadJson(zip, "META-INF/jarjar/metadata.json", budget)?["jars"] is JsonArray listed
+                ? listed.Select(j => Str(j?["path"])).OfType<string>()
+                : zip.Entries.Where(e => e.FullName.StartsWith("META-INF/jarjar/", StringComparison.Ordinal) && e.FullName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase)).Select(e => e.FullName);
             var hadOwn = loaders.Count > 0;
-            foreach (var inner in paths)
+            var count = 0;
+            foreach (var inner in paths.Distinct(StringComparer.Ordinal))
             {
+                if (++count > ArchiveMetadata.MaxNestedJars) throw ArchiveMetadata.TooLarge();
                 // 只读模组 id，太大的内嵌 jar（几十 MB 的库）跳过，免得整个读进内存。
-                if (zip.GetEntry(inner) is not { } entry || entry.Length > 32 * 1024 * 1024) continue;
+                if (zip.GetEntry(inner) is not { } entry || entry.Length > ArchiveMetadata.MaxNestedJarBytes) continue;
+                budget.Check(entry.Length);
                 try
                 {
-                    using var memory = new MemoryStream();
-                    using (var s = entry.Open()) s.CopyTo(memory);
-                    memory.Position = 0;
+                    using var memory = new MemoryStream(ArchiveMetadata.ReadBytes(entry, ArchiveMetadata.MaxNestedJarBytes, budget), writable: false);
                     using var innerZip = new ZipArchive(memory, ZipArchiveMode.Read);
-                    if (ReadZip(innerZip, nested: false) is not { } child) continue;
+                    if (ReadZip(innerZip, nested: false, budget) is not { } child) continue;
                     foreach (var id in child.Ids) if (!ids.Contains(id)) ids.Add(id);
                     if (!hadOwn)
                     {
@@ -363,10 +366,9 @@ public static partial class ModCompat
 
     private static string? Str(JsonNode? node) => node is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
 
-    private static JsonNode? ReadJson(ZipArchive zip, string name)
+    private static JsonNode? ReadJson(ZipArchive zip, string name, ArchiveMetadata.Budget budget)
     {
         if (zip.GetEntry(name) is not { } entry) return null;
-        using var stream = entry.Open();
-        return JsonNode.Parse(stream, documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
+        return JsonNode.Parse(ArchiveMetadata.ReadText(entry, budget: budget), documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
     }
 }

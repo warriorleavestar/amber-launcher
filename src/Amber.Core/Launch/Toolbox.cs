@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Amber.Core.Content;
 using Amber.Core.Game;
+using Amber.Core.Net;
 
 namespace Amber.Core.Launch;
 
@@ -196,15 +197,7 @@ public sealed class UpdateChecker(HttpClient http)
 
     /// <summary>更新页只允许无凭据和控制字符的绝对 HTTP(S) 地址，不把本机路径或自定义协议交给系统。</summary>
     public static bool TryGetSafeUpdateUrl(string? value, out Uri? uri)
-    {
-        uri = null;
-        if (string.IsNullOrWhiteSpace(value) || value.Any(char.IsControl) || value.Contains('\\') ||
-            !Uri.TryCreate(value, UriKind.Absolute, out var parsed) || parsed.Scheme is not ("http" or "https") ||
-            parsed.UserInfo.Length > 0 || parsed.Host.Length == 0 || parsed.IsFile || parsed.IsUnc ||
-            Uri.UnescapeDataString(value).Any(char.IsControl)) return false;
-        uri = parsed;
-        return true;
-    }
+        => WebLinks.TryGetHttpUrl(value, out uri);
 
     private static string Normalize(string v)
     {

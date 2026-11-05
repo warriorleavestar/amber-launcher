@@ -138,14 +138,13 @@ public static class DatapackManager
             string text;
             if (isFolder)
             {
-                text = File.ReadAllText(System.IO.Path.Combine(path, "pack.mcmeta"));
+                text = ArchiveMetadata.ReadFileText(System.IO.Path.Combine(path, "pack.mcmeta"));
             }
             else
             {
                 using var zip = ZipFile.OpenRead(path);
                 if (zip.GetEntry("pack.mcmeta") is not { } entry) return null;
-                using var reader = new StreamReader(entry.Open());
-                text = reader.ReadToEnd();
+                text = ArchiveMetadata.ReadText(entry);
             }
             var description = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip })?["pack"]?["description"];
             return PlainText(description)?.Trim();
