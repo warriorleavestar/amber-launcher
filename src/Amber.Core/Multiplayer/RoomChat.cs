@@ -136,6 +136,22 @@ public static class RoomChat
         await stream.ReadExactlyAsync(payload, ct);
         return payload;
     }
+
+    /// <summary>
+    /// 开 TCP 保活：长时间不说话的成员不会因为空闲被断开，但对方真的掉线（断网、关机）时几分钟内能发现。
+    /// 系统不支持这些选项时就算了，不影响聊天。
+    /// </summary>
+    internal static void EnableKeepAlive(Socket socket)
+    {
+        try
+        {
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 60);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 10);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 6);
+        }
+        catch (Exception e) when (e is SocketException or PlatformNotSupportedException or ObjectDisposedException) { }
+    }
 }
 
 /// <summary>
@@ -162,22 +178,32 @@ public sealed class RateLimiter(int count, TimeSpan window, Func<DateTimeOffset>
 /// <summary>
 /// 房主电脑上的聊天转发：接受房间成员的连接，把认证通过的消息转给其他人。
 /// 一条连接的第一帧必须是认证通过的“加入”，之后才会收到别人的消息；发送者 id 和名字在这条连接里固定，
-/// 已经有人在用的 id 不让别的连接用。每个成员有自己的发送队列（满了就断开它，慢的人不拖住别人），
-/// 第一帧和空闲都有时限，连接数有上限。超长或认证失败的连接直接断开；发太快的帧丢弃。断开时替离开的人发一条“离开”通知。
+/// 已经有人在用的 id 不让别的连接用。每个成员有自己的发送队列：一时满了先丢帧，一直满着才断开它（慢的人不拖住别人）。
+/// 第一帧有时限；加入之后不再按空闲断开，靠 TCP 保活发现掉线。连接数有上限，并给房主自己的客户端留一个位子（单独的本机端口）。
+/// 整个转发的新连接和加入/离开通知也限速（防止有人反复连上断开刷屏或占满）。超长或认证失败的连接直接断开；发太快的帧丢弃。
+/// 断开时替离开的人发一条“离开”通知。
 /// </summary>
 public sealed class ChatHub : IAsyncDisposable
 {
-    /// <summary>同时最多这么多条连接（包括还没发第一帧的）。</summary>
+    /// <summary>同时最多这么多条连接（包括还没发第一帧的，也包括房主自己的）。</summary>
     public const int MaxConnections = 32;
 
     /// <summary>每个成员的发送队列能排多少帧。</summary>
     internal int OutboxFrames { get; init; } = 32;
 
+    /// <summary>发送队列一直是满的超过这么久才断开（中间能发出去就重新计时）。</summary>
+    internal TimeSpan BacklogKickAfter { get; init; } = TimeSpan.FromSeconds(15);
+
     /// <summary>连上后多久内要发出第一帧（加入）。</summary>
     internal TimeSpan FirstFrameTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
-    /// <summary>成员多久没发任何帧就断开。</summary>
-    internal TimeSpan IdleTimeout { get; init; } = TimeSpan.FromMinutes(30);
+    /// <summary>整个转发每 10 秒最多接受多少个新连接（房主自己的端口不算）。</summary>
+    internal int AcceptsPerWindow { get; init; } = 16;
+
+    /// <summary>整个转发每 10 秒最多转发多少条加入/离开通知（超过的不转发，成员照常加入/离开）。</summary>
+    internal int PresencePerWindow { get; init; } = 16;
+
+    internal Func<DateTimeOffset> Clock { get; init; } = () => DateTimeOffset.UtcNow;
 
     /// <summary>测试用：给接受的连接设发送缓冲区大小，模拟网络慢。</summary>
     internal int? SendBufferForTest { get; init; }
@@ -188,10 +214,18 @@ public sealed class ChatHub : IAsyncDisposable
     private readonly object _identityGate = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly List<Task> _loops = [];
+    private readonly TcpListener _hostListener = new(IPAddress.Loopback, 0);
+    private RateLimiter? _acceptLimiter;
+    private RateLimiter? _presenceLimiter;
+    private RateLimiter AcceptLimiter => _acceptLimiter ??= new(AcceptsPerWindow, TimeSpan.FromSeconds(10), Clock);
+    private RateLimiter PresenceLimiter => _presenceLimiter ??= new(PresencePerWindow, TimeSpan.FromSeconds(10), Clock);
 
-    private sealed class Member(TcpClient client, int outboxFrames, CancellationToken hub)
+    private sealed class Member(TcpClient client, int outboxFrames, bool isHost, CancellationToken hub)
     {
         public TcpClient Client { get; } = client;
+        public bool IsHost { get; } = isHost;
+        /// <summary>发送队列从什么时候开始一直是满的（UTC ticks，0 表示没满）。</summary>
+        public long FullSince;
         public Channel<byte[]> Outbox { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(outboxFrames) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
         public CancellationTokenSource Cts { get; } = CancellationTokenSource.CreateLinkedTokenSource(hub);
         public RateLimiter Limiter { get; } = new(5, TimeSpan.FromSeconds(5));
@@ -216,8 +250,13 @@ public sealed class ChatHub : IAsyncDisposable
             listener.Start();
             _listeners.Add(listener);
         }
-        foreach (var listener in _listeners) _loops.Add(AcceptLoopAsync(listener));
+        _hostListener.Start();
+        foreach (var listener in _listeners) _loops.Add(AcceptLoopAsync(listener, false));
+        _loops.Add(AcceptLoopAsync(_hostListener, true));
     }
+
+    /// <summary>房主自己的聊天客户端连这个本机端口：给它留着位子，房间连接满了或者新连接被限速时也能连上（同时只接一条）。</summary>
+    public int HostPort => ((IPEndPoint)_hostListener.LocalEndpoint).Port;
 
     /// <summary>再监听一个地址（完整局域网模式下虚拟网卡就绪后加上虚拟 IP）。地址还不存在时返回 false，稍后再试。</summary>
     public bool TryAddListener(IPAddress address)
@@ -227,7 +266,7 @@ public sealed class ChatHub : IAsyncDisposable
             var listener = new TcpListener(address, Port);
             listener.Start();
             lock (_listeners) _listeners.Add(listener);
-            _loops.Add(AcceptLoopAsync(listener));
+            _loops.Add(AcceptLoopAsync(listener, false));
             return true;
         }
         catch (SocketException)
@@ -244,7 +283,7 @@ public sealed class ChatHub : IAsyncDisposable
     /// <summary>所有连接数（包括还没加入的）。</summary>
     public int ConnectionCount => _members.Count;
 
-    private async Task AcceptLoopAsync(TcpListener listener)
+    private async Task AcceptLoopAsync(TcpListener listener, bool host)
     {
         while (!_cts.IsCancellationRequested)
         {
@@ -257,14 +296,19 @@ public sealed class ChatHub : IAsyncDisposable
             {
                 return;
             }
-            if (_members.Count >= MaxConnections)
+            // 房主端口同时只接一条；其他连接给房主留一个位子，并且整个转发限速。
+            var accept = host
+                ? !_members.Values.Any(m => m.IsHost)
+                : _members.Values.Count(m => !m.IsHost) < MaxConnections - 1 && AcceptLimiter.TryAcquire();
+            if (!accept)
             {
                 client.Dispose();
                 continue;
             }
             if (SendBufferForTest is { } size) client.Client.SendBufferSize = size;
+            RoomChat.EnableKeepAlive(client.Client);
             var id = Guid.NewGuid();
-            var member = new Member(client, OutboxFrames, _cts.Token);
+            var member = new Member(client, OutboxFrames, host, _cts.Token);
             _members[id] = member;
             _ = ServeAsync(id, member);
         }
@@ -278,9 +322,18 @@ public sealed class ChatHub : IAsyncDisposable
             var stream = member.Client.GetStream();
             while (!member.Cts.IsCancellationRequested)
             {
-                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(member.Cts.Token);
-                deadline.CancelAfter(member.Authenticated ? IdleTimeout : FirstFrameTimeout);
-                var frame = await RoomChat.ReadFrameAsync(stream, deadline.Token);
+                byte[]? frame;
+                if (member.Authenticated)
+                {
+                    // 加入之后不按空闲断开：有人挂着不说话很正常。真掉线由 TCP 保活发现。
+                    frame = await RoomChat.ReadFrameAsync(stream, member.Cts.Token);
+                }
+                else
+                {
+                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(member.Cts.Token);
+                    deadline.CancelAfter(FirstFrameTimeout);
+                    frame = await RoomChat.ReadFrameAsync(stream, deadline.Token);
+                }
                 if (frame is null) break;
                 var message = _cipher.Open(frame);
                 if (message is null) break;
@@ -295,7 +348,7 @@ public sealed class ChatHub : IAsyncDisposable
                         member.Name = message.Name;
                         member.Authenticated = true;
                     }
-                    Broadcast(frame);
+                    if (member.IsHost || PresenceLimiter.TryAcquire()) Broadcast(frame);
                     continue;
                 }
                 // 一条连接只能代表一个人：换 id、换名字、再发一次加入都断开。
@@ -316,7 +369,7 @@ public sealed class ChatHub : IAsyncDisposable
             member.Kick();
             try { await writer; } catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException) { }
             member.Cts.Dispose();
-            if (member.Authenticated && member.SenderId is { } sender && !_cts.IsCancellationRequested)
+            if (member.Authenticated && member.SenderId is { } sender && !_cts.IsCancellationRequested && (member.IsHost || PresenceLimiter.TryAcquire()))
             {
                 var leave = _cipher.Seal(new ChatMessage(ChatKind.Leave, sender, member.Name ?? "", "", DateTimeOffset.UtcNow));
                 Broadcast(leave);
@@ -324,13 +377,20 @@ public sealed class ChatHub : IAsyncDisposable
         }
     }
 
-    /// <summary>放进每个已加入成员的发送队列；谁的队列满了就断开谁。</summary>
+    /// <summary>放进每个已加入成员的发送队列。队列满了先丢这一帧；一直满着超过 BacklogKickAfter 才断开他。</summary>
     private void Broadcast(byte[] frame)
     {
+        var now = Clock().UtcTicks;
         foreach (var member in _members.Values)
         {
             if (!member.Authenticated) continue;
-            if (!member.Outbox.Writer.TryWrite(frame)) member.Kick();
+            if (member.Outbox.Writer.TryWrite(frame))
+            {
+                Interlocked.Exchange(ref member.FullSince, 0);
+                continue;
+            }
+            var since = Interlocked.CompareExchange(ref member.FullSince, now, 0);
+            if (since != 0 && now - since >= BacklogKickAfter.Ticks) member.Kick();
         }
     }
 
@@ -352,6 +412,7 @@ public sealed class ChatHub : IAsyncDisposable
     {
         _cts.Cancel();
         foreach (var l in _listeners) l.Stop();
+        _hostListener.Stop();
         foreach (var m in _members.Values) m.Kick();
         try
         {
@@ -371,6 +432,7 @@ public sealed class ChatClient : IAsyncDisposable
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly RateLimiter _limiter = new(5, TimeSpan.FromSeconds(5));
     private readonly Queue<string> _sentNonces = new();
+    private readonly HashSet<string> _unmatchedNonces = new(StringComparer.Ordinal);
     private Task? _readLoop;
 
     public string SenderId { get; } = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
@@ -387,6 +449,7 @@ public sealed class ChatClient : IAsyncDisposable
     public async Task ConnectAsync(string host, int port, CancellationToken ct = default)
     {
         await _client.ConnectAsync(host, port, ct);
+        RoomChat.EnableKeepAlive(_client.Client);
         _readLoop = ReadLoopAsync();
         await SendRawAsync(new ChatMessage(ChatKind.Join, SenderId, Name, "", DateTimeOffset.UtcNow), ct);
     }
@@ -410,7 +473,8 @@ public sealed class ChatClient : IAsyncDisposable
             lock (_sentNonces)
             {
                 _sentNonces.Enqueue(nonce);
-                while (_sentNonces.Count > 256) _sentNonces.Dequeue();
+                _unmatchedNonces.Add(nonce);
+                while (_sentNonces.Count > 256) _unmatchedNonces.Remove(_sentNonces.Dequeue());
             }
             await RoomChat.WriteFrameAsync(_client.GetStream(), frame, ct);
         }
@@ -420,10 +484,15 @@ public sealed class ChatClient : IAsyncDisposable
         }
     }
 
-    /// <summary>这条消息是不是自己发的：看 nonce 是不是自己加密时用的（只看发送者 id 的话，知道房间码的人能冒充）。</summary>
+    /// <summary>
+    /// 这条消息是不是自己发的：发送者 id 是自己的，并且 nonce 是自己加密时用的、还没被认领过。
+    /// 只看 id 的话知道房间码的人能冒充；只看 nonce 的话别人把自己发过的帧原样重放（换上他的 id 也能过认证）也会被当成自己的。
+    /// 每个 nonce 只认第一次。
+    /// </summary>
     public bool IsMine(ChatMessage message)
     {
-        lock (_sentNonces) return message.Nonce.Length > 0 && _sentNonces.Contains(message.Nonce);
+        if (message.SenderId != SenderId || message.Nonce.Length == 0) return false;
+        lock (_sentNonces) return _unmatchedNonces.Remove(message.Nonce);
     }
 
     /// <summary>测试用：直接写原始帧。</summary>
