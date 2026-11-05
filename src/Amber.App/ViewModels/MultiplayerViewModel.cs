@@ -374,8 +374,15 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private void RemoveNode(NodeItem? item)
     {
         if (item is null) return;
+        var index = Nodes.IndexOf(item);
         Nodes.Remove(item);
         SaveNodes();
+        Toasts.Removed(item.Url, () =>
+        {
+            if (Nodes.Any(n => n.Url == item.Url)) return;
+            Nodes.Insert(Math.Clamp(index, 0, Nodes.Count), item);
+            SaveNodes();
+        });
     }
 
 

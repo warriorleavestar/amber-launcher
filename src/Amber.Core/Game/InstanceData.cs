@@ -101,6 +101,9 @@ public sealed record ServerEntry(string Name, string Address);
 public sealed record ServerStatus(bool Online, string? Motd, string? VersionName, int? Players, int? MaxPlayers, long? PingMs, string? Error);
 
 /// <summary>servers.dat：游戏的多人服务器列表。保留游戏写入的其他字段。</summary>
+/// <summary>从 servers.dat 删掉的一项：原来的位置和原始 NBT（用来撤销）。</summary>
+public sealed record RemovedServer(int Index, Dictionary<string, object> Raw);
+
 public static class ServerList
 {
     public static List<ServerEntry> Read(string workDir)
@@ -129,10 +132,25 @@ public static class ServerList
         Nbt.WriteFile(Path.Combine(workDir, "servers.dat"), root);
     }
 
-    public static void Remove(string workDir, string address)
+    /// <summary>删掉这个地址的服务器，返回删掉的原始条目和位置（撤销时原样放回，图标等字段不丢）；没有这个地址返回 null。</summary>
+    public static RemovedServer? Remove(string workDir, string address)
     {
         var (root, list) = Load(workDir);
+        var index = list.Items.FindIndex(i => i is Dictionary<string, object> d && (d.GetValueOrDefault("ip") as string) == address);
+        if (index < 0) return null;
+        var removed = new RemovedServer(index, (Dictionary<string, object>)list.Items[index]);
         list.Items.RemoveAll(i => i is Dictionary<string, object> d && (d.GetValueOrDefault("ip") as string) == address);
+        Nbt.WriteFile(Path.Combine(workDir, "servers.dat"), root);
+        return removed;
+    }
+
+    /// <summary>撤销 Remove：放回原来的位置（列表变短了就放到末尾）。同地址的已经又加回来了就不重复放。</summary>
+    public static void Restore(string workDir, RemovedServer removed)
+    {
+        var (root, list) = Load(workDir);
+        var address = removed.Raw.GetValueOrDefault("ip") as string;
+        if (list.Items.Any(i => i is Dictionary<string, object> d && (d.GetValueOrDefault("ip") as string) == address)) return;
+        list.Items.Insert(Math.Min(removed.Index, list.Items.Count), removed.Raw);
         Nbt.WriteFile(Path.Combine(workDir, "servers.dat"), root);
     }
 

@@ -10,6 +10,7 @@ namespace Amber.App.Services;
 /// <summary>
 /// 右下角的 Toast（改版规格 5.4）：最多 3 条。删除后显示“已删除 X【撤销】”8 秒；
 /// Toast 消失后，本次运行里删过的东西还能用 Ctrl+Z（最近一次）撤销。
+/// 文件进回收目录的用 Deleted；列表里的一项（服务器、节点）用 Removed，自己给出怎么放回去。
 /// </summary>
 public static class Toasts
 {
@@ -17,8 +18,11 @@ public static class Toasts
 
     private static WindowNotificationManager? _manager;
 
-    /// <summary>撤销记录：最近的在最后。每项是“恢复后要做的事”（比如刷新列表）。</summary>
-    private static readonly List<(TrashEntry Entry, Action<string> Restored)> History = [];
+    /// <summary>一条撤销记录：Toast 上显示的名字，和撤销时做的事（返回恢复后的名字，失败抛异常）。</summary>
+    private sealed record UndoItem(string Name, Func<string> Undo);
+
+    /// <summary>撤销记录：最近的在最后。</summary>
+    private static readonly List<UndoItem> History = [];
 
     public static void Attach(Window window) =>
         _manager = new WindowNotificationManager(window) { Position = NotificationPosition.BottomRight, MaxItems = 3 };
@@ -26,10 +30,26 @@ public static class Toasts
     public static void Show(string text, NotificationType type = NotificationType.Information) =>
         Dispatcher.UIThread.Post(() => _manager?.Show(new TextBlock { Text = text, TextWrapping = Avalonia.Media.TextWrapping.Wrap, MaxWidth = 360 }, type, TimeSpan.FromSeconds(4)));
 
-    /// <summary>删除后调用：记下撤销信息并显示 Toast。restored 收到实际恢复到的路径。</summary>
-    public static void Deleted(TrashEntry entry, Action<string> restored)
+    /// <summary>文件进回收目录后调用：记下撤销信息并显示 Toast。restored 收到实际恢复到的路径。</summary>
+    public static void Deleted(TrashEntry entry, Action<string> restored) =>
+        Add(new UndoItem(entry.Name, () =>
+        {
+            var path = TrashService.Restore(entry);
+            restored(path);
+            return Path.GetFileName(path);
+        }));
+
+    /// <summary>列表里的一项删掉后调用（不是文件）：undo 把它放回去。</summary>
+    public static void Removed(string name, Action undo) =>
+        Add(new UndoItem(name, () =>
+        {
+            undo();
+            return name;
+        }));
+
+    private static void Add(UndoItem item)
     {
-        lock (History) History.Add((entry, restored));
+        lock (History) History.Add(item);
         Dispatcher.UIThread.Post(() =>
         {
             if (_manager is null) return;
@@ -39,14 +59,14 @@ public static class Toasts
                 Children =
                 {
                     undo,
-                    new TextBlock { Text = L.F("trash.deleted", entry.Name), TextWrapping = Avalonia.Media.TextWrapping.Wrap, MaxWidth = 320, VerticalAlignment = VerticalAlignment.Center },
+                    new TextBlock { Text = L.F("trash.deleted", item.Name), TextWrapping = Avalonia.Media.TextWrapping.Wrap, MaxWidth = 320, VerticalAlignment = VerticalAlignment.Center },
                 },
             };
             DockPanel.SetDock(undo, Dock.Right);
             undo.Click += (_, _) =>
             {
                 undo.IsEnabled = false;
-                Undo(entry);
+                Undo(item);
             };
             _manager.Show(content, NotificationType.Information, UndoDuration);
         });
@@ -55,28 +75,22 @@ public static class Toasts
     /// <summary>撤销最近一次删除（Ctrl+Z）。没有可撤销的返回 false。</summary>
     public static bool UndoLatest()
     {
-        TrashEntry? entry;
-        lock (History) entry = History.Count > 0 ? History[^1].Entry : null;
-        if (entry is null) return false;
-        Undo(entry);
+        UndoItem? item;
+        lock (History) item = History.Count > 0 ? History[^1] : null;
+        if (item is null) return false;
+        Undo(item);
         return true;
     }
 
-    private static void Undo(TrashEntry entry)
+    private static void Undo(UndoItem item)
     {
-        Action<string>? restored = null;
         lock (History)
         {
-            var index = History.FindIndex(h => h.Entry.Id == entry.Id && h.Entry.TrashRoot == entry.TrashRoot);
-            if (index < 0) return;
-            restored = History[index].Restored;
-            History.RemoveAt(index);
+            if (!History.Remove(item)) return;
         }
         try
         {
-            var path = TrashService.Restore(entry);
-            restored(path);
-            Show(L.F("trash.restored", Path.GetFileName(path)), NotificationType.Success);
+            Show(L.F("trash.restored", item.Undo()), NotificationType.Success);
         }
         catch (TrashException e)
         {
@@ -84,7 +98,7 @@ public static class Toasts
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Show(L.F("trash.restore_failed", e.Message), NotificationType.Error);
+            Show(L.F("trash.restore_failed", ErrorText.Describe(e)), NotificationType.Error);
         }
     }
 

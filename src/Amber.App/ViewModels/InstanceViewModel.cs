@@ -1007,8 +1007,19 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private void RemoveServer(ServerItem? item)
     {
         if (Current is not { } c || item is null) return;
-        ServerList.Remove(c.WorkDir, item.Address);
+        var index = Servers.IndexOf(item);
+        var removed = ServerList.Remove(c.WorkDir, item.Address);
         Servers.Remove(item);
+        SetStatus(StatusMessage.Success("trash.deleted", item.Name));
+        if (removed is null) return;
+        var workDir = c.WorkDir;
+        Toasts.Removed(item.Name, () =>
+        {
+            ServerList.Restore(workDir, removed);
+            // 还在看同一个实例时把这一项放回列表原来的位置。
+            if (Current?.WorkDir == workDir && !Servers.Contains(item)) Servers.Insert(Math.Clamp(index, 0, Servers.Count), item);
+            SetStatus(StatusMessage.Success("trash.restored", item.Name));
+        });
     }
 
     [RelayCommand]
