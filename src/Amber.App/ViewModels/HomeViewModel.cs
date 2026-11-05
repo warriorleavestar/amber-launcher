@@ -274,6 +274,7 @@ public sealed partial class HomeViewModel : PageViewModel
             Progress = 100;
             _log.Clear();
             _recentOutput.Clear();
+            _lastRunNoTrace = _service.Settings.NoTrace;
             _log.AddRaw(L.F("home.log.launch", id, javaPath, memory));
             foreach (var note in _proxyNotes) _log.AddRaw(note);
             var parser = new GameLogParser();
@@ -372,9 +373,12 @@ public sealed partial class HomeViewModel : PageViewModel
         if (_game is { HasExited: false } game) game.Kill(true);
     }
 
+    /// <summary>上一局开着无痕模式：导出错误报告时去掉游戏输出里的聊天。</summary>
+    private bool _lastRunNoTrace;
+
     public void ExportCrashBundle(string zipPath)
     {
-        CrashAnalyzer.ExportBundle(zipPath, _lastRunFiles, _recentOutput);
+        CrashAnalyzer.ExportBundle(zipPath, _lastRunFiles, _lastRunNoTrace ? ChatLogFilter.WithoutChat(_recentOutput).ToList() : _recentOutput);
         Status = L.F("home.status.report_exported", zipPath);
     }
 

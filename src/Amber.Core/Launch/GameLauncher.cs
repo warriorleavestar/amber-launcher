@@ -46,8 +46,8 @@ public sealed class GameLauncher(GameDirectory dir)
     /// <summary>改用英文名联接启动时，联接背后真正的游戏目录。旧版本的家目录联接要直接指向真目录，不能联接套联接。</summary>
     internal string? RealRoot { get; init; }
 
-    /// <summary>生成完整命令行（不含 java 本身），可用于导出启动脚本。</summary>
-    public List<string> BuildArguments(LaunchOptions options)
+    /// <summary>生成完整命令行（不含 java 本身），可用于导出启动脚本。notice 收到无痕模式的提示（开着无痕模式时）。</summary>
+    public List<string> BuildArguments(LaunchOptions options, Action<string>? notice = null)
     {
         var version = dir.ResolveVersion(options.VersionId);
         var rules = new RuleEvaluator
@@ -111,12 +111,35 @@ public sealed class GameLauncher(GameDirectory dir)
             var logPath = dir.LoggingConfigPath(logFile.Id);
             if (File.Exists(logPath))
             {
-                if (options.NoTrace) logPath = ChatLogFilter.Prepare(logPath);
+                if (options.NoTrace)
+                {
+                    logPath = ChatLogFilter.Prepare(logPath);
+                    notice?.Invoke(L.T("core.launch.notrace.on"));
+                }
                 args.Add(logArg.Replace("${path}", logPath));
             }
             else if (options.NoTrace)
             {
                 throw new InvalidOperationException(L.T("core.launch.notrace.config_missing"));
+            }
+        }
+        else if (options.NoTrace)
+        {
+            // Forge 1.13+、NeoForge 的版本文件把 logging 清空了，游戏用加载器 jar 里自带的 log4j2.xml：取出来改好再指给它。
+            var extracted = ChatLogFilter.ExtractFromClasspath(classpath, dir.LoggingConfigPath(options.VersionId + "-log4j2.xml"));
+            if (extracted is not null)
+            {
+                args.Add("-Dlog4j.configurationFile=" + ChatLogFilter.Prepare(extracted));
+                notice?.Invoke(L.T("core.launch.notrace.on"));
+            }
+            else if (ChatLogFilter.UsesLog4j(classpath))
+            {
+                // 有 log4j（会写 latest.log）却找不到配置：不启动，说清楚是哪个加载器。
+                throw new InvalidOperationException(L.F("core.launch.notrace.loader_config_missing", ChatLogFilter.LoaderName(version)));
+            }
+            else
+            {
+                notice?.Invoke(L.T("core.launch.notrace.unsupported"));
             }
         }
 
@@ -211,8 +234,6 @@ public sealed class GameLauncher(GameDirectory dir)
     private Process LaunchCore(LaunchOptions options, Action<string>? onOutput)
     {
         var version = dir.ResolveVersion(options.VersionId);
-        if (options.NoTrace)
-            onOutput?.Invoke(L.T(ChatLogFilter.Supported(version) ? "core.launch.notrace.on" : "core.launch.notrace.unsupported"));
         ExtractNatives(options.VersionId, version);
         var workDir = options.WorkingDirectory ?? dir.Root;
         Directory.CreateDirectory(workDir);
@@ -230,7 +251,7 @@ public sealed class GameLauncher(GameDirectory dir)
             StandardErrorEncoding = onOutput is not null ? System.Text.Encoding.UTF8 : null,
             CreateNoWindow = true,
         };
-        foreach (var arg in BuildArguments(options)) psi.ArgumentList.Add(arg);
+        foreach (var arg in BuildArguments(options, onOutput)) psi.ArgumentList.Add(arg);
         // 1.6 以前的版本（和 Amber 装的老 Forge）把 %APPDATA%\.minecraft 当家目录，改成指向这个实例。
         var realWorkDir = RealRoot is { } real ? AsciiPaths.Remap(workDir, dir.Root, real) : workDir;
         if (IsPreLaunchwrapperHome(version) && AsciiPaths.LegacyHome(realWorkDir, onOutput) is { } home)

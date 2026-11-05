@@ -66,7 +66,12 @@ public class MultiplayerTests
         var room = new RoomCode("K7Q2M9XD", "4HZP8RW2N6TC", 51234);
         var args = EasyTierArgs.Build(new EasyTierOptions(room, true, ["tcp://public.easytier.top:11010", " "], 15999));
         var text = string.Join(' ', args);
-        Assert.Contains("--network-name amber-k7q2m9xd --network-secret 4HZP8RW2N6TC", text);
+        Assert.Contains("--network-name amber-k7q2m9xd", text);
+        // 房间密钥不放命令行，经环境变量传。
+        Assert.DoesNotContain("--network-secret", args);
+        Assert.DoesNotContain(args, a => a.Contains("4HZP8RW2N6TC"));
+        Assert.Equal(new Dictionary<string, string> { ["ET_NETWORK_SECRET"] = "4HZP8RW2N6TC" },
+            EasyTierArgs.Environment(new EasyTierOptions(room, true, [], 15999)));
         Assert.Contains("--ipv4 10.233.144.1", text);
         Assert.Contains("--no-tun", args);
         Assert.Contains("--rpc-portal 127.0.0.1:15999", text);
@@ -87,7 +92,8 @@ public class MultiplayerTests
         var ip = args[args.IndexOf("--ipv4") + 1];
         Assert.StartsWith(EasyTierArgs.Subnet, ip);
         Assert.NotEqual(EasyTierArgs.HostIp, ip);
-        Assert.Equal(ip, EasyTierArgs.Build(new EasyTierOptions(room, false, [], 1, 2, null, "guest-1"))[5]);
+        var again = EasyTierArgs.Build(new EasyTierOptions(room, false, [], 1, 2, null, "guest-1"));
+        Assert.Equal(ip, again[again.IndexOf("--ipv4") + 1]);
         Assert.Throws<ArgumentException>(() => EasyTierArgs.Build(new EasyTierOptions(room, false, [], 1)));
     }
 

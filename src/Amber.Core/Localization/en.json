@@ -1074,5 +1074,6 @@
   "core.launch.notrace.on": "No-trace mode: chat won't be written to this game's log",
   "core.launch.notrace.unsupported": "No-trace mode: this version is too old to change its logging, so chat will still be written to the game log",
   "core.launch.notrace.config_missing": "No-trace mode: this version's log configuration file is missing, so the game wasn't started. Repair the files first",
-  "core.launch.notrace.no_file_appender": "No-trace mode: this version's log configuration doesn't write a file, so chat can't be filtered"
+  "core.launch.notrace.no_file_appender": "No-trace mode: this version's log configuration doesn't write a file, so chat can't be filtered",
+  "core.launch.notrace.loader_config_missing": "No-trace mode: couldn't find {0}'s built-in logging configuration, so the game wasn't started (chat would otherwise be written to the game log). Turn off no-trace mode or reinstall this loader"
 }

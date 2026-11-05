@@ -127,12 +127,18 @@ public static class EasyTierArgs
     /// 加入方把本机端口转发到房主虚拟地址上的游戏端口；房主那边由 EasyTier 把发往自己虚拟地址的连接交给本机端口。
     /// 默认不监听公网端口（--no-listener），避免弹防火墙；连不通时数据经中继节点转发。
     /// </summary>
+    /// <summary>easytier-core 的环境变量名：房间密钥（2.6.4 的 --network-secret 也认这个环境变量）。</summary>
+    public const string SecretVariable = "ET_NETWORK_SECRET";
+
+    /// <summary>经环境变量传给 easytier-core 的值。</summary>
+    public static Dictionary<string, string> Environment(EasyTierOptions o) => new() { [SecretVariable] = o.Room.EasyTierSecret };
+
     public static List<string> Build(EasyTierOptions o)
     {
+        // 房间密钥不放命令行（别的程序能读到进程命令行，开了命令行审计还会记进系统日志），经环境变量 ET_NETWORK_SECRET 传，见 Environment。
         var args = new List<string>
         {
             "--network-name", o.Room.EasyTierNetworkName,
-            "--network-secret", o.Room.EasyTierSecret,
             "--ipv4", o.IsHost ? HostIp : Subnet + JoinerHost(o.MachineId),
             "--rpc-portal", $"127.0.0.1:{o.RpcPort}",
             "--hostname", o.IsHost ? "amber-host" : "amber-guest",
@@ -228,7 +234,7 @@ public static class EasyTierArgs
     /// <summary>加入方地址的最后一段：2–254，按机器标识稳定地选，避免每次变。</summary>
     internal static int JoinerHost(string? machineId)
     {
-        var seed = machineId ?? Environment.MachineName;
+        var seed = machineId ?? System.Environment.MachineName;
         var hash = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(seed));
         return 2 + hash[0] % 253;
     }
@@ -291,6 +297,7 @@ public sealed class EasyTierSession : IEasyTierSession
             RedirectStandardError = true,
         };
         foreach (var a in EasyTierArgs.Build(options)) info.ArgumentList.Add(a);
+        foreach (var (name, value) in EasyTierArgs.Environment(options)) info.Environment[name] = value;
         var process = Process.Start(info) ?? throw new InvalidOperationException(L.T("core.mp.component.startfailed"));
         ProcessJob? job = null;
         if (OperatingSystem.IsWindows())

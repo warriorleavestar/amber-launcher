@@ -1046,5 +1046,6 @@
   "core.launch.notrace.on": "無痕模式：這次遊戲記錄不記聊天",
   "core.launch.notrace.unsupported": "無痕模式：這個版本太舊，沒有可改的記錄設定，聊天仍會寫進遊戲記錄",
   "core.launch.notrace.config_missing": "無痕模式：缺少這個版本的記錄設定檔，沒有啟動。請先補全檔案",
-  "core.launch.notrace.no_file_appender": "無痕模式：這個版本的記錄設定裡沒有寫檔案的部分，無法過濾聊天"
+  "core.launch.notrace.no_file_appender": "無痕模式：這個版本的記錄設定裡沒有寫檔案的部分，無法過濾聊天",
+  "core.launch.notrace.loader_config_missing": "無痕模式：沒找到 {0} 內建的記錄設定，沒有啟動（不然聊天會寫進遊戲記錄）。可以先關掉無痕模式，或重新安裝這個載入器"
 }

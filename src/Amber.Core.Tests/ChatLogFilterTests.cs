@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Amber.Core.Launch;
@@ -86,7 +87,15 @@ public class ChatLogFilterTests
     [InlineData("[CHAT] Alex joined the game", true)]
     [InlineData("<Steve> hi", true)]
     [InlineData("[Not Secure] <Steve> hi", true)]
+    [InlineData("[Modified] <Steve> hi", true)]
+    [InlineData("[Not Secure] [Modified] <Steve> hi", true)]
+    [InlineData("<[Red] Team Steve> hi", true)]
+    [InlineData("<Steve the Builder> hi", true)]
+    [InlineData("[Server] restarting soon", true)]
+    [InlineData("[Not Secure] [Steve] said via /say", true)]
+    [InlineData("* Steve waves", true)]
     [InlineData("[CHAT] line one\nline two", true)]
+    [InlineData("<Steve> line one\nline two", true)]
     [InlineData("Loading 42 recipes", false)]
     [InlineData("Connecting to 127.0.0.1, 25565", false)]
     [InlineData("Reloading ResourceManager: vanilla, fabric", false)]
@@ -97,5 +106,59 @@ public class ChatLogFilterTests
         // log4j2 的 RegexFilter 用 Java 的 matches()，要整行匹配；.NET 用 \A...\z 模拟。
         var regex = new Regex(@"\A(?:" + ChatLogFilter.ChatRegex + @")\z");
         Assert.Equal(chat, regex.IsMatch(message));
+        Assert.Equal(chat, ChatLogFilter.IsChat(message));
+    }
+
+    /// <summary>错误报告里的游戏输出：原版控制台是 XML 事件（消息在 CDATA 里），其他是带时间和线程前缀的文本。</summary>
+    [Theory]
+    [InlineData("""<log4j:Event logger="ewi" timestamp="1" level="INFO" thread="Render thread"><log4j:Message><![CDATA[[System] [CHAT] <Steve> hi]]></log4j:Message></log4j:Event>""", true)]
+    [InlineData("""<log4j:Message><![CDATA[<Steve> hi]]></log4j:Message>""", true)]
+    [InlineData("""<log4j:Message><![CDATA[Loading 42 recipes]]></log4j:Message>""", false)]
+    [InlineData("[12:00:00] [Server thread/INFO]: <Steve> hi", true)]
+    [InlineData("[12:00:00] [Server thread/INFO] [minecraft/MinecraftServer]: [Not Secure] <Steve> hi", true)]
+    [InlineData("[12:00:00] [Server thread/INFO]: * Steve waves", true)]
+    [InlineData("[12:00:00] [Render thread/INFO]: Loading 42 recipes", false)]
+    [InlineData("[12:00:00] [Render thread/INFO]: [System] [CHAT] hi", true)]
+    public void ConsoleLinesAreRecognized(string line, bool chat) => Assert.Equal(chat, ChatLogFilter.IsChatLine(line));
+
+    [Fact]
+    public void WithoutChatKeepsOtherLines() =>
+        Assert.Equal(["[12:00:00] [main/INFO]: start", "crash here"],
+            ChatLogFilter.WithoutChat(["[12:00:00] [main/INFO]: start", "[12:00:01] [Server thread/INFO]: <Steve> secret plan", "crash here"]));
+
+    /// <summary>Forge 1.13+ / NeoForge：版本文件没有 logging，log4j2.xml 从加载器 jar 里取。</summary>
+    [Fact]
+    public void ExtractsLoaderConfigFromClasspath()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "amber-notrace-jar-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string Jar(string name, string? log4j)
+            {
+                var path = Path.Combine(dir, name);
+                using var zip = ZipFile.Open(path, ZipArchiveMode.Create);
+                zip.CreateEntry("META-INF/MANIFEST.MF");
+                if (log4j is not null)
+                    using (var w = new StreamWriter(zip.CreateEntry("log4j2.xml").Open())) w.Write(log4j);
+                return path;
+            }
+            var other = Jar("other-1.0.jar", """<Configuration><Appenders><File name="wrong" fileName="x.log"/></Appenders></Configuration>""");
+            var loader = Jar("fmlloader-1.20.1-47.2.0.jar", Vanilla);
+            var core = Jar("log4j-core-2.19.0.jar", null);
+            var target = Path.Combine(dir, "logging", "x-log4j2.xml");
+
+            Assert.Equal(target, ChatLogFilter.ExtractFromClasspath([other, core, loader], target));
+            Assert.Contains("RollingRandomAccessFile", File.ReadAllText(target));
+            Assert.Contains("RegexFilter", File.ReadAllText(ChatLogFilter.Prepare(target)));
+
+            Assert.Null(ChatLogFilter.ExtractFromClasspath([core, Path.Combine(dir, "missing.jar")], Path.Combine(dir, "y.xml")));
+            Assert.True(ChatLogFilter.UsesLog4j([core]));
+            Assert.False(ChatLogFilter.UsesLog4j([other]));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
     }
 }

@@ -17,9 +17,11 @@ public class ElevatedGuardTests
 
     private static string Core => Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
 
-    /// <summary>假的 easytier-core：打印收到的参数和自己的进程号，然后一直等着。</summary>
+    /// <summary>假的 easytier-core：打印收到的参数、环境变量里的密钥和自己的进程号，然后一直等着。</summary>
     private static string[] FakeCoreArgs(string tag) =>
-        ["-NoProfile", "-NonInteractive", "-Command", $"Write-Output ('pid=' + $PID); Write-Output 'tag={tag} secret={Secret}'; [Console]::Error.WriteLine('err-line'); Start-Sleep 60"];
+        ["-NoProfile", "-NonInteractive", "-Command", $"Write-Output ('pid=' + $PID); Write-Output ('tag={tag} secret=' + $env:{EasyTierArgs.SecretVariable}); [Console]::Error.WriteLine('err-line'); Start-Sleep 60"];
+
+    private static readonly Dictionary<string, string> Env = new() { [EasyTierArgs.SecretVariable] = Secret };
 
     private static async Task<bool> WaitAsync(Func<bool> condition, int seconds = 20)
     {
@@ -50,7 +52,9 @@ public class ElevatedGuardTests
     public async Task ArgumentsGoThroughThePipeAndOutputComesBack()
     {
         if (!OperatingSystem.IsWindows()) return;
-        using var guard = ElevatedGuard.Start(Core, FakeCoreArgs("one"), elevate: false);
+        var args = FakeCoreArgs("one");
+        Assert.DoesNotContain(args, a => a.Contains(Secret));
+        using var guard = ElevatedGuard.Start(Core, args, Env, elevate: false);
         Assert.DoesNotContain(Secret, guard.CommandLine);
         Assert.True(await WaitAsync(() => guard.RecentOutput.Any(l => l.Contains("tag=one secret=" + Secret))), string.Join(" | ", guard.RecentOutput));
         Assert.True(await WaitAsync(() => guard.RecentOutput.Contains("err-line")));
@@ -62,11 +66,11 @@ public class ElevatedGuardTests
     public async Task RestartSwitchesArgumentsAndStopEndsEverything()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var guard = ElevatedGuard.Start(Core, FakeCoreArgs("first"), elevate: false);
+        var guard = ElevatedGuard.Start(Core, FakeCoreArgs("first"), Env, elevate: false);
         Assert.True(await WaitAsync(() => CorePid(guard, "first") is not null), string.Join(" | ", guard.RecentOutput));
         var first = CorePid(guard, "first")!.Value;
 
-        guard.Start(FakeCoreArgs("second"));
+        guard.Start(FakeCoreArgs("second"), Env);
         Assert.True(await WaitAsync(() => !guard.StartPending && CorePid(guard, "second") is not null), string.Join(" | ", guard.RecentOutput));
         var second = CorePid(guard, "second")!.Value;
         Assert.True(await WaitAsync(() => !IsRunning(first)));
@@ -83,7 +87,7 @@ public class ElevatedGuardTests
     public async Task BrokenPipeEndsCore()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var guard = ElevatedGuard.Start(Core, FakeCoreArgs("crash"), elevate: false);
+        var guard = ElevatedGuard.Start(Core, FakeCoreArgs("crash"), Env, elevate: false);
         Assert.True(await WaitAsync(() => CorePid(guard, "crash") is not null), string.Join(" | ", guard.RecentOutput));
         var core = CorePid(guard, "crash")!.Value;
         guard.AbandonForTest();
@@ -91,22 +95,63 @@ public class ElevatedGuardTests
         Assert.True(await WaitAsync(() => !IsRunning(core)));
     }
 
-    /// <summary>别的程序抢先连上命令管道：认出进程号不对，不发参数，守护脚本也不会启动 easytier-core。</summary>
+    /// <summary>别的程序抢先连上命令管道：认出进程号不对，断开它、什么都不发，接着等真正的守护脚本，之后照常启动。</summary>
     [Fact]
     public async Task ImpostorClientGetsNothing()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var guard = ElevatedGuard.Start(Core, FakeCoreArgs("impostor"), elevate: false);
+        var guard = ElevatedGuard.Start(Core, FakeCoreArgs("impostor"), Env, elevate: false);
         using var impostor = new NamedPipeClientStream(".", $"amber-et-{guard.PipeId}-cmd", PipeDirection.In);
         await impostor.ConnectAsync(5000);
         var buffer = new byte[4096];
         var read = await impostor.ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(0, read);
-        Assert.True(await WaitAsync(() => guard.HasExited));
-        Assert.Contains(guard.RecentOutput, l => l.Length > 0);
-        Assert.DoesNotContain(guard.RecentOutput, l => l.Contains(Secret));
+        Assert.True(await WaitAsync(() => CorePid(guard, "impostor") is not null), string.Join(" | ", guard.RecentOutput));
+        Assert.False(guard.HasExited);
         guard.Dispose();
-        guard.WaitForExit(TimeSpan.FromSeconds(30));
+        Assert.True(guard.WaitForExit(TimeSpan.FromSeconds(20)));
+    }
+
+    /// <summary>管道不是 Amber 建的（服务端进程号不对）：守护脚本什么都不读就退出，不启动 easytier-core。</summary>
+    [Fact]
+    public async Task GuardRefusesForeignPipeServer()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var guard = ElevatedGuard.Start(Core, FakeCoreArgs("foreign"), Env, elevate: false, serverPidForTest: Environment.ProcessId + 4);
+        Assert.True(await WaitAsync(() => guard.HasExited, 30));
+        Assert.DoesNotContain(guard.RecentOutput, l => l.Contains("tag=foreign"));
+        guard.Dispose();
+    }
+
+    /// <summary>守护脚本连管道的期限比 Amber 等的短：Amber 先等到它放弃退出。</summary>
+    [Fact]
+    public void GuardGivesUpBeforeAmber() =>
+        Assert.True(TimeSpan.FromSeconds(ElevatedGuard.GuardConnectSeconds) < ElevatedGuard.ConnectTimeout);
+
+    /// <summary>程序路径里有 PowerShell 会当成引号的字符（‘’‚‛ 和 '）也能原样传过去。</summary>
+    [Fact]
+    public async Task CorePathWithQuoteCharacters()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var dir = Path.Combine(Path.GetTempPath(), "amber-q ‘x’ ‚y‛ 'z' __ID__ " + Guid.NewGuid().ToString("N")[..6]);
+        Directory.CreateDirectory(dir);
+        var core = Path.Combine(dir, "core.exe");
+        File.Copy(Core, core);
+        try
+        {
+            var guard = ElevatedGuard.Start(core, FakeCoreArgs("quoted"), Env, elevate: false);
+            Assert.True(await WaitAsync(() => CorePid(guard, "quoted") is not null), string.Join(" | ", guard.RecentOutput));
+            guard.Dispose();
+            Assert.True(guard.WaitForExit(TimeSpan.FromSeconds(20)));
+        }
+        finally
+        {
+            for (var i = 0; i < 20; i++)
+            {
+                try { Directory.Delete(dir, true); break; }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Thread.Sleep(250); }
+            }
+        }
     }
 
     [Theory]
@@ -147,7 +192,7 @@ public class ElevatedGuardTests
     [DllImport("kernel32.dll")]
     private static extern IntPtr LocalFree(IntPtr memory);
 
-    /// <summary>旧版本写在 run-lan 里的参数文件（有密钥）启动时清掉；别的文件不碰。</summary>
+    /// <summary>旧版本写在 run-lan 里的文件（参数、重启文件、日志都可能有密钥）启动时清掉；别的文件不碰。</summary>
     [Fact]
     public void LegacyFilesAreRemoved()
     {
@@ -158,11 +203,12 @@ public class ElevatedGuardTests
         File.WriteAllText(Path.Combine(run, "guard.ps1"), "x");
         File.WriteAllText(Path.Combine(run, "easytier.log"), "log");
         File.WriteAllText(Path.Combine(run, "stop.restart"), Secret);
+        File.WriteAllText(Path.Combine(run, "easytier.log.err"), Secret);
         var other = Path.Combine(dir, "keep.txt");
         File.WriteAllText(other, "keep");
         try
         {
-            Assert.Equal(4, EasyTierElevatedSession.LegacyFiles.Remove(dir));
+            Assert.Equal(5, EasyTierElevatedSession.LegacyFiles.Remove(dir));
             Assert.False(Directory.Exists(run));
             Assert.True(File.Exists(other));
             Assert.Equal(0, EasyTierElevatedSession.LegacyFiles.Remove(Path.Combine(dir, "missing")));
@@ -170,6 +216,42 @@ public class ElevatedGuardTests
         finally
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>run-lan 里的联接（junction）指到别处：不跟过去，那边的同名文件留着。</summary>
+    [Fact]
+    public void LegacyFilesSkipJunctions()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = Path.Combine(Path.GetTempPath(), "amber-legacy-junction-" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(root, "run-lan");
+        var outside = Path.Combine(root, "outside");
+        Directory.CreateDirectory(dir);
+        Directory.CreateDirectory(outside);
+        var target = Path.Combine(outside, "args.json");
+        File.WriteAllText(target, "keep");
+        var link = Path.Combine(dir, "a1b2c3d4");
+        try
+        {
+            using (var mk = Process.Start(new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{outside}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!)
+                mk.WaitForExit(10_000);
+            Assert.True(Directory.Exists(link));
+            Assert.Equal(0, EasyTierElevatedSession.LegacyFiles.Remove(dir));
+            Assert.Equal("keep", File.ReadAllText(target));
+
+            // 整个 run-lan 是联接也不碰。
+            var linkedRoot = Path.Combine(root, "linked-run-lan");
+            using (var mk = Process.Start(new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{linkedRoot}\" \"{outside}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!)
+                mk.WaitForExit(10_000);
+            Assert.Equal(0, EasyTierElevatedSession.LegacyFiles.Remove(linkedRoot));
+            Assert.Equal("keep", File.ReadAllText(target));
+            Directory.Delete(linkedRoot);
+        }
+        finally
+        {
+            try { if (Directory.Exists(link)) Directory.Delete(link); } catch (IOException) { }
+            try { Directory.Delete(root, true); } catch (IOException) { }
         }
     }
 }
