@@ -219,8 +219,15 @@ public sealed partial class MultiplayerViewModel
         MarkJoinStarted(newRoom: true);
         _sessionCts = new CancellationTokenSource();
         _service.ActiveMultiplayer = new DirectHandle(direct);
+        var starts = direct.EasyTierStarts;
         direct.StateChanged += () => Dispatcher.UIThread.Post(() =>
         {
+            // 直连会话自己启动或重启了 EasyTier（打不通改用节点、已提权的原地重启）：从这次开始重新计时。
+            if (direct.EasyTierStarts != starts)
+            {
+                starts = direct.EasyTierStarts;
+                MarkJoinStarted(newRoom: false);
+            }
             _session = direct.EasyTier;
             OnPropertyChanged(nameof(CanUseExit));
         });

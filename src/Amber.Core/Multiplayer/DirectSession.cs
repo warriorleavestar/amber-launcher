@@ -145,8 +145,12 @@ public sealed class DirectSession : IAsyncDisposable
             if (EasyTier is EasyTierSession plain && Options.Verbose) plain.Output += line => _log.Add("EasyTier", line);
         }
         _currentOptions = options;
+        EasyTierStarts++;
         StateChanged?.Invoke();
     }
+
+    /// <summary>EasyTier 启动或重启过几次（包括已提权会话的原地重启）：界面按它判断要不要重新计时。</summary>
+    public int EasyTierStarts { get; private set; }
 
     private static bool SameConfig(EasyTierOptions a, EasyTierOptions b) =>
         a.Tun == b.Tun && a.AllowExit == b.AllowExit && a.ExitNode == b.ExitNode && a.Peers.SequenceEqual(b.Peers)

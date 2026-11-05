@@ -402,6 +402,7 @@
   "core.mp.diagnostics.visibleips": "未遮挡（用户选择包含）",
   "core.mp.exit.failure_log": "[转发] {0}",
   "core.mp.exit.invalid_virtual_ip": "转发出口必须是房间里成员的虚拟 IP：{0}",
+  "core.mp.exit.local_scan_failed": "读取本机网卡信息失败（{0}），为了不让别人经你连到你的电脑和家里的设备，暂时不转发。稍后会自动重试。",
   "core.mp.exit.public_ip_ready": "[转发] 已查到公网 IP，开始转发",
   "core.mp.exit.public_ip_unavailable": "查不到你的公网 IP（STUN 服务器连不上，可能是 UDP 被拦了），为了不让别人经你连到你的路由器，暂时不转发。网络恢复后会自动重试。",
   "core.mp.failure.symmetric": "双方都是对称 NAT（严格），基本没法直连。可以换一方用家里的宽带、开启路由器 UPnP，或者添加一个联机节点",
