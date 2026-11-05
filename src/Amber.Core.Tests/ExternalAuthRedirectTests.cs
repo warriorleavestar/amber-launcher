@@ -169,6 +169,25 @@ public sealed class ExternalAuthRedirectTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => auth.ResolveApiRootAsync(skin.Root + "/loop"));
     }
 
+    /// <summary>不带密码令牌的 GET（元数据、皮肤资料）可以跟同一服务器内的跳转；跳到别的服务器照样拒绝。</summary>
+    [Fact]
+    public async Task MetadataGetFollowsSameOriginRedirectOnly()
+    {
+        await using var evil = new TestServer((_, _) => Json("""{"meta":{"serverName":"evil"}}"""));
+        await using var skin = new TestServer((path, _) => path switch
+        {
+            "/api/" => Redirect(301, "/api/index"),
+            "/api/index" => Json("""{"meta":{"serverName":"ok"}}"""),
+            "/away/" => Redirect(302, evil.Root + "/"),
+            _ => (404, [], ""),
+        });
+        using var http = ExternalAuth.CreateHttpClient();
+        var auth = new ExternalAuth(http);
+        Assert.Equal("ok", await auth.GetServerNameAsync(skin.Root + "/api"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => auth.GetMetadataAsync(skin.Root + "/away"));
+        Assert.Empty(evil.Requests);
+    }
+
     [Theory]
     [InlineData("http://loopback/api")]
     [InlineData("http://LOOPBACK:8080/api")]
