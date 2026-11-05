@@ -194,4 +194,17 @@ public sealed class VersionPathTests : IDisposable
         Pack("C:\\evil.dll");
         Assert.Throws<InvalidDataException>(() => launcher.ExtractNatives("n", dir.ResolveVersion("n")));
     }
+
+    /// <summary>盘符根目录当 Within / 基准目录时也能正确判断（以前多拼一个分隔符，谁都不匹配，客户端 jar 下不了）。</summary>
+    [Fact]
+    public void DriveRootWorksAsContainer()
+    {
+        var root = Path.GetPathRoot(Path.GetTempPath())!;
+        var inside = Path.Combine(root, "amber-test", "client.jar");
+        Assert.True(GameDirectory.IsWithin(root, inside));
+        Assert.Equal(inside, GameDirectory.Contained(root, "amber-test/client.jar"));
+        Downloader.CheckTarget(new DownloadItem("https://example.invalid/x", inside, Within: root));
+        Assert.False(GameDirectory.IsWithin(Path.Combine(root, "a"), Path.Combine(root, "ab", "x")));
+        Assert.False(GameDirectory.IsWithin(Path.Combine(root, "a"), Path.Combine(root, "a")));
+    }
 }

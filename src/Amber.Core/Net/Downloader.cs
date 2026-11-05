@@ -286,9 +286,8 @@ public sealed class Downloader
     {
         if (item.Within is not { } within) return;
         var full = Path.IsPathFullyQualified(item.LocalPath) ? Path.GetFullPath(item.LocalPath) : null;
-        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(within));
         var ok = full is not null && string.Equals(full, item.LocalPath, StringComparison.OrdinalIgnoreCase) && !Path.GetFileName(full).Contains(':')
-                 && full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+                 && Game.GameDirectory.IsWithin(within, full);
         if (!ok) throw new InvalidDataException(L.F("core.net.download.unsafetarget", item.LocalPath));
     }
 

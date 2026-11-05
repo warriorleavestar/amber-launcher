@@ -86,7 +86,7 @@ public static class LegacyForge
                 var done = 0;
                 foreach (var lib in libs)
                 {
-                    await FetchVerifiedAsync(ctx.Downloader, lib, Path.Combine(cache, lib.Name), ct);
+                    await FetchVerifiedAsync(ctx.Downloader, lib, Game.GameDirectory.Contained(cache, Game.GameDirectory.CheckId(lib.Name)), ct);
                     progress?.Report(new(L.F("core.install.legacyforge.libraryprogress", ++done, libs.Count), 100.0 * done / libs.Count));
                 }
             }
@@ -229,7 +229,7 @@ public static class LegacyForge
         {
             try
             {
-                await downloader.DownloadOneAsync(new DownloadItem(url, path, lib.Sha1), ct);
+                await downloader.DownloadOneAsync(new DownloadItem(url, path, lib.Sha1, Within: Path.GetDirectoryName(path)), ct);
                 if (await Sha1Async(path, ct) == lib.Sha1) return;
                 errors.Add(L.F("core.install.legacyforge.invalidcontent", url));
             }
