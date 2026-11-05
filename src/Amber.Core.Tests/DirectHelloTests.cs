@@ -111,6 +111,33 @@ public sealed class DirectHelloTests
         lock (logs) Assert.Contains(logs, l => l.Contains(nameof(InvalidOperationException)));
     }
 
+    /// <summary>R9：房主同时接的加入方有上限，超过的不登记（不建本机套接字、不开转发循环），已连上的照常收发。</summary>
+    [Fact]
+    public async Task HostPeerCountIsCapped()
+    {
+        var logs = new List<string>();
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, l => { lock (logs) logs.Add(l); });
+        var guests = new List<DirectBridge>();
+        try
+        {
+            var target = new[] { new Candidate(PathKind.Lan, new IPEndPoint(IPAddress.Loopback, host.SocketEndPoint.Port)) };
+            for (var i = 0; i < DirectBridge.MaxHostPeers + 2; i++)
+            {
+                var guest = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+                guests.Add(guest);
+                await guest.PunchAsync(target, NatKind.Cone, TimeSpan.FromSeconds(5));
+            }
+            await Task.Delay(300);
+            Assert.Equal(DirectBridge.MaxHostPeers, host.Peers.Count);
+            Assert.All(host.Peers, p => Assert.NotNull(p.Local));
+            lock (logs) Assert.Contains(logs, l => l.Contains(DirectBridge.MaxHostPeers.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        }
+        finally
+        {
+            foreach (var g in guests) await g.DisposeAsync();
+        }
+    }
+
     /// <summary>原文、十六进制、Base64 / Base64url（任意对齐）里有没有 secret。</summary>
     private static bool ContainsReversible(byte[] data, string secret)
     {

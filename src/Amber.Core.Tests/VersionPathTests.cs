@@ -78,7 +78,7 @@ public sealed class VersionPathTests : IDisposable
         await Assert.ThrowsAsync<InvalidDataException>(() => installer.CompleteAsync("v"));
         Assert.Equal("keep", File.ReadAllText(_sentinel));
         Assert.Equal(0, handler.Calls);
-        Assert.Single(Directory.EnumerateFileSystemEntries(_base, "*", SearchOption.TopDirectoryOnly).Where(p => File.Exists(p)));
+        Assert.Single(Directory.EnumerateFileSystemEntries(_base, "*", SearchOption.TopDirectoryOnly), p => File.Exists(p));
     }
 
     [Theory]

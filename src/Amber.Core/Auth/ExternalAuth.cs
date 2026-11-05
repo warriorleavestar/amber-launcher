@@ -12,9 +12,29 @@ public sealed record ExternalProfile(string Id, string Name);
 
 public sealed record ExternalLoginResult(Account Account, IReadOnlyList<ExternalProfile> Profiles);
 
-/// <summary>外置登录（authlib-injector / Yggdrasil 协议）。密码只用于这一次请求，不保存。</summary>
+/// <summary>
+/// 外置登录（authlib-injector / Yggdrasil 协议）。密码只用于这一次请求，不保存。
+/// http 要用不自动跟随跳转的（<see cref="CreateHttpClient"/>）：自动跟随 307/308 时，密码和令牌在检查之前就已经发到别的服务器了。
+/// </summary>
 public sealed class ExternalAuth(HttpClient http)
 {
+    /// <summary>发现 API 地址时最多跟几次跳转。</summary>
+    private const int MaxDiscoveryRedirects = 5;
+
+    /// <summary>外置登录专用的 HttpClient：不自动跟随跳转。</summary>
+    public static HttpClient CreateHttpClient()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            AutomaticDecompression = System.Net.DecompressionMethods.All,
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+        };
+        var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(60) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd($"Amber/{typeof(ExternalAuth).Assembly.GetName().Version?.ToString(3) ?? "0.1"}");
+        return client;
+    }
+
     /// <summary>
     /// 外置登录服务器地址只能是 https（密码和令牌要经它传）；本机回环地址例外（本地测试用）。
     /// 返回规范化的地址；不合格时抛 <see cref="InvalidOperationException"/>。
@@ -22,10 +42,45 @@ public sealed class ExternalAuth(HttpClient http)
     public static Uri CheckSecure(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
-            || !(uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback)
+            || !(uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp && IsLoopbackHost(uri))
             || !string.IsNullOrEmpty(uri.UserInfo))
             throw new InvalidOperationException(L.F("core.auth.external.insecure", url));
         return uri;
+    }
+
+    /// <summary>
+    /// 只认用户写的 localhost、127.0.0.0/8 和 ::1。Uri 会把主机名“loopback”悄悄改写成 localhost（Uri.IsLoopback 也认它），
+    /// 所以这里看原文里写的主机名，不看规范化之后的。
+    /// </summary>
+    public static bool IsLoopbackHost(Uri uri)
+    {
+        var host = WrittenHost(uri.OriginalString);
+        if (host is null) return false;
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)) return string.Equals(uri.DnsSafeHost, "localhost", StringComparison.OrdinalIgnoreCase);
+        return System.Net.IPAddress.TryParse(host.Trim('[', ']'), out var ip) && System.Net.IPAddress.IsLoopback(ip)
+            && System.Net.IPAddress.TryParse(uri.DnsSafeHost, out var parsed) && System.Net.IPAddress.IsLoopback(parsed);
+    }
+
+    /// <summary>地址原文里的主机名（去掉协议、用户信息、端口和路径）。</summary>
+    private static string? WrittenHost(string url)
+    {
+        var start = url.IndexOf("://", StringComparison.Ordinal);
+        if (start < 0) return null;
+        var rest = url[(start + 3)..];
+        var end = rest.IndexOfAny(['/', '?', '#', '\\']);
+        var authority = end < 0 ? rest : rest[..end];
+        authority = authority[(authority.LastIndexOf('@') + 1)..];
+        if (authority.StartsWith('[')) return authority.IndexOf(']') is var close and > 0 ? authority[..(close + 1)] : null;
+        var colon = authority.IndexOf(':');
+        return colon < 0 ? authority : authority[..colon];
+    }
+
+    /// <summary>返回了跳转（3xx）：不跟着走，当作错误。</summary>
+    private static void CheckNotRedirected(HttpResponseMessage response)
+    {
+        if ((int)response.StatusCode is >= 300 and < 400)
+            throw new InvalidOperationException(L.F("core.auth.external.redirected",
+                response.Headers.Location is { } location && location.IsAbsoluteUri ? location.GetLeftPart(UriPartial.Authority) : (int)response.StatusCode));
     }
 
     /// <summary>
@@ -36,17 +91,34 @@ public sealed class ExternalAuth(HttpClient http)
     {
         url = url.Trim();
         if (!url.Contains("://", StringComparison.Ordinal)) url = "https://" + url;
-        var start = CheckSecure(url);
-        using var response = await http.GetAsync(start, HttpCompletionOption.ResponseHeadersRead, ct);
-        var final = response.RequestMessage?.RequestUri ?? start;
-        CheckNoDowngrade(start, final);
-        if (response.Headers.TryGetValues("X-Authlib-Injector-API-Location", out var locations) && locations.FirstOrDefault() is { } location)
+        var final = CheckSecure(url);
+        // 跳转自己一步步跟：每一步都不能降到 http，也不能换到别的服务器。
+        for (var hop = 0; ; hop++)
         {
-            var resolved = new Uri(final, location);
-            CheckNoDowngrade(final, resolved);
-            return resolved.ToString().TrimEnd('/');
+            using var response = await http.GetAsync(final, HttpCompletionOption.ResponseHeadersRead, ct);
+            if ((int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is { } next)
+            {
+                if (hop >= MaxDiscoveryRedirects) throw new InvalidOperationException(L.F("core.auth.external.redirected", final.GetLeftPart(UriPartial.Authority)));
+                var target = new Uri(final, next);
+                CheckNoDowngrade(final, target);
+                CheckSameOrigin(final, target);
+                final = target;
+                continue;
+            }
+            // 传进来的 HttpClient 自己跟随了跳转（不是 CreateHttpClient 建的）：最终地址也得过同样的检查。
+            if (response.RequestMessage?.RequestUri is { } followed && followed != final)
+            {
+                CheckNoDowngrade(final, followed);
+                CheckSameOrigin(final, followed);
+            }
+            if (response.Headers.TryGetValues("X-Authlib-Injector-API-Location", out var locations) && locations.FirstOrDefault() is { } location)
+            {
+                var resolved = new Uri(final, location);
+                CheckNoDowngrade(final, resolved);
+                return resolved.ToString().TrimEnd('/');
+            }
+            return final.ToString().TrimEnd('/');
         }
-        return final.ToString().TrimEnd('/');
     }
 
     private static void CheckNoDowngrade(Uri from, Uri to)
@@ -66,12 +138,25 @@ public sealed class ExternalAuth(HttpClient http)
         return await response.Content.ReadAsStringAsync(ct);
     }
 
-    /// <summary>请求被跳转到了别的地方（换了协议、主机或端口）：不认，令牌和密码只发给用户填的那个服务器。</summary>
+    /// <summary>请求被跳转到了别的地方（3xx，或者传进来的 HttpClient 自己跟随了跳转）：不认，令牌和密码只发给用户填的那个服务器。</summary>
     private static void CheckSameOrigin(Uri requested, HttpResponseMessage response)
     {
-        if (response.RequestMessage?.RequestUri is { } final
-            && (final.Scheme != requested.Scheme || !string.Equals(final.Authority, requested.Authority, StringComparison.OrdinalIgnoreCase)))
+        CheckNotRedirected(response);
+        if (response.RequestMessage?.RequestUri is { } final) CheckSameOrigin(requested, final);
+    }
+
+    private static void CheckSameOrigin(Uri requested, Uri final)
+    {
+        if (final.Scheme != requested.Scheme || !string.Equals(final.Authority, requested.Authority, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(L.F("core.auth.external.redirected", final.GetLeftPart(UriPartial.Authority)));
+    }
+
+    /// <summary>这个外置账号存的服务器地址不安全（v0.5.8 及以前允许 http）：要用 https 重新添加。</summary>
+    public static bool HasInsecureServer(Account account)
+    {
+        if (account.Kind != AccountKind.External || string.IsNullOrEmpty(account.ServerUrl)) return false;
+        try { CheckSecure(account.ServerUrl); return false; }
+        catch (InvalidOperationException) { return true; }
     }
 
     public async Task<string> GetServerNameAsync(string apiRoot, CancellationToken ct = default)

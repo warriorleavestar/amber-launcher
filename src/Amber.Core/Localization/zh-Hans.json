@@ -1060,5 +1060,8 @@
   "core.auth.external.insecure": "外置登录服务器必须用 https（密码和令牌会经它传）：{0}",
   "core.auth.external.redirected": "外置登录服务器把请求跳转到了别的地址（{0}），为了安全没有继续",
   "core.content.modpack.skipped": "跳过整合包里名字可疑或属于启动器的文件：{0}",
-  "core.net.download.unsafetarget": "下载目标位置不安全，已停止：{0}"
+  "core.net.download.unsafetarget": "下载目标位置不安全，已停止：{0}",
+  "core.mp.punch.localerror": "直连的本机转发出错（{0}）",
+  "core.mp.punch.toomanypeers": "已经连着 {1} 个加入方，不再接受 {0}",
+  "accounts.external.insecure_saved": "这个账号的服务器地址是 http，密码和令牌会明文传输，已不能使用。请删掉后用 https 地址重新添加。"
 }

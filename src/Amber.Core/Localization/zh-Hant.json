@@ -1060,5 +1060,8 @@
   "core.auth.external.insecure": "外置登入伺服器必須使用 https（密碼和權杖會經由它傳送）：{0}",
   "core.auth.external.redirected": "外置登入伺服器把請求轉址到別的位址（{0}），為了安全沒有繼續",
   "core.content.modpack.skipped": "略過整合包裡名稱可疑或屬於啟動器的檔案：{0}",
-  "core.net.download.unsafetarget": "下載目標位置不安全，已停止：{0}"
+  "core.net.download.unsafetarget": "下載目標位置不安全，已停止：{0}",
+  "core.mp.punch.localerror": "直連的本機轉發出錯（{0}）",
+  "core.mp.punch.toomanypeers": "已經連著 {1} 個加入方，不再接受 {0}",
+  "accounts.external.insecure_saved": "這個帳號的伺服器位址是 http，密碼和權杖會明文傳輸，已無法使用。請刪除後用 https 位址重新新增。"
 }

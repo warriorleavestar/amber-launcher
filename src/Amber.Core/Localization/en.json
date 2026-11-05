@@ -1088,5 +1088,8 @@
   "core.auth.external.insecure": "The external login server must use https (your password and tokens go through it): {0}",
   "core.auth.external.redirected": "The external login server redirected the request to another address ({0}). Stopped for safety",
   "core.content.modpack.skipped": "Skipped a modpack file with a suspicious name or one that belongs to the launcher: {0}",
-  "core.net.download.unsafetarget": "The download target isn't safe, so the download was stopped: {0}"
+  "core.net.download.unsafetarget": "The download target isn't safe, so the download was stopped: {0}",
+  "core.mp.punch.localerror": "Direct mode's local forwarding failed ({0})",
+  "core.mp.punch.toomanypeers": "Already connected to {1} guests, so {0} wasn't accepted",
+  "accounts.external.insecure_saved": "This account's server uses http, which sends passwords and tokens unencrypted, so it can no longer be used. Remove it and add it again with an https address."
 }

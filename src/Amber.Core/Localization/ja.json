@@ -1060,5 +1060,8 @@
   "core.auth.external.insecure": "外部ログインサーバーは https である必要があります（パスワードとトークンがこのサーバーを通ります）：{0}",
   "core.auth.external.redirected": "外部ログインサーバーが別のアドレス（{0}）へリダイレクトしたため、安全のため中止しました",
   "core.content.modpack.skipped": "名前が不審なファイル、またはランチャー自身のファイルなので、モッドパックから取り込みませんでした：{0}",
-  "core.net.download.unsafetarget": "ダウンロード先が安全ではないため、中止しました：{0}"
+  "core.net.download.unsafetarget": "ダウンロード先が安全ではないため、中止しました：{0}",
+  "core.mp.punch.localerror": "直接接続のローカル転送でエラーが起きました（{0}）",
+  "core.mp.punch.toomanypeers": "すでに {1} 人の参加者とつながっているため、{0} は受け付けませんでした",
+  "accounts.external.insecure_saved": "このアカウントのサーバーは http で、パスワードとトークンが暗号化されずに送信されるため使用できません。削除して https のアドレスで追加し直してください。"
 }

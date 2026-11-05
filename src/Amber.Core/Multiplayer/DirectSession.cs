@@ -443,7 +443,7 @@ public sealed class DirectSession : IAsyncDisposable
         {
             return false;
         }
-        _elevateReply = new TaskCompletionSource<bool>();
+        _elevateReply = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         await Bridge!.SendControlAsync(peer, new JsonObject { ["op"] = "elevate", ["run"] = run });
         try
         {
