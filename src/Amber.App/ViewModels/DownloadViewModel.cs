@@ -299,22 +299,23 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         }
 
         IsBusy = true;
-        _installCts = new CancellationTokenSource();
+        var installCts = _installCts = new CancellationTokenSource();
         var watch = Stopwatch.StartNew();
-        var ct = _installCts.Token;
-        // 先放“安装未完成”标记：中途取消或失败时，实例列表会显示“安装未完成”，补全文件可以接着装。
+        var ct = installCts.Token;
+        var acceptingProgress = true;
+        bool AcceptProgress() => acceptingProgress && IsBusy && ReferenceEquals(_installCts, installCts) && !ct.IsCancellationRequested;
+        // 加载器的标记由安装入口放置；Forge 系必须先保留新目录，不能在这里提前创建目标。
         var expectedId = loader is null ? item.Id : string.IsNullOrWhiteSpace(CustomName) ? SelectedLoaderVersion!.DefaultId : CustomName.Trim();
-        try { _service.MarkInstallStarted(expectedId); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         try
         {
             string id;
-            if (loader is { } kind)
+            if (loader is not null)
             {
                 var chosen = SelectedLoaderVersion!;
                 SetStatus(StatusMessage.Info("download.status.installing", chosen.DefaultId));
-                id = await LoaderInstallers.Create(kind, _service.Loaders).InstallAsync(chosen, CustomName, new Progress<LoaderProgress>(p =>
+                id = await _service.InstallLoaderAsync(chosen, CustomName, new Progress<LoaderProgress>(p =>
                 {
+                    if (!AcceptProgress()) return;
                     Status = p.Stage;
                     if (p.Percent is { } percent) Progress = percent;
                 }), ct);
@@ -322,9 +323,12 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             else
             {
                 id = item.Id;
+                try { _service.MarkInstallStarted(id); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
                 SetStatus(StatusMessage.Info("download.status.installing", id));
                 await _service.Installer.InstallAsync(id, new Progress<InstallProgress>(p =>
                 {
+                    if (!AcceptProgress()) return;
                     if (p.Stage != InstallStage.Files || p.Files.TotalFiles == 0) return;
                     Progress = 100.0 * p.Files.CompletedFiles / p.Files.TotalFiles;
                     var mb = p.Files.BytesDownloaded / 1024.0 / 1024;
@@ -333,6 +337,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
                 item.Installed = true;
             }
             await Ui.FlushAsync();
+            acceptingProgress = false;
             var elapsedSeconds = watch.Elapsed.TotalSeconds;
             Status = L.P("download.status.installed", (long)Math.Round(elapsedSeconds), id, elapsedSeconds);
             Target = null;
@@ -347,15 +352,19 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         }
         catch (OperationCanceledException)
         {
+            acceptingProgress = false;
             SetStatus(StatusMessage.Warning("download.status.cancelled"));
         }
         catch (Exception e)
         {
+            acceptingProgress = false;
             SetStatus(StatusMessage.Failure("common.install_failed", e, ErrorText.Of(e)));
         }
         finally
         {
-            // 取消、失败时“安装未完成”标记留着：通知界面刷新标注。
+            // Progress 回调可能还在 UI 队列中；结束后的旧进度不能覆盖本次结局或下一次安装。
+            acceptingProgress = false;
+            // 刷新失败或取消后的状态；已回滚的目录不再保留标记，其余未完成安装仍显示标注。
             _service.NotifyInstanceStateChanged(expectedId);
             IsBusy = false;
             Progress = 0;

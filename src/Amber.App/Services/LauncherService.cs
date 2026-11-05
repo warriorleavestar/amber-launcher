@@ -160,6 +160,27 @@ public sealed class LauncherService : IDisposable
         finally { NotifyInstanceStateChanged(id); }
     }
 
+    /// <summary>
+    /// 界面安装加载器：Forge 系先保留新目录，再放“安装未完成”标记；已有实例被拒绝时不改它的状态。
+    /// 成功后由界面在全部准备完成时清除标记；失败时安装器只回滚本次拥有的目录。
+    /// </summary>
+    public Task<string> InstallLoaderAsync(LoaderVersion version, string? customId = null, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default)
+    {
+        void Started(string id)
+        {
+            try { MarkInstallStarted(id); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
+
+        var installer = LoaderInstallers.Create(version.Kind, Loaders);
+        if (installer is ForgeLikeInstaller forge)
+            return forge.InstallAsync(version, customId, progress, ct, Started);
+
+        var id = string.IsNullOrWhiteSpace(customId) ? version.DefaultId : customId.Trim();
+        Started(id);
+        return installer.InstallAsync(version, customId, progress, ct);
+    }
+
     /// <summary>当前实例还装着就返回它，否则返回 fallback（比如列表第一项）。</summary>
     public string? CurrentOr(IReadOnlyCollection<string> installed, string? fallback) =>
         CurrentInstance is { } id && installed.Contains(id) ? id : fallback;
