@@ -21,7 +21,7 @@ public sealed class NoTraceLaunchTests : IDisposable
         try { Directory.Delete(_temp, true); } catch (IOException) { }
     }
 
-    private const string Log4j2 = """<Configuration><Appenders><RollingRandomAccessFile name="File" fileName="logs/latest.log"/></Appenders></Configuration>""";
+    private const string Log4j2 = """<Configuration><Appenders><RollingRandomAccessFile name="File" fileName="logs/latest.log"/></Appenders><Loggers><Root level="info"><AppenderRef ref="File"/></Root></Loggers></Configuration>""";
 
     private void Library(string group, string artifact, string version, string? log4j)
     {
@@ -103,5 +103,53 @@ public sealed class NoTraceLaunchTests : IDisposable
         Version("neo-x", "org.apache.logging.log4j:log4j-core:2.19.0", "net.neoforged.fancymodloader:loader:4.0.0");
         var e = Assert.Throws<InvalidOperationException>(() => Build("neo-x", []));
         Assert.Equal(L.F("core.launch.notrace.loader_config_missing", "NeoForge"), e.Message);
+    }
+
+    /// <summary>启动时的清理：用它的游戏已经不在了的删掉；游戏还在运行的、刚建好还没有 owner 的留着。</summary>
+    [Fact]
+    public void SweepRemovesOnlyAbandonedDirs()
+    {
+        Directory.CreateDirectory(_temp);
+        string Dir(string name, string? owner, TimeSpan age)
+        {
+            var d = Directory.CreateDirectory(Path.Combine(_temp, name)).FullName;
+            File.WriteAllText(Path.Combine(d, "client.amber-notrace.xml"), "<Configuration/>");
+            if (owner is not null) File.WriteAllText(Path.Combine(d, NoTraceDirs.OwnerFile), owner);
+            Directory.SetCreationTimeUtc(d, DateTime.UtcNow - age);
+            return d;
+        }
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        var running = Dir("running", $"{self.Id}\n{self.StartTime.ToUniversalTime().Ticks}", TimeSpan.FromDays(1));
+        var reused = Dir("reused", $"{self.Id}\n1", TimeSpan.FromDays(1)); // 进程号被别的进程重用了
+        var gone = Dir("gone", "999999999\n1", TimeSpan.FromDays(1));
+        var fresh = Dir("fresh", null, TimeSpan.FromMinutes(1));
+        var stale = Dir("stale", null, TimeSpan.FromHours(1));
+        var garbage = Dir("garbage", "not a pid", TimeSpan.FromDays(1));
+
+        Assert.Equal(4, GameLauncher.SweepNoTrace(_temp));
+        Assert.True(Directory.Exists(running));
+        Assert.True(Directory.Exists(fresh));
+        Assert.False(Directory.Exists(reused));
+        Assert.False(Directory.Exists(gone));
+        Assert.False(Directory.Exists(stale));
+        Assert.False(Directory.Exists(garbage));
+        Assert.Equal(0, GameLauncher.SweepNoTrace(Path.Combine(_temp, "missing")));
+    }
+
+    /// <summary>退出时删不掉（被占用）：过一会儿再试，占用解除后删掉。</summary>
+    [Fact]
+    public async Task ExitDeleteRetriesWhileLocked()
+    {
+        var dir = Directory.CreateDirectory(Path.Combine(_temp, "locked")).FullName;
+        var file = Path.Combine(dir, "client.amber-notrace.xml");
+        File.WriteAllText(file, "<Configuration/>");
+        var launcher = Launcher();
+        var locked = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None);
+        var deleting = launcher.DeleteNoTraceDirWithRetryAsync(dir);
+        await Task.Delay(300);
+        Assert.True(Directory.Exists(dir));
+        locked.Dispose();
+        Assert.True(await deleting);
+        Assert.False(Directory.Exists(dir));
     }
 }

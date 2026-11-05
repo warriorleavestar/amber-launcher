@@ -128,12 +128,24 @@ public class ElevatedGuardTests
     public async Task LateGuardAfterTimeoutIsReportedAndShutOut()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var guard = ElevatedGuard.Start(Core, FakeCoreArgs("late"), Env, elevate: false, connectTimeoutForTest: TimeSpan.FromMilliseconds(1));
-        Assert.True(await WaitAsync(() => guard.ConnectFailed, 5));
-        // 守护脚本自己的期限是 20 秒；被关掉管道的话远早于这个时间退出。
-        Assert.True(await WaitAsync(() => guard.HasExited, 12), "守护脚本没有被关在外面");
-        Assert.DoesNotContain(guard.RecentOutput, l => l.Contains("tag=late"));
-        guard.Dispose();
+        // easytier-core 一旦被启动就会建这个标记文件：超时后晚到的守护脚本不能启动它。
+        var marker = Path.Combine(Path.GetTempPath(), "amber-late-core-" + Guid.NewGuid().ToString("N")[..8]);
+        string[] args = ["-NoProfile", "-NonInteractive", "-Command", $"New-Item -ItemType File -Path '{marker}' | Out-Null; Start-Sleep 60"];
+        var guard = ElevatedGuard.Start(Core, args, Env, elevate: false, connectTimeoutForTest: TimeSpan.FromMilliseconds(1));
+        try
+        {
+            Assert.True(await WaitAsync(() => guard.ConnectFailed, 5));
+            Assert.False(guard.StartPending); // 没真正发出去的重启不算“正在重启”
+            // 守护脚本自己的期限是 20 秒；被关掉管道的话远早于这个时间退出。
+            Assert.True(await WaitAsync(() => guard.HasExited, 12), "守护脚本没有被关在外面");
+            await Task.Delay(1000);
+            Assert.False(File.Exists(marker), "超时后 easytier-core 还是被启动了");
+        }
+        finally
+        {
+            guard.Dispose();
+            try { File.Delete(marker); } catch (IOException) { }
+        }
     }
 
     /// <summary>刚启动就 Dispose（比如端口被占用）：排着的启动命令不发，只发停止，easytier-core 一次都不启动。</summary>
@@ -258,7 +270,7 @@ public class ElevatedGuardTests
         }
     }
 
-    /// <summary>大文件分块覆盖；有别的硬链接的文件不碰（覆盖会改到另一处的同一份内容）。</summary>
+    /// <summary>大文件分块覆盖；有别的硬链接的文件只删名字、不覆盖（覆盖会改到另一处的同一份内容）。</summary>
     [Fact]
     public void LegacyFilesChunkedAndSkipHardLinks()
     {
@@ -273,9 +285,10 @@ public class ElevatedGuardTests
         Assert.True(CreateHardLink(linked, outside, IntPtr.Zero));
         try
         {
-            Assert.Equal(1, EasyTierElevatedSession.LegacyFiles.Remove(dir));
+            Assert.Equal(2, EasyTierElevatedSession.LegacyFiles.Remove(dir));
             Assert.False(File.Exists(big));
-            Assert.True(File.Exists(linked));
+            // 有别的硬链接：run-lan 里的名字删掉，但不覆盖，另一处的内容原样。
+            Assert.False(File.Exists(linked));
             Assert.Equal(Secret, File.ReadAllText(outside));
         }
         finally

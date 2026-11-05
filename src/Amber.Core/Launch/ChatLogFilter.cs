@@ -37,7 +37,13 @@ public static partial class ChatLogFilter
     /// </summary>
     public const string ServerLogger = "net.minecraft.server.MinecraftServer";
 
-    private static readonly HashSet<string> FileAppenders = ["RollingRandomAccessFile", "RollingFile", "RandomAccessFile", "File"];
+    /// <summary>log4j2 的配置元素名、属性名不分大小写（Mojang 自己的配置就用小写的 &lt;filters&gt;），这里也不分。</summary>
+    private static readonly HashSet<string> FileAppenders = new(["RollingRandomAccessFile", "RollingFile", "RandomAccessFile", "File"], StringComparer.OrdinalIgnoreCase);
+
+    private static bool Is(XElement e, string name) => string.Equals(e.Name.LocalName, name, StringComparison.OrdinalIgnoreCase);
+
+    private static string? Attr(XElement e, string name) =>
+        (string?)e.Attributes().FirstOrDefault(a => string.Equals(a.Name.LocalName, name, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>log4j2 的 RegexFilter 用 Java 的 matches()（整条消息匹配），这里同样整条匹配。</summary>
     [GeneratedRegex(@"\A(?:" + ChatRegex + @")\z")]
@@ -132,6 +138,8 @@ public static partial class ChatLogFilter
         var doc = XDocument.Load(originalPath, LoadOptions.PreserveWhitespace);
         var added = Transform(doc);
         if (added == 0) throw new InvalidDataException(L.T("core.launch.notrace.no_file_appender"));
+        // /say、/me 的过滤加不上（配置里没有 Loggers）：宁可不启动，也不偷偷记下聊天。
+        if (!HasServerLoggerFilter(doc)) throw new InvalidDataException(L.T("core.launch.notrace.no_server_logger"));
         Directory.CreateDirectory(targetDir);
         var target = Path.Combine(targetDir, Path.GetFileNameWithoutExtension(originalPath) + ".amber-notrace.xml");
         var temp = target + ".tmp";
@@ -156,22 +164,32 @@ public static partial class ChatLogFilter
         return count;
     }
 
+    /// <summary>内置服务器的 logger 上有没有 /say、/me 过滤。</summary>
+    public static bool HasServerLoggerFilter(XDocument doc) =>
+        doc.Descendants().Where(e => Is(e, "Logger") || Is(e, "AsyncLogger"))
+            .Where(e => Attr(e, "name") == ServerLogger)
+            .SelectMany(e => e.Descendants())
+            .Any(f => Is(f, "RegexFilter") && Attr(f, "regex") == ServerChatRegex);
+
     private static void AddFilter(XElement owner, string regex)
     {
         var ns = owner.Name.Namespace;
         var filter = new XElement(ns + "RegexFilter",
             new XAttribute("regex", regex), new XAttribute("onMatch", "DENY"), new XAttribute("onMismatch", "NEUTRAL"));
-        // log4j2 的 appender 和 logger 都只认一个过滤器元素：已有 Filters 就放进去，已有单个过滤器就和它一起包进 Filters。
-        var filters = owner.Elements().FirstOrDefault(e => e.Name.LocalName == "Filters");
-        var single = owner.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith("Filter", StringComparison.Ordinal));
+        // log4j2 的 appender 和 logger 都只认一个过滤器元素：已有 Filters 就放进去（另外单放的过滤器也并进去），
+        // 只有单个过滤器就和它一起包进新的 Filters。
+        var filters = owner.Elements().FirstOrDefault(e => Is(e, "Filters"));
+        var singles = owner.Elements().Where(e => !Is(e, "Filters") && e.Name.LocalName.EndsWith("Filter", StringComparison.OrdinalIgnoreCase)).ToList();
         if (filters is not null)
         {
+            foreach (var s in singles) s.Remove();
+            filters.Add(singles);
             filters.AddFirst(filter);
         }
-        else if (single is not null)
+        else if (singles.Count > 0)
         {
-            single.Remove();
-            owner.AddFirst(new XElement(ns + "Filters", filter, single));
+            foreach (var s in singles) s.Remove();
+            owner.AddFirst(new XElement(ns + "Filters", filter, singles));
         }
         else
         {
@@ -180,26 +198,26 @@ public static partial class ChatLogFilter
     }
 
     /// <summary>
-    /// 配置里已有这个 logger 就给它加过滤；没有就新建一个，级别照抄离它最近的上级（没写就是 Root 的），
+    /// 配置里已有这个 logger 就给它加过滤；没有就新建一个，级别照抄离它最近的上级（都没写就是 Root 的，Root 也没写就是 log4j 默认的 error），
     /// additivity 保持默认（true），输出照旧交给上级的 appender。
     /// </summary>
     private static void AddServerLoggerFilter(XDocument doc)
     {
-        if (doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "Loggers") is not { } loggers) return;
+        if (doc.Descendants().FirstOrDefault(e => Is(e, "Loggers")) is not { } loggers) return;
         var ns = loggers.Name.Namespace;
-        var all = loggers.Elements().Where(e => e.Name.LocalName is "Logger" or "AsyncLogger").ToList();
-        if (all.FirstOrDefault(e => (string?)e.Attribute("name") == ServerLogger) is { } existing)
+        var all = loggers.Elements().Where(e => Is(e, "Logger") || Is(e, "AsyncLogger")).ToList();
+        if (all.FirstOrDefault(e => Attr(e, "name") == ServerLogger) is { } existing)
         {
             AddFilter(existing, ServerChatRegex);
             return;
         }
         var level = all
-            .Where(e => (string?)e.Attribute("name") is { } n && ServerLogger.StartsWith(n + ".", StringComparison.Ordinal) && e.Attribute("level") is not null)
-            .OrderByDescending(e => ((string)e.Attribute("name")!).Length)
-            .Select(e => (string?)e.Attribute("level"))
+            .Where(e => Attr(e, "name") is { } n && ServerLogger.StartsWith(n + ".", StringComparison.Ordinal) && Attr(e, "level") is not null)
+            .OrderByDescending(e => Attr(e, "name")!.Length)
+            .Select(e => Attr(e, "level"))
             .FirstOrDefault()
-            ?? (string?)loggers.Elements().FirstOrDefault(e => e.Name.LocalName is "Root" or "AsyncRoot")?.Attribute("level")
-            ?? "info";
+            ?? (loggers.Elements().FirstOrDefault(e => Is(e, "Root") || Is(e, "AsyncRoot")) is { } root ? Attr(root, "level") : null)
+            ?? "error";
         var logger = new XElement(ns + "Logger", new XAttribute("name", ServerLogger), new XAttribute("level", level));
         AddFilter(logger, ServerChatRegex);
         loggers.AddFirst(logger);

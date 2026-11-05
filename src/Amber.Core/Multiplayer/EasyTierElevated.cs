@@ -70,7 +70,7 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
     /// <summary>
     /// 旧版本（写文件传参数）留下的 run-lan 目录：参数、重启文件和日志里都可能有房间密钥，启动时清掉，只删这几种文件。
     /// 每个都先覆盖再删（尽量不在磁盘上留下原文）。不跟着联接或符号链接走：目录本身、上一级、子目录和文件是重解析点的都跳过；
-    /// 有不止一个硬链接的文件也跳过（覆盖它会改到别处的同一份内容）。一个文件出错只跳过这个文件。
+    /// 有不止一个硬链接的文件不覆盖（覆盖会改到别处的同一份内容），只删掉 run-lan 里的这个名字。一个文件或目录出错只跳过它。
     /// </summary>
     internal static class LegacyFiles
     {
@@ -90,31 +90,31 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
                 if (IsReparsePoint(workDir) || Path.GetDirectoryName(Path.GetFullPath(workDir)) is { } parent && IsReparsePoint(parent)) return 0;
                 foreach (var dir in Directory.EnumerateDirectories(workDir).Append(workDir).ToList())
                 {
-                    if (IsReparsePoint(dir)) continue;
-                    foreach (var name in Names)
+                    try
                     {
-                        var path = Path.Combine(dir, name);
-                        if (!File.Exists(path)) continue;
-                        try
+                        if (IsReparsePoint(dir)) continue;
+                        foreach (var name in Names)
                         {
-                            if (IsReparsePoint(path)) continue;
-                            if (!Overwrite(path)) continue;
-                            File.Delete(path);
-                            removed++;
+                            var path = Path.Combine(dir, name);
+                            try
+                            {
+                                if (!File.Exists(path) || IsReparsePoint(path)) continue;
+                                Overwrite(path);
+                                File.Delete(path);
+                                removed++;
+                            }
+                            catch (Exception) { /* 这个文件跳过，接着处理别的 */ }
                         }
-                        catch (Exception) { /* 这个文件跳过，接着处理别的 */ }
+                        if (dir != workDir && !Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);
                     }
-                    if (dir != workDir && !Directory.EnumerateFileSystemEntries(dir).Any())
-                    {
-                        try { Directory.Delete(dir); } catch (IOException) { }
-                    }
+                    catch (Exception) { /* 这个目录跳过，接着处理别的 */ }
                 }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
             return removed;
         }
 
-        /// <summary>用零覆盖整个文件；文件有不止一个硬链接时什么也不做，返回 false。</summary>
+        /// <summary>用零覆盖整个文件；文件有不止一个硬链接（或取不到链接数）时不覆盖，返回 false。</summary>
         private static bool Overwrite(string path)
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
@@ -203,7 +203,7 @@ internal sealed class ElevatedGuard : IDisposable
     /// <summary>Amber 等守护脚本连管道超时了。之后晚到的守护脚本一连上就被关掉管道，读到结尾自己退出。</summary>
     public bool ConnectFailed => _connect.IsFaulted || _connect.IsCanceled;
 
-    public bool StartPending => !HasExited && Volatile.Read(ref _acked) < Volatile.Read(ref _sent);
+    public bool StartPending => !HasExited && !ConnectFailed && Volatile.Read(ref _acked) < Volatile.Read(ref _sent);
 
     public IReadOnlyList<string> RecentOutput { get { lock (_output) return _output.ToList(); } }
 

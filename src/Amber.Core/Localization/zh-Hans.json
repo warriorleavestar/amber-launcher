@@ -1047,5 +1047,6 @@
   "core.launch.notrace.unsupported": "无痕模式：这个版本太老，没有可改的日志配置，聊天仍会写进游戏日志",
   "core.launch.notrace.config_missing": "无痕模式：缺少这个版本的日志配置文件，没有启动。请先补全文件",
   "core.launch.notrace.no_file_appender": "无痕模式：这个版本的日志配置里没有写文件的部分，无法过滤聊天",
-  "core.launch.notrace.loader_config_missing": "无痕模式：没找到 {0} 自带的日志配置，没有启动（不然聊天会写进游戏日志）。可以先关掉无痕模式，或重新安装这个加载器"
+  "core.launch.notrace.loader_config_missing": "无痕模式：没找到 {0} 自带的日志配置，没有启动（不然聊天会写进游戏日志）。可以先关掉无痕模式，或重新安装这个加载器",
+  "core.launch.notrace.no_server_logger": "无痕模式：这个版本的日志配置里没有 Loggers 部分，过滤不了单人世界里的 /say 和 /me，所以没有启动游戏"
 }

@@ -46,11 +46,10 @@ public sealed partial class HomeViewModel : PageViewModel
         return (options with { JoinServer = $"127.0.0.1:{relay.Port}" }, relay);
     }
 
-    private const int KeptOutputLines = 400;
 
     private readonly LauncherService _service;
     private readonly LogViewModel _log;
-    private readonly Queue<string> _recentOutput = new();
+    private readonly RunOutput _recentOutput = new();
     private CancellationTokenSource? _cts;
     private Process? _game;
     private bool _stoppedByUser;
@@ -273,8 +272,7 @@ public sealed partial class HomeViewModel : PageViewModel
             Status = L.T("home.status.launching");
             Progress = 100;
             _log.Clear();
-            _recentOutput.Clear();
-            _lastRunNoTrace = options.NoTrace; // 按真正交给 launcher.Launch 的参数，不按启动后可能又改过的设置
+            _recentOutput.Begin(options);
             _log.AddRaw(L.F("home.log.launch", id, javaPath, memory));
             foreach (var note in _proxyNotes) _log.AddRaw(note);
             var parser = new GameLogParser();
@@ -285,8 +283,7 @@ public sealed partial class HomeViewModel : PageViewModel
             {
                 lock (parser)
                 {
-                    _recentOutput.Enqueue(line);
-                    if (_recentOutput.Count > KeptOutputLines) _recentOutput.Dequeue();
+                    _recentOutput.Add(line);
                     if (parser.Feed(line) is { } entry) _log.Add(entry);
                 }
                 _service.NotifyGameOutput(id, line);
@@ -309,7 +306,7 @@ public sealed partial class HomeViewModel : PageViewModel
             {
                 Status = L.F("home.status.crashed", code);
                 string[] output;
-                lock (parser) output = _recentOutput.ToArray();
+                lock (parser) output = _recentOutput.Lines;
                 var analysis = await Task.Run(() => CrashAnalyzer.AnalyzeRun(workDir, started, output));
                 // 崩溃分析的标题和建议是按当时的语言写的：记下输入，换语言时重新分析一遍。
                 _crashInput = (workDir, started, output);
@@ -374,11 +371,10 @@ public sealed partial class HomeViewModel : PageViewModel
     }
 
     /// <summary>上一局开着无痕模式：导出错误报告时去掉游戏输出里的聊天。</summary>
-    private bool _lastRunNoTrace;
 
     public void ExportCrashBundle(string zipPath)
     {
-        CrashAnalyzer.ExportBundle(zipPath, _lastRunFiles, _lastRunNoTrace ? ChatLogFilter.WithoutChat(_recentOutput).ToList() : _recentOutput);
+        CrashAnalyzer.ExportBundle(zipPath, _lastRunFiles, _recentOutput.ForExport());
         Status = L.F("home.status.report_exported", zipPath);
     }
 

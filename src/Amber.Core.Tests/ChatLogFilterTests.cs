@@ -41,6 +41,51 @@ public class ChatLogFilterTests
         Assert.Equal(ChatLogFilter.ServerChatRegex, (string?)server.Elements("RegexFilter").Single().Attribute("regex"));
     }
 
+    /// <summary>log4j2 的元素名、属性名不分大小写：小写的 &lt;filters&gt;、&lt;loggers&gt; 也要认，并进已有的 filters 里，原来的过滤器不能丢。</summary>
+    [Fact]
+    public void LowercaseElementsAreRecognized()
+    {
+        var doc = XDocument.Parse("""<Configuration><Appenders><rollingrandomaccessfile name="f"><filters><MarkerFilter marker="NETWORK" onMatch="DENY" onMismatch="NEUTRAL"/></filters><ThresholdFilter level="info"/></rollingrandomaccessfile></Appenders><loggers><logger Name="net" Level="warn"/><root/></loggers></Configuration>""");
+        Assert.Equal(1, ChatLogFilter.Transform(doc));
+        var appender = doc.Descendants("rollingrandomaccessfile").Single();
+        var filters = Assert.Single(appender.Elements());
+        Assert.Equal("filters", filters.Name.LocalName);
+        Assert.Equal(["RegexFilter", "MarkerFilter", "ThresholdFilter"], filters.Elements().Select(e => e.Name.LocalName));
+        Assert.True(ChatLogFilter.HasServerLoggerFilter(doc));
+        var server = doc.Descendants().Single(e => (string?)e.Attribute("name") == ChatLogFilter.ServerLogger);
+        Assert.Equal("warn", (string?)server.Attribute("level"));
+    }
+
+    /// <summary>Root 没写级别时 log4j 默认是 error：新建的 logger 也用 error，不会让更多日志写进文件。</summary>
+    [Fact]
+    public void MissingRootLevelFallsBackToError()
+    {
+        var doc = XDocument.Parse("""<Configuration><Appenders><File name="f"/></Appenders><Loggers><Root><AppenderRef ref="f"/></Root></Loggers></Configuration>""");
+        ChatLogFilter.Transform(doc);
+        var server = doc.Descendants("Logger").Single();
+        Assert.Equal("error", (string?)server.Attribute("level"));
+    }
+
+    /// <summary>没有 Loggers（加不上 /say、/me 过滤）：不生成配置，宁可不启动。</summary>
+    [Fact]
+    public void PrepareRefusesWithoutLoggers()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "amber-notrace-nologgers-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var original = Path.Combine(dir, "x.xml");
+            File.WriteAllText(original, """<Configuration><Appenders><File name="f" fileName="a.log"/></Appenders></Configuration>""");
+            var e = Assert.Throws<InvalidDataException>(() => ChatLogFilter.Prepare(original, Path.Combine(dir, "out")));
+            Assert.Equal(Amber.Core.Localization.L.T("core.launch.notrace.no_server_logger"), e.Message);
+            Assert.False(Directory.Exists(Path.Combine(dir, "out")) && Directory.EnumerateFiles(Path.Combine(dir, "out")).Any());
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
     [Fact]
     public void ServerLoggerInheritsNearestLevelOrReusesExisting()
     {
@@ -95,6 +140,7 @@ public class ChatLogFilterTests
             Assert.Equal(prepared, ChatLogFilter.Prepare(original, target)); // 再来一次直接覆盖
 
             var consoleOnly = Path.Combine(dir, "console.xml");
+            Assert.True(ChatLogFilter.HasServerLoggerFilter(XDocument.Load(prepared)));
             File.WriteAllText(consoleOnly, """<Configuration><Appenders><Console name="c"/></Appenders></Configuration>""");
             Assert.Throws<InvalidDataException>(() => ChatLogFilter.Prepare(consoleOnly, target));
         }
@@ -182,6 +228,7 @@ public class ChatLogFilterTests
     [InlineData("""<log4j:Event logger="net.minecraft.server.MinecraftServer" timestamp="1" level="INFO" thread="Server thread"><log4j:Message><![CDATA[[Steve] hi]]></log4j:Message></log4j:Event>""", true)]
     [InlineData("[12:00:00] [Render thread/INFO]: [Steve] hi", false)]
     [InlineData("[Amber] <Steve> is not chat here", false)]
+    [InlineData("[Amber] 游戏输出里有 [CHAT] 字样", false)]
     [InlineData("[12:00:00] [Render thread/INFO]: Loading 42 recipes", false)]
     [InlineData("[12:00:00] [Render thread/INFO]: [System] [CHAT] hi", true)]
     public void ConsoleLinesAreRecognized(string line, bool chat) => Assert.Equal(chat, ChatLogFilter.IsChatLine(line));
