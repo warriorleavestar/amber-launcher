@@ -39,6 +39,13 @@ public sealed record LaunchOptions
 /// <summary>拼装启动参数、准备 natives 与旧版资源，然后启动游戏进程。</summary>
 public sealed class GameLauncher(GameDirectory dir)
 {
+    /// <summary>请求游戏正常退出，让游戏自己保存世界。</summary>
+    public static bool RequestExit(Process game)
+    {
+        if (game.HasExited) return false;
+        return OperatingSystem.IsMacOS() ? MacGameProcess.RequestExit(game.Id) : game.CloseMainWindow();
+    }
+
     public GameDirectory GameDir => dir;
 
     public RuleEvaluator BaseRules { get; init; } = RuleEvaluator.Current;
@@ -263,6 +270,7 @@ public sealed class GameLauncher(GameDirectory dir)
         var workDir = options.WorkingDirectory ?? dir.Root;
         Directory.CreateDirectory(workDir);
         PrepareLegacyAssets(version, workDir);
+        GameLanguage.Prepare(dir, version, workDir);
         if (version.AmberLegacyLibs is { Count: > 0 } fml) Amber.Core.Install.LegacyForge.EnsureLibraries(dir.Root, workDir, fml, onOutput);
 
         var psi = new ProcessStartInfo(options.JavaPath)
