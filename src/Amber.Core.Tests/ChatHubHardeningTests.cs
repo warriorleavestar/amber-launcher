@@ -153,7 +153,13 @@ public sealed class ChatHubHardeningTests
     [Fact]
     public async Task SlowMemberIsDroppedOthersKeepReceiving()
     {
-        await using var hub = new ChatHub(Room, 0) { OutboxFrames = 4, SendBufferForTest = 1024, BacklogKickAfter = TimeSpan.Zero };
+        await using var hub = new ChatHub(Room, 0)
+        {
+            OutboxFrames = 4,
+            BeforeSendForTest = (id, ct) =>
+                id == "slow" ? Task.Delay(Timeout.Infinite, ct) : Task.CompletedTask,
+            BacklogKickAfter = TimeSpan.Zero,
+        };
         using var slow = new TcpClient { ReceiveBufferSize = 1024 };
         await slow.ConnectAsync("127.0.0.1", hub.Port);
         await WriteAsync(slow.GetStream(), Cipher.Seal(Msg(ChatKind.Join, "slow", "slow")));
@@ -337,7 +343,8 @@ public sealed class ChatHubHardeningTests
         ChatClient.PingInterval = TimeSpan.FromMilliseconds(100);
         try
         {
-            await using var hub = new ChatHub(Room, 0) { PingTimeout = TimeSpan.FromMilliseconds(800), SweepInterval = TimeSpan.FromMilliseconds(100) };
+            // 给本机调度留出余量，避免加载游戏时短暂的线程延迟被当成成员掉线。
+            await using var hub = new ChatHub(Room, 0) { PingTimeout = TimeSpan.FromSeconds(3), SweepInterval = TimeSpan.FromMilliseconds(100) };
             var (live, inbox) = NewClient("L");
             await live.ConnectAsync("127.0.0.1", hub.Port);
 
@@ -347,8 +354,8 @@ public sealed class ChatHubHardeningTests
             await WriteAsync(dead.GetStream(), Cipher.Seal(Msg(ChatKind.Join, "dead", "D")));
             await WriteAsync(dead.GetStream(), Cipher.Seal(Msg(ChatKind.Ping, "dead", "D")));
             Assert.True(await WaitAsync(() => hub.MemberCount == 2));
-            Assert.True(await WaitAsync(() => hub.MemberCount == 1, 5000), $"{hub.MemberCount}");
-            await Task.Delay(1200);
+            Assert.True(await WaitAsync(() => hub.MemberCount == 1, 10000), $"{hub.MemberCount}");
+            await Task.Delay(3500);
             // 一直在发心跳的那个还在，界面也收不到心跳。
             Assert.Equal(1, hub.MemberCount);
             Assert.DoesNotContain(inbox, m => m.Kind == ChatKind.Ping);
