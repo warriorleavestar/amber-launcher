@@ -139,6 +139,9 @@
           <ListBox.ItemTemplate>
             <DataTemplate DataType="vm:PageViewModel">
               <StackPanel Orientation="Horizontal" Spacing="12">
+                <!-- 选中项左边的指示条：贴着项的左边缘；3 + (-10) + (-5) + 间距 12 = 0，图标位置不变。只在选中时显示。 -->
+                <Border Width="3" Height="16" CornerRadius="2" Background="{DynamicResource Accent}" Margin="-10,0,-5,0" VerticalAlignment="Center"
+                        IsVisible="{Binding $parent[ListBoxItem].IsSelected}" />
                 <PathIcon Data="{Binding IconGeometry}" Width="16" Height="16" Foreground="{DynamicResource Accent}" />
                 <TextBlock Text="{Binding Title}" Foreground="{DynamicResource SidebarText}" FontSize="14" VerticalAlignment="Center" />
                 <Border IsVisible="{Binding HasBadge}" Background="{DynamicResource Accent}" CornerRadius="8" MinWidth="18" Height="18" Padding="5,0" VerticalAlignment="Center">
