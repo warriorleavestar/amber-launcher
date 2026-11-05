@@ -183,8 +183,8 @@ internal sealed class Spike(Window window, string reportDir)
     {
         try
         {
-            using var stream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://Amber/Assets/amber.ico"));
-            var icon = new TrayIcon { Icon = new WindowIcon(stream), ToolTipText = "Amber", IsVisible = true };
+            using var stream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://Jay/Assets/jay.ico"));
+            var icon = new TrayIcon { Icon = new WindowIcon(stream), ToolTipText = "Jay", IsVisible = true };
             var icons = new TrayIcons { icon };
             TrayIcon.SetIcons(Application.Current!, icons);
             var shown = icon.IsVisible;

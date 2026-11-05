@@ -5,7 +5,7 @@
 #>
 param([Parameter(Mandatory = $true)][string]$Report, [int]$Seconds = 8, [string]$Configuration = "Release")
 $repo = Split-Path -Parent $PSScriptRoot
-$Exe = Join-Path $repo "src\Amber.App\bin\$Configuration\net10.0\Amber.exe"
+$Exe = Join-Path $repo "src\Amber.App\bin\$Configuration\net10.0\Jay.exe"
 if (-not (Test-Path $Exe)) { Write-Host "找不到 $Exe，先 dotnet build -c $Configuration"; exit 1 }
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 Add-Type -ReferencedAssemblies UIAutomationClient, UIAutomationTypes, WindowsBase -TypeDefinition @"

@@ -7,7 +7,7 @@
         x:Class="Amber.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
         Title="{l:T main.title}"
-        Icon="/Assets/amber.ico"
+        Icon="/Assets/jay.ico"
         MinWidth="760" MinHeight="440"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource PageBg}">
@@ -128,7 +128,10 @@
       <!-- 标题、导航、版本三行：导航放不下时自己滚动，版本那行永远在底部看得见 -->
       <Grid RowDefinitions="Auto,*,Auto">
         <StackPanel Margin="20,18,20,12" Spacing="2">
-          <TextBlock Text="Amber" FontSize="26" FontWeight="Bold" Foreground="{DynamicResource Accent}" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Image Source="/Assets/jay.png" Width="36" Height="36" Stretch="Uniform" />
+            <TextBlock Text="Jay" FontSize="26" FontWeight="Bold" VerticalAlignment="Center" Foreground="{DynamicResource Accent}" />
+          </StackPanel>
           <TextBlock Text="{l:T main.subtitle}" FontSize="12" Foreground="{DynamicResource SidebarTextMuted}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{l:T main.subtitle}" />
         </StackPanel>
         <TextBlock Grid.Row="2" Text="{Binding VersionText}" FontSize="{StaticResource FontCaption}" Foreground="{DynamicResource SidebarTextMuted}" Margin="20,6,8,12"

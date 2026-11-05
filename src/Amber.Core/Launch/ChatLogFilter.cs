@@ -72,15 +72,18 @@ public static partial class ChatLogFilter
 
     /// <summary>
     /// 游戏控制台的一行原始输出是不是聊天：原版的 XML 事件取 CDATA 里的消息，普通文本去掉时间和线程前缀再比。
-    /// 带“[CHAT]”的一律算；“[名字] ”“* 名字 ”只在内置服务器线程或 logger 的行里算。Amber 自己的“[Amber] ”行不算。
+    /// 带“[CHAT]”的一律算；“[名字] ”“* 名字 ”只在内置服务器线程或 logger 的行里算。启动器自己的“[Jay] ”和旧“[Amber] ”行不算。
     /// </summary>
     public static bool IsChatLine(string line)
     {
-        if (line.StartsWith("[Amber] ", StringComparison.Ordinal)) return false;
+        if (IsLauncherLine(line)) return false;
         if (line.Contains("[CHAT]", StringComparison.Ordinal)) return true;
         if (Cdata().Match(line) is { Success: true } cdata) return IsChat(cdata.Groups[1].Value, ServerEvent().IsMatch(line));
         return IsChat(ConsolePrefix().Replace(line, "", 1), ServerPrefix().IsMatch(line));
     }
+
+    private static bool IsLauncherLine(string line) =>
+        line.StartsWith("[Jay] ", StringComparison.Ordinal) || line.StartsWith("[Amber] ", StringComparison.Ordinal);
 
     /// <summary>按完整日志事件去掉聊天，消息换行后的内容也属于同一事件。</summary>
     public static IEnumerable<string> WithoutChat(IEnumerable<string> lines)
@@ -110,11 +113,11 @@ public static partial class ChatLogFilter
 
         public OutputLine Add(string line)
         {
-            // CDATA 内的文字不是 XML 标记，也不能冒充下一条日志或 Amber 自己的输出。
+            // CDATA 内的文字不是 XML 标记，也不能冒充下一条日志或启动器自己的输出。
             if (_current?.InCdata != true && line.TrimStart().StartsWith("<log4j:Event", StringComparison.Ordinal))
                 _current = new OutputEvent(isXml: true);
             else if (_current?.IsXml != true &&
-                     (line.StartsWith("[Amber] ", StringComparison.Ordinal) || ConsolePrefix().IsMatch(line)))
+                     (IsLauncherLine(line) || ConsolePrefix().IsMatch(line)))
                 _current = new OutputEvent(isXml: false);
 
             _current ??= new OutputEvent(isXml: false);

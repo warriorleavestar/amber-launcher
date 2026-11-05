@@ -1,4 +1,4 @@
-# Contributing to Amber
+# Contributing to Jay
 
 Thanks for helping. This page covers code and translations. The UI, comments and docs are written in Simplified Chinese first; English is fine for issues and pull requests.
 
@@ -27,7 +27,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/run-selftest.ps1 -Repo
 Layout check only (every page × 4 languages × 6 window sizes, screenshots plus a list of clipped controls in `layout.txt`):
 
 ```bash
-AMBER_LAYOUTCHECK=<dir> src/Amber.App/bin/Release/net10.0/Amber.exe
+AMBER_LAYOUTCHECK=<dir> src/Amber.App/bin/Release/net10.0/Jay.exe
 ```
 
 ## Translations

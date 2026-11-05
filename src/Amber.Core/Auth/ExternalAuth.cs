@@ -31,7 +31,7 @@ public sealed class ExternalAuth(HttpClient http)
             ConnectTimeout = TimeSpan.FromSeconds(10),
         };
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(60) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd($"Amber/{typeof(ExternalAuth).Assembly.GetName().Version?.ToString(3) ?? "0.1"}");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd($"Jay/{typeof(ExternalAuth).Assembly.GetName().Version?.ToString(3) ?? "0.1"}");
         return client;
     }
 

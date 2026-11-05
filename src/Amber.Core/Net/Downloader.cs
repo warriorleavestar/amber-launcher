@@ -82,7 +82,7 @@ public sealed class Downloader
         };
         // 超时由调用方按请求控制，大文件不能有总时长限制。
         var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd($"Amber/{typeof(Downloader).Assembly.GetName().Version?.ToString(3) ?? "0.1"}");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd($"Jay/{typeof(Downloader).Assembly.GetName().Version?.ToString(3) ?? "0.1"}");
         return http;
     }
 

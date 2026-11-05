@@ -132,7 +132,7 @@ public sealed class LauncherService : IDisposable
         try { Settings.Save(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            System.Diagnostics.Trace.WriteLine("Amber: saving current instance failed: " + e);
+            System.Diagnostics.Trace.WriteLine("Jay: saving current instance failed: " + e);
             SettingsSaveFailed?.Invoke(e);
         }
         CurrentInstanceChanged?.Invoke();

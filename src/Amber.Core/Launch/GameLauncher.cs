@@ -32,7 +32,7 @@ public sealed record LaunchOptions
     public IReadOnlyList<string> ExtraGameArgs { get; init; } = [];
     /// <summary>无痕模式：logs/latest.log 里不写聊天行（见 ChatLogFilter）。</summary>
     public bool NoTrace { get; init; }
-    public string LauncherName { get; init; } = "Amber";
+    public string LauncherName { get; init; } = "Jay";
     public string LauncherVersion { get; init; } = "0.1";
 }
 

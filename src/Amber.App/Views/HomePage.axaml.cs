@@ -16,7 +16,7 @@ public partial class HomePage : UserControl
         var file = await top.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
             Title = L.T("home.crash.export_title"),
-            SuggestedFileName = $"amber-error-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
+            SuggestedFileName = $"jay-error-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
             DefaultExtension = "zip",
         });
         if (file?.TryGetLocalPath() is { } path) vm.ExportCrashBundle(path);

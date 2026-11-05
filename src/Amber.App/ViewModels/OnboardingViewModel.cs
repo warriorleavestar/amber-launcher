@@ -48,9 +48,11 @@ public sealed partial class OnboardingViewModel : ObservableObject
     // 只记本会话真正完成过的游戏阶段；Java 取消或失败后的重试不能再次安装并占用同一个 Forge 目录。
     private sealed record PreparedGame(string Root, string McVersion, LoaderKind? Loader, bool FallbackToVanilla, string Id);
 
-    /// <summary>找已有游戏目录时看哪些位置（自检里换成测试目录，不碰真实的 .minecraft）。</summary>
+    /// <summary>找已有游戏目录时看哪些位置（自检和开发截图不扫描真实的 .minecraft）。</summary>
     public Func<IEnumerable<string>> Candidates { get; set; } = () =>
-        Environment.GetEnvironmentVariable("AMBER_SELFTEST") is { Length: > 0 } ? [] : GameDirectoryDetector.CommonCandidates(AppContext.BaseDirectory);
+        Environment.GetEnvironmentVariable("AMBER_SELFTEST") is { Length: > 0 }
+        || Environment.GetEnvironmentVariable("AMBER_SNAPSHOT_DIR") is { Length: > 0 }
+            ? [] : GameDirectoryDetector.CommonCandidates(AppContext.BaseDirectory);
 
     /// <summary>去微软登录、去下载页选版本、导入整合包文件（MainViewModel 接上）。</summary>
     public Action? MicrosoftLogin { get; set; }
@@ -252,7 +254,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
         catch (Exception e) when (e is not OperationCanceledException)
         {
             // 拿不到版本列表时按钮写“正在获取”，点热门版本或去下载页照样能装。
-            Trace.WriteLine("Amber: onboarding manifest failed: " + e.Message);
+            Trace.WriteLine("Jay: onboarding manifest failed: " + e.Message);
         }
         finally
         {

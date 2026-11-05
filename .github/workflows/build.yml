@@ -84,7 +84,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force ../packages | Out-Null
           Get-ChildItem ../out/${{ matrix.rid }} -Recurse -Filter *.pdb | Remove-Item
-          Compress-Archive -Path ../out/${{ matrix.rid }}/* -DestinationPath ../packages/Amber-${{ matrix.rid }}.zip
+          Compress-Archive -Path ../out/${{ matrix.rid }}/* -DestinationPath ../packages/Jay-${{ matrix.rid }}.zip
 
       - name: Package macOS/Linux
         if: matrix.archive == 'tar'
@@ -92,8 +92,8 @@ jobs:
         run: |
           mkdir -p ../packages
           find ../out/${{ matrix.rid }} -name '*.pdb' -delete
-          chmod +x ../out/${{ matrix.rid }}/Amber
-          tar -C ../out/${{ matrix.rid }} -czf ../packages/Amber-${{ matrix.rid }}.tar.gz .
+          chmod +x ../out/${{ matrix.rid }}/Jay
+          tar -C ../out/${{ matrix.rid }} -czf ../packages/Jay-${{ matrix.rid }}.tar.gz .
 
       - name: Publish Windows Native AOT
         if: matrix.rid == 'win-x64'
@@ -101,11 +101,11 @@ jobs:
         run: |
           dotnet publish Amber.App -c Release -r win-x64 -p:PublishAot=true -p:DebugType=none -o ../out/win-x64-aot
           Get-ChildItem ../out/win-x64-aot -Recurse -Filter *.pdb | Remove-Item
-          Compress-Archive -Path ../out/win-x64-aot/* -DestinationPath ../packages/Amber-win-x64-aot.zip
+          Compress-Archive -Path ../out/win-x64-aot/* -DestinationPath ../packages/Jay-win-x64-aot.zip
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: amber-${{ matrix.rid }}
+          name: jay-${{ matrix.rid }}
           path: packages/*
           if-no-files-found: error
 
@@ -118,7 +118,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: amber-*
+          pattern: jay-*
           path: release-assets
           merge-multiple: true
 
@@ -130,4 +130,4 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
             --generate-notes \
-            --title "Amber ${GITHUB_REF_NAME}"
+            --title "Jay ${GITHUB_REF_NAME}"

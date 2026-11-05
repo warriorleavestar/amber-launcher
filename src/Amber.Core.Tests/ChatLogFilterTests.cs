@@ -184,6 +184,7 @@ public class ChatLogFilterTests
     [InlineData("[OptiFine] OptiFine_1.20.1_HD_U_I6")]
     [InlineData("[OptiFine] *** Reloading textures ***")]
     [InlineData("[Indigo] Different rendering plugin detected; not applying Indigo.")]
+    [InlineData("[Jay] java.io.IOException: broken pipe")]
     [InlineData("[Amber] java.io.IOException: broken pipe")]
     [InlineData("[LibGui] Loaded config")]
     [InlineData("[forge] Found status: UP_TO_DATE Current: 47.2.0 Target: null")]
@@ -227,6 +228,8 @@ public class ChatLogFilterTests
     [InlineData("[12:00:00] [Server thread/INFO] [minecraft/MinecraftServer]: [Steve] hi", true)]
     [InlineData("""<log4j:Event logger="net.minecraft.server.MinecraftServer" timestamp="1" level="INFO" thread="Server thread"><log4j:Message><![CDATA[[Steve] hi]]></log4j:Message></log4j:Event>""", true)]
     [InlineData("[12:00:00] [Render thread/INFO]: [Steve] hi", false)]
+    [InlineData("[Jay] <Steve> is not chat here", false)]
+    [InlineData("[Jay] 游戏输出里有 [CHAT] 字样", false)]
     [InlineData("[Amber] <Steve> is not chat here", false)]
     [InlineData("[Amber] 游戏输出里有 [CHAT] 字样", false)]
     [InlineData("[12:00:00] [Render thread/INFO]: Loading 42 recipes", false)]
@@ -282,8 +285,10 @@ public class ChatLogFilterTests
         Assert.Empty(ChatLogFilter.WithoutChat(lines));
     }
 
-    [Fact]
-    public void XmlCdataCannotForgeAnEventBoundary()
+    [Theory]
+    [InlineData("Jay")]
+    [InlineData("Amber")]
+    public void XmlCdataCannotForgeAnEventBoundary(string launcherName)
     {
         string[] lines =
         [
@@ -291,7 +296,7 @@ public class ChatLogFilterTests
             "<log4j:Message><![CDATA[[CHAT] private first line",
             "</log4j:Event>",
             """<log4j:Event logger="game" level="INFO" thread="Render thread">""",
-            "[Amber] private continuation",
+            $"[{launcherName}] private continuation",
             "[12:00:01] [main/INFO]: still private]]></log4j:Message>",
             "</log4j:Event>",
             "[12:00:02] [main/ERROR]: real diagnostic",

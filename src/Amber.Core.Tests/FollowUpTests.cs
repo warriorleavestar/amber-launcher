@@ -159,16 +159,25 @@ public sealed class FollowUpTests : IDisposable
         Assert.Equal(Toasts.Describe(e), reason.ToString());
     }
 
-    /// <summary>界面控件里的 StaticResource（圆角、字号这些）来自 Amber 的 Tokens.axaml：测试的 Application 是空的，先装上一次。</summary>
+    /// <summary>界面控件里的 StaticResource（圆角、字号这些）来自 Jay 的 Tokens.axaml：测试的 Application 是空的，先装上一次。</summary>
     private static void EnsureAppResources()
     {
         var resources = Avalonia.Application.Current!.Resources;
         if (resources.ContainsKey("RadiusMd")) return;
-        resources.MergedDictionaries.Add(new Avalonia.Markup.Xaml.Styling.ResourceInclude(new Uri("avares://Amber/"))
+        resources.MergedDictionaries.Add(new Avalonia.Markup.Xaml.Styling.ResourceInclude(new Uri("avares://Jay/"))
         {
-            Source = new Uri("avares://Amber/Themes/Tokens.axaml"),
+            Source = new Uri("avares://Jay/Themes/Tokens.axaml"),
         });
     }
+
+    /// <summary>改产物名后仍能从新程序集找到并解码窗口图标，不能只检查磁盘上有图标文件。</summary>
+    [Fact]
+    public void JayWindowIconLoadsFromRenamedAssembly() => UiTestThread.Run(() =>
+    {
+        using var stream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://Jay/Assets/jay.ico"));
+        var icon = new Avalonia.Controls.WindowIcon(stream);
+        Assert.NotNull(icon);
+    });
 
     // ---- e：复制按钮 ----
 
