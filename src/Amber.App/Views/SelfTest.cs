@@ -260,6 +260,15 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Dispatcher.UIThread.Invoke(() => { if (noTraceBox is not null) noTraceBox.IsChecked = true; });
         Dispatcher.UIThread.Invoke(() => settings.SaveCommand.Execute(null));
         Check("无痕模式：勾选后存进设置", noTraceBox is not null && settings.NoTrace && File.ReadAllText(Amber.App.Services.AppSettings.FilePath).Contains("\"NoTrace\": true"));
+        var instance = Page<InstanceViewModel>();
+        instance.SelectedId = FabricName;
+        var script = Path.Combine(reportDir, OperatingSystem.IsWindows() ? "notrace-run.bat" : "notrace-run.sh");
+        await instance.ExportLaunchScriptAsync(script);
+        var scriptConfigs = Directory.Exists(script + ".amber")
+            ? Directory.GetFiles(script + ".amber", "*.amber-notrace.xml") : [];
+        Check("无痕模式：导出脚本附带持久日志配置", File.Exists(script) && scriptConfigs.Length == 1
+            && File.ReadAllText(script).Contains(".amber-notrace.xml")
+            && File.ReadAllText(scriptConfigs[0]).Contains("RegexFilter"), instance.Status);
         main.CurrentPage = home;
         var launchStart = DateTime.Now.AddSeconds(-2);
         var launching = home.LaunchCommand.ExecuteAsync(null);

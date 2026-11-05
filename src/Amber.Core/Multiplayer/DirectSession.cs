@@ -34,7 +34,6 @@ public sealed class DirectSession : IAsyncDisposable
     private int _easyTierUdpPort;
     private EasyTierOptions? _currentOptions;
     private SpeedTestServer? _speed;
-    private bool _elevated;
     private bool _speedOnVirtualIp;
     private readonly Dictionary<int, TaskCompletionSource<JsonObject>> _pending = [];
     private TaskCompletionSource<bool>? _elevateReply;
@@ -58,6 +57,9 @@ public sealed class DirectSession : IAsyncDisposable
     /// <summary>测试用：代替真的启动 EasyTier。</summary>
     internal Func<EasyTierOptions, CancellationToken, Task<IEasyTierSession>>? StartForTest { get; init; }
 
+    /// <summary>测试用：保留真实的新会话模式选择，只替代最后的进程创建。</summary>
+    internal Func<bool, EasyTierOptions, IEasyTierSession>? CreateSessionForTest { get; init; }
+
     /// <summary>
     /// 房主：现在连着的加入方（测试要用的那个）是 0.5.9 以前的版本（hello 里带完整房间码、没有会话 id）。全条件测试需要对方升级。
     /// 按地址记：别的成员发来旧 hello 不影响，同一个地址后来发了新 hello 就清掉。
@@ -65,7 +67,7 @@ public sealed class DirectSession : IAsyncDisposable
     public bool GuestIsLegacy => _legacyPeer is { } legacy && Bridge?.Peers.FirstOrDefault()?.Remote.Equals(legacy) == true;
 
     /// <summary>加入方：开始执行测试的一步（界面显示“测试中”和完整局域网/出口提示）。</summary>
-    public event Action<MatrixStep>? GuestStepStarted;
+    public event Action<string, MatrixStep>? GuestStepStarted;
 
     /// <summary>加入方：全条件测试要本机用户同意（见 <see cref="GuestTestConsent"/>）。</summary>
     public GuestTestConsent TestConsent { get; } = new();
@@ -74,7 +76,7 @@ public sealed class DirectSession : IAsyncDisposable
     public event Action<TestRequest>? TestRequested;
 
     /// <summary>加入方：测试结束（或请求被撤回），界面收起确认。</summary>
-    public event Action? TestEnded;
+    public event Action<string?>? TestEnded;
 
     public RoomCode Room { get; }
     public bool IsHost { get; }
@@ -191,10 +193,12 @@ public sealed class DirectSession : IAsyncDisposable
             else
             {
                 EasyTier?.Dispose();
-                EasyTier = options.Tun || _elevated
-                    ? EasyTierElevatedSession.Start(_installer, options, Path.Combine(_workDir, "run-lan"))
-                    : EasyTierSession.Start(_installer, options, Path.Combine(_workDir, IsHost ? "run-direct-host" : "run-direct-guest"));
-                if (EasyTier is EasyTierElevatedSession) _elevated = true;
+                // 只有还活着的提权守护才能复用（上面的分支）；新建时只按本次参数决定是否提权。
+                var elevatedStart = options.Tun;
+                EasyTier = CreateSessionForTest is { } create ? create(elevatedStart, options)
+                    : elevatedStart
+                        ? EasyTierElevatedSession.Start(_installer, options, Path.Combine(_workDir, "run-lan"))
+                        : EasyTierSession.Start(_installer, options, Path.Combine(_workDir, IsHost ? "run-direct-host" : "run-direct-guest"));
                 if (EasyTier is EasyTierSession plain && Options.Verbose) plain.Output += line => _log.Add("EasyTier", line);
             }
             _currentOptions = options;
@@ -347,11 +351,17 @@ public sealed class DirectSession : IAsyncDisposable
                 }
                 break;
             case "test-request" when !IsHost:
-                if (Str(message, "run") is { } requestRun && TestConsent.Request(new TestRequest(requestRun, Bool(message, "fullLan") == true)))
+                if (Str(message, "run") is not { Length: >= 8 and <= 64 } requestRun) break;
+                if (TestConsent.Request(new TestRequest(requestRun, Bool(message, "fullLan") == true), out var restoring))
                 {
                     Log(L.T("core.mp.matrix.requested"));
                     WatchPending(requestRun);
                     TestRequested?.Invoke(new TestRequest(requestRun, Bool(message, "fullLan") == true));
+                }
+                else if (restoring)
+                {
+                    // 旧测试还在恢复：明确拒绝，房主不用等确认超时；也不能把临时配置记成新测试的原设置。
+                    _ = Bridge!.SendControlAsync(peer, new JsonObject { ["op"] = "test-answer", ["run"] = requestRun, ["ok"] = false });
                 }
                 break;
             case "test-end" when !IsHost:
@@ -405,7 +415,7 @@ public sealed class DirectSession : IAsyncDisposable
         if (run is null)
         {
             // 请求已经作废（超时、房主撤回）：界面收起确认。
-            TestEnded?.Invoke();
+            TestEnded?.Invoke(run);
             return false;
         }
         if (Bridge?.Peers.FirstOrDefault() is not { } peer)
@@ -413,7 +423,7 @@ public sealed class DirectSession : IAsyncDisposable
             // 和房主断开了：当作拒绝（不留下一个没人知道的“已同意”）。
             TestConsent.Answer(false, false, false, null);
             Log(L.T("core.mp.matrix.nopeerdeclined"));
-            TestEnded?.Invoke();
+            TestEnded?.Invoke(run);
             return false;
         }
         // 记下现在真正在跑的参数（不是上次要求的），测完恢复成它。
@@ -452,7 +462,7 @@ public sealed class DirectSession : IAsyncDisposable
             if (TestConsent.ExpirePending(run))
             {
                 Log(L.T("core.mp.matrix.requestexpired"));
-                TestEnded?.Invoke();
+                TestEnded?.Invoke(run);
             }
         }, null, GuestTestConsent.PendingLimit + TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
     }
@@ -520,14 +530,28 @@ public sealed class DirectSession : IAsyncDisposable
                 }
                 catch (Exception e)
                 {
-                    // 任何失败（包括没权限写运行目录）都只记下来：同意已经清掉，界面照样收起。
+                    // 恢复失败也不能继续保留测试用的完整局域网/出口，下一次只能从原配置重新开始。
+                    var failed = EasyTier;
+                    EasyTier = null;
+                    _currentOptions = original;
+                    try { failed?.Dispose(); }
+                    catch (Exception stopError) { Log(L.T("core.mp.matrix.restorefailedsettings") + stopError.Message); }
                     Log(L.T("core.mp.matrix.restorefailedsettings") + e.Message);
+                    StateChanged?.Invoke();
                 }
             }
         }
         finally
         {
-            if (ended || notify) TestEnded?.Invoke();
+            try
+            {
+                if (ended || notify) TestEnded?.Invoke(run);
+            }
+            finally
+            {
+                // 通知处理器抛错也必须结束恢复；迟到的通知携带 run，不会收起下一次测试的界面。
+                if (ended) TestConsent.CompleteEnd(run);
+            }
         }
     }
 
@@ -619,11 +643,15 @@ public sealed class DirectSession : IAsyncDisposable
     /// <summary>加入方的聊天探测（界面设置）：发一条消息、等回显。</summary>
     public Func<MatrixStep, CancellationToken, Task<bool?>>? GuestChatProbe { get; set; }
 
+    /// <summary>两侧都检查当前会话；守护已退出时重新启动，不能把过去提过权当作现在仍然可用。</summary>
+    internal Task EnsureElevatedAsync(CancellationToken ct) => StartEasyTierAsync(
+        IsHost ? HostOptions(true, Options.AllowExit) : GuestOptions(!UsingFallbackNode, true, null), ct);
+
     private async Task<bool> ElevateBothAsync(DirectPeer peer, string run, CancellationToken ct)
     {
         try
         {
-            if (!_elevated) await StartEasyTierAsync(HostOptions(true, Options.AllowExit), ct);
+            await EnsureElevatedAsync(ct);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -650,7 +678,7 @@ public sealed class DirectSession : IAsyncDisposable
         {
             try
             {
-                if (!_elevated) await StartEasyTierAsync(GuestOptions(!UsingFallbackNode, true, null), RunToken(run));
+                await EnsureElevatedAsync(RunToken(run));
             }
             catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
             {
@@ -760,7 +788,7 @@ public sealed class DirectSession : IAsyncDisposable
         }
         try
         {
-            GuestStepStarted?.Invoke(step);
+            GuestStepStarted?.Invoke(run!, step);
             await GuestRunStepAsync(step, Str(message, "hostIp"), run);
         }
         finally

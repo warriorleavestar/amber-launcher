@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
@@ -32,6 +33,9 @@ public sealed record ChatMessage(ChatKind Kind, string SenderId, string Name, st
 public sealed class ChatCipher
 {
     private const string Info = "amber-room-chat-v1";
+    // 这是 TCP 上的 JSON，不会嵌进 HTML。Base64 的“+”按原样写，避免每个字节膨胀成“\u002B”。
+    // 只改外层的编码，字段和加密格式不变；旧客户端仍能解开，新客户端也能读旧的转义形式。
+    private static readonly AmberJsonContext EnvelopeJson = new(new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
     private readonly byte[] _key;
 
     public ChatCipher(RoomCode room)
@@ -63,16 +67,21 @@ public sealed class ChatCipher
         using (var aes = new AesGcm(_key, 16)) aes.Encrypt(nonce, plain, cipher, tag, Encoding.UTF8.GetBytes(message.SenderId));
         nonceText = Convert.ToBase64String(nonce);
         var envelope = new Envelope(message.SenderId, nonceText, Convert.ToBase64String([.. cipher, .. tag]));
-        return JsonSerializer.SerializeToUtf8Bytes(envelope, AmberJsonContext.Default.Envelope);
+        return JsonSerializer.SerializeToUtf8Bytes(envelope, EnvelopeJson.Envelope);
     }
 
     /// <summary>解开并校验。格式不对、密钥不对、被改过都返回 null。</summary>
-    public ChatMessage? Open(ReadOnlySpan<byte> frame)
+    public ChatMessage? Open(ReadOnlySpan<byte> frame) => Open(frame, out _);
+
+    /// <summary>内容超长与认证失败分开：转发丢掉已加入成员的超长消息，下一条正常消息仍可接收。</summary>
+    internal ChatMessage? Open(ReadOnlySpan<byte> frame, out bool contentTooLong)
     {
+        contentTooLong = false;
+        if (frame.Length > RoomChat.MaxFrameBytes) return null;
         try
         {
             var envelope = JsonSerializer.Deserialize(frame, AmberJsonContext.Default.Envelope);
-            if (envelope is null || envelope.Sender.Length is 0 or > 64) return null;
+            if (envelope?.Sender is not { Length: > 0 and <= RoomChat.MaxSenderLength }) return null;
             var nonce = Convert.FromBase64String(envelope.Nonce);
             var data = Convert.FromBase64String(envelope.Cipher);
             if (nonce.Length != 12 || data.Length < 16) return null;
@@ -80,6 +89,12 @@ public sealed class ChatCipher
             using (var aes = new AesGcm(_key, 16)) aes.Decrypt(nonce, data.AsSpan(0, plain.Length), data.AsSpan(plain.Length), plain, Encoding.UTF8.GetBytes(envelope.Sender));
             var body = JsonSerializer.Deserialize(plain, AmberJsonContext.Default.Body);
             if (body is null || !Enum.IsDefined(body.Kind)) return null;
+            // 必须在 Clean 截断之前检查。否则扩大帧上限后，自己拼出的几千字消息也会被转发。
+            if (body.Name?.Length > RoomChat.MaxNameLength || body.Text?.Length > RoomChat.MaxTextLength)
+            {
+                contentTooLong = true;
+                return null;
+            }
             return new ChatMessage(body.Kind, envelope.Sender, RoomChat.Clean(body.Name, RoomChat.MaxNameLength), RoomChat.Clean(body.Text, RoomChat.MaxTextLength),
                 DateTimeOffset.FromUnixTimeMilliseconds(body.Time)) { Nonce = envelope.Nonce };
         }
@@ -97,6 +112,7 @@ public static class RoomChat
     public const int MaxFrameBytes = 8 * 1024;
     public const int MaxTextLength = 500;
     public const int MaxNameLength = 32;
+    public const int MaxSenderLength = 64;
 
     /// <summary>纯文本：去掉控制字符（保留换行），截断长度。界面只当文字显示，不解析链接或标记。</summary>
     public static string Clean(string? text, int max)
@@ -211,8 +227,12 @@ public sealed class ChatHub : IAsyncDisposable
     /// <summary>整个转发每 5 秒最多转发多少条消息（每人另有 5 秒 5 条）。</summary>
     internal int MessagesPerWindow { get; init; } = 40;
 
-    /// <summary>转发的消息帧最大字节数（500 字的消息加密后约 2 KB；更长的只可能是自己拼的）。</summary>
-    public const int MaxForwardFrame = 4096;
+    /// <summary>
+    /// 保留历史协议的 8 KiB 帧上限。正文/名字每个 UTF-16 单元最多转义成 6 字节，加上 JSON、
+    /// 认证标签和 Base64 后不到 5 KiB（外层 Base64 不再额外转义）；合法的 500 字中文也必须能转发。
+    /// 解密后另外检查原始文字、名字和发送者长度，消息量仍受成员和房间的限速约束。
+    /// </summary>
+    public const int MaxForwardFrame = RoomChat.MaxFrameBytes;
 
     /// <summary>支持心跳的成员这么久没有任何帧就断开。</summary>
     internal TimeSpan PingTimeout { get; init; } = TimeSpan.FromSeconds(90);
@@ -400,8 +420,12 @@ public sealed class ChatHub : IAsyncDisposable
                     frame = await RoomChat.ReadFrameAsync(stream, deadline.Token);
                 }
                 if (frame is null) break;
-                var message = _cipher.Open(frame);
-                if (message is null) break;
+                var message = _cipher.Open(frame, out var contentTooLong);
+                if (message is null)
+                {
+                    if (contentTooLong && member.Authenticated) continue;
+                    break;
+                }
                 Interlocked.Exchange(ref member.LastActivity, Clock().UtcTicks);
                 if (!member.Authenticated)
                 {

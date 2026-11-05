@@ -105,6 +105,87 @@ public sealed class NoTraceLaunchTests : IDisposable
         Assert.Equal(L.F("core.launch.notrace.loader_config_missing", "NeoForge"), e.Message);
     }
 
+    /// <summary>脚本保存自己的无痕配置；启动器清理过期的单次启动配置后，脚本仍引用存在且带过滤器的文件。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExportedScriptKeepsConfigAfterTemporarySweep(bool forge)
+    {
+        if (forge)
+        {
+            Library("org.apache.logging.log4j", "log4j-core", "2.19.0", null);
+            Library("net.minecraftforge", "fmlloader", "1.20.1-47.2.0", Log4j2);
+            Version("v", "org.apache.logging.log4j:log4j-core:2.19.0", "net.minecraftforge:fmlloader:1.20.1-47.2.0");
+        }
+        else
+        {
+            var logDir = Directory.CreateDirectory(Path.Combine(_game, "assets", "log_configs")).FullName;
+            File.WriteAllText(Path.Combine(logDir, "client.xml"), Log4j2);
+            Version("v");
+            File.WriteAllText(Path.Combine(_game, "versions", "v", "v.json"),
+                """{"id":"v","type":"release","mainClass":"x","libraries":[],"logging":{"client":{"argument":"-Dlog4j.configurationFile=${path}","file":{"id":"client.xml","sha1":"0","size":1,"url":"https://example.invalid/x"},"type":"log4j2-xml"}},"arguments":{"game":[],"jvm":[]}}""");
+        }
+        var options = new LaunchOptions
+        {
+            VersionId = "v", JavaPath = "java", Session = new GameSession("Tester", Guid.Empty, "0", "legacy"), NoTrace = true,
+        };
+        var exportDir = Directory.CreateDirectory(Path.Combine(_game, "exports")).FullName;
+        var script = Path.Combine(exportDir, OperatingSystem.IsWindows() ? "run0.bat" : "run0.sh");
+        var launcher = Launcher();
+        launcher.WriteLaunchScript(script, options);
+        var config = Assert.Single(Directory.GetFiles(script + ".amber", "*.amber-notrace.xml"));
+        Assert.Contains(config, File.ReadAllText(script));
+        Assert.Contains("RegexFilter", File.ReadAllText(config));
+
+        // 普通启动仍使用临时配置；它被清理不能影响已经导出的脚本。
+        launcher.BuildArguments(options, null, out var temporary);
+        Assert.NotNull(temporary);
+        Assert.Equal(1, NoTraceDirs.Sweep(_temp, DateTime.UtcNow.AddDays(1)));
+        Assert.False(Directory.Exists(temporary));
+        Assert.True(File.Exists(config));
+        Assert.Contains(config, File.ReadAllText(script));
+
+        // 再次导出只更新自己的配置，不依赖上一次生成的临时目录。
+        launcher.WriteLaunchScript(script, options);
+        Assert.Equal(config, Assert.Single(Directory.GetFiles(script + ".amber", "*.amber-notrace.xml")));
+        Assert.True(File.Exists(config));
+        Assert.Contains(config, File.ReadAllText(script));
+    }
+
+    [Fact]
+    public void NormalScriptDoesNotCreateNoTraceSidecar()
+    {
+        Version("v");
+        var script = Path.Combine(_game, "normal.bat");
+        Launcher().WriteLaunchScript(script, new LaunchOptions
+        {
+            VersionId = "v", JavaPath = "java", Session = new GameSession("Tester", Guid.Empty, "0", "legacy"),
+        });
+        Assert.True(File.Exists(script));
+        Assert.False(Directory.Exists(script + ".amber"));
+        Assert.DoesNotContain("amber-notrace.xml", File.ReadAllText(script));
+    }
+
+    /// <summary>脚本自己的合法文件名可带 cmd 元字符；生成的无痕配置路径必须经过批处理引用。</summary>
+    [Fact]
+    public void WindowsScriptEscapesSidecarPathFromExportName()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        Library("net.minecraftforge", "fmlloader", "1.20.1-47.2.0", Log4j2);
+        Version("v", "net.minecraftforge:fmlloader:1.20.1-47.2.0");
+        var script = Path.Combine(_game, "run0 & (100%) !PATH!.bat");
+        Launcher().WriteLaunchScript(script, new LaunchOptions
+        {
+            VersionId = "v", JavaPath = "java", Session = new GameSession("Tester", Guid.Empty, "0", "legacy"), NoTrace = true,
+        });
+        var config = Assert.Single(Directory.GetFiles(script + ".amber", "*.amber-notrace.xml"));
+        Assert.Contains("RegexFilter", File.ReadAllText(config));
+        var text = File.ReadAllText(script);
+        Assert.Contains("setlocal DisableDelayedExpansion", text);
+        Assert.Contains("run0 ^& ^(100%%^) !PATH!.bat.amber", text);
+        Assert.Contains("-Dlog4j.configurationFile=", text);
+    }
+
     /// <summary>启动时的清理：用它的游戏已经不在了的删掉；游戏还在运行的、刚建好还没有 owner 的留着。</summary>
     [Fact]
     public void SweepRemovesOnlyAbandonedDirs()
@@ -140,6 +221,7 @@ public sealed class NoTraceLaunchTests : IDisposable
     [Fact]
     public async Task ExitDeleteRetriesWhileLocked()
     {
+        if (!OperatingSystem.IsWindows()) return; // Unix 可以删除仍被打开的文件，这里验证 Windows 的文件锁重试。
         var dir = Directory.CreateDirectory(Path.Combine(_temp, "locked")).FullName;
         var file = Path.Combine(dir, "client.amber-notrace.xml");
         File.WriteAllText(file, "<Configuration/>");

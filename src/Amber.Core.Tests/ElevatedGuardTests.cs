@@ -247,6 +247,7 @@ public class ElevatedGuardTests
     [Fact]
     public void LegacyFilesAreRemoved()
     {
+        if (!OperatingSystem.IsWindows()) return;
         var dir = Path.Combine(Path.GetTempPath(), "amber-legacy-test-" + Guid.NewGuid().ToString("N")[..8]);
         var run = Path.Combine(dir, "a1b2c3d4");
         Directory.CreateDirectory(run);
@@ -274,6 +275,7 @@ public class ElevatedGuardTests
     [Fact]
     public void LegacyFilesChunkedAndSkipHardLinks()
     {
+        if (!OperatingSystem.IsWindows()) return;
         var dir = Path.Combine(Path.GetTempPath(), "amber-legacy-link-" + Guid.NewGuid().ToString("N")[..8]);
         var run = Path.Combine(dir, "a1b2c3d4");
         Directory.CreateDirectory(run);

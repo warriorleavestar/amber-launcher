@@ -45,6 +45,7 @@ public sealed partial class MultiplayerViewModel
 
     /// <summary>测试把出口设成了房主：测试前的出口设置，结束时还原。</summary>
     private string? _exitBeforeTest;
+    private string? _guestTestRun;
     [ObservableProperty] public partial bool TestRequestWantsFullLan { get; set; }
     [ObservableProperty] public partial bool TestAllowFullLan { get; set; }
     [ObservableProperty] public partial bool TestAllowExit { get; set; }
@@ -202,14 +203,14 @@ public sealed partial class MultiplayerViewModel
             if (_direct != direct || direct.TestConsent.Pending?.Run != request.Run) return;
             ShowTestRequest(request);
         });
-        direct.GuestStepStarted += step => Dispatcher.UIThread.Post(() =>
+        direct.GuestStepStarted += (run, step) => Dispatcher.UIThread.Post(() =>
         {
-            if (_direct != direct) return;
+            if (_direct != direct || _guestTestRun != run || direct.TestConsent.ActiveRun != run) return;
             OnGuestStep(step);
         });
-        direct.TestEnded += () => Dispatcher.UIThread.Post(() =>
+        direct.TestEnded += run => Dispatcher.UIThread.Post(() =>
         {
-            if (_direct != direct) return;
+            if (_direct != direct || _guestTestRun != run) return;
             ResetGuestTest();
         });
         try
@@ -251,6 +252,8 @@ public sealed partial class MultiplayerViewModel
 
     private void ShowTestRequest(TestRequest request)
     {
+        ResetGuestTest();
+        _guestTestRun = request.Run;
         TestRequestWantsFullLan = request.WantsFullLan;
         TestAllowFullLan = false;
         TestAllowExit = false;
@@ -280,6 +283,7 @@ public sealed partial class MultiplayerViewModel
     /// <summary>测试结束、会话结束：收起确认卡片和测试横幅，还原出口显示。</summary>
     private void ResetGuestTest()
     {
+        _guestTestRun = null;
         TestRequestPending = false;
         GuestTestRunning = false;
         GuestTestBanner = "";
@@ -295,7 +299,10 @@ public sealed partial class MultiplayerViewModel
     private async Task StopGuestTestAsync()
     {
         if (_direct is not { IsHost: false } direct) return;
+        var run = _guestTestRun;
         await direct.StopGuestTestAsync();
+        // 同一次结束事件可能已先收起横幅；只有换会话或显示了另一轮时才忽略这次停止结果。
+        if (_direct != direct || _guestTestRun is not null && _guestTestRun != run) return;
         ResetGuestTest();
         Status = L.T("multiplayer.matrix.cancelled");
     }
@@ -418,17 +425,22 @@ public sealed partial class MultiplayerViewModel
     private async Task AnswerTestRequestAsync(bool accept)
     {
         if (_direct is not { IsHost: false } direct || !TestRequestPending) return;
+        var run = _guestTestRun;
         TestRequestPending = false;
         var accepted = await direct.AnswerTestRequestAsync(accept, TestRequestWantsFullLan && TestAllowFullLan, TestRequestWantsFullLan && TestAllowFullLan && TestAllowExit);
-        if (_direct != direct) return;
-        if (accepted)
+        if (_direct != direct || _guestTestRun != run) return;
+        if (accepted && direct.TestConsent.ActiveRun == run)
         {
             // 同意后马上显示横幅和“停止测试”（不等第一步到）。
             GuestTestRunning = true;
             GuestTestBanner = L.T("multiplayer.matrix.banner_running");
             Status = L.T("multiplayer.matrix.running");
         }
-        else Status = L.T(accept ? "multiplayer.matrix.request_gone" : "multiplayer.matrix.cancelled");
+        else
+        {
+            ResetGuestTest();
+            Status = L.T(accept ? "multiplayer.matrix.request_gone" : "multiplayer.matrix.cancelled");
+        }
     }
 
     [RelayCommand]

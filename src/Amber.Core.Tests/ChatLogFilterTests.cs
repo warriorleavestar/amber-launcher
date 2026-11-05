@@ -235,8 +235,82 @@ public class ChatLogFilterTests
 
     [Fact]
     public void WithoutChatKeepsOtherLines() =>
-        Assert.Equal(["[12:00:00] [main/INFO]: start", "crash here"],
-            ChatLogFilter.WithoutChat(["[12:00:00] [main/INFO]: start", "[12:00:01] [Server thread/INFO]: <Steve> secret plan", "crash here"]));
+        Assert.Equal(["[12:00:00] [main/INFO]: start", "[12:00:02] [main/ERROR]: crash here"],
+            ChatLogFilter.WithoutChat(["[12:00:00] [main/INFO]: start", "[12:00:01] [Server thread/INFO]: <Steve> secret plan", "[12:00:02] [main/ERROR]: crash here"]));
+
+    [Fact]
+    public void TextChatContinuationsAreRemovedButExceptionStackIsKept()
+    {
+        string[] exception = ["[12:00:02] [Render thread/ERROR] [minecraft/Minecraft]: failed", "java.io.IOException: broken pipe", "\tat game.Renderer.draw(Renderer.java:12)", "Caused by: java.lang.IllegalStateException: stopped"];
+        string[] lines = ["[12:00:00] [Render thread/INFO]: [CHAT] first private line", "second private line", "", "third private line", .. exception];
+        Assert.Equal(exception, ChatLogFilter.WithoutChat(lines));
+    }
+
+    [Fact]
+    public void XmlChatRemovesTheWholeEventAndKeepsTheFollowingException()
+    {
+        string[] exception =
+        [
+            """<log4j:Event logger="game" level="ERROR" thread="Render thread">""",
+            "<log4j:Message><![CDATA[failed to draw]]></log4j:Message>",
+            "<log4j:Throwable><![CDATA[java.io.IOException: broken pipe",
+            "\tat game.Renderer.draw(Renderer.java:12)]]></log4j:Throwable>",
+            "</log4j:Event>",
+        ];
+        string[] lines =
+        [
+            """<log4j:Event logger="game" level="INFO" thread="Render thread">""",
+            "<log4j:Message><![CDATA[[CHAT] first private line",
+            "second private line]]></log4j:Message>",
+            "</log4j:Event>",
+            .. exception,
+        ];
+        Assert.Equal(exception, ChatLogFilter.WithoutChat(lines));
+    }
+
+    [Fact]
+    public void XmlServerMetadataAppliesToMessageOnALaterLine()
+    {
+        string[] lines =
+        [
+            "<log4j:Event",
+            """ logger="net.minecraft.server.MinecraftServer" level="INFO" thread="Server thread">""",
+            "<log4j:Message><![CDATA[[Steve] private /say message",
+            "private continuation]]></log4j:Message>",
+            "</log4j:Event>",
+        ];
+        Assert.Empty(ChatLogFilter.WithoutChat(lines));
+    }
+
+    [Fact]
+    public void XmlCdataCannotForgeAnEventBoundary()
+    {
+        string[] lines =
+        [
+            """<log4j:Event logger="game" level="INFO" thread="Render thread">""",
+            "<log4j:Message><![CDATA[[CHAT] private first line",
+            "</log4j:Event>",
+            """<log4j:Event logger="game" level="INFO" thread="Render thread">""",
+            "[Amber] private continuation",
+            "[12:00:01] [main/INFO]: still private]]></log4j:Message>",
+            "</log4j:Event>",
+            "[12:00:02] [main/ERROR]: real diagnostic",
+        ];
+        Assert.Equal([lines[^1]], ChatLogFilter.WithoutChat(lines));
+    }
+
+    [Fact]
+    public void ChatMarkerOnALaterMessageLineRemovesEarlierLinesToo()
+    {
+        string[] lines =
+        [
+            """<log4j:Event logger="game" level="INFO" thread="Render thread">""",
+            "<log4j:Message><![CDATA[private first line",
+            "[CHAT] private second line]]></log4j:Message>",
+            "</log4j:Event>",
+        ];
+        Assert.Empty(ChatLogFilter.WithoutChat(lines));
+    }
 
     /// <summary>Forge 1.13+ / NeoForge：版本文件没有 logging，log4j2.xml 从加载器 jar 里取。</summary>
     [Fact]

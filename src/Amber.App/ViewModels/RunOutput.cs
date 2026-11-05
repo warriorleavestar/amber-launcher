@@ -10,25 +10,38 @@ internal sealed class RunOutput
 {
     public const int Kept = 400;
 
-    private readonly Queue<string> _lines = new();
+    private readonly object _gate = new();
+    private readonly Queue<ChatLogFilter.OutputLine> _lines = new();
+    private ChatLogFilter.OutputFilter _filter = new();
 
     /// <summary>这一局开着无痕模式：导出错误报告时去掉聊天行。</summary>
     public bool NoTrace { get; private set; }
 
     public void Begin(LaunchOptions options)
     {
-        _lines.Clear();
-        NoTrace = options.NoTrace;
+        lock (_gate)
+        {
+            _lines.Clear();
+            _filter = new ChatLogFilter.OutputFilter();
+            NoTrace = options.NoTrace;
+        }
     }
 
     public void Add(string line)
     {
-        _lines.Enqueue(line);
-        if (_lines.Count > Kept) _lines.Dequeue();
+        lock (_gate)
+        {
+            // 先识别事件再裁剪：聊天首行被挤出队列后，余下的续行仍带着聊天标记。
+            _lines.Enqueue(_filter.Add(line));
+            if (_lines.Count > Kept) _lines.Dequeue();
+        }
     }
 
-    public string[] Lines => _lines.ToArray();
+    public string[] Lines { get { lock (_gate) return _lines.Select(l => l.Text).ToArray(); } }
 
     /// <summary>写进错误报告的输出：无痕模式下去掉聊天（Amber 自己的“[Amber] ”行不动）。</summary>
-    public List<string> ForExport() => NoTrace ? ChatLogFilter.WithoutChat(_lines).ToList() : [.. _lines];
+    public List<string> ForExport()
+    {
+        lock (_gate) return _lines.Where(l => !NoTrace || !l.IsChat).Select(l => l.Text).ToList();
+    }
 }

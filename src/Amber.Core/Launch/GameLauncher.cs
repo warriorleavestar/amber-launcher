@@ -55,11 +55,21 @@ public sealed class GameLauncher(GameDirectory dir)
     public static string DefaultNoTraceRoot { get; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Amber", "notrace");
 
-    /// <summary>生成完整命令行（不含 java 本身），可用于导出启动脚本。notice 收到无痕模式的提示（开着无痕模式时）。</summary>
+    /// <summary>生成本次启动的完整命令行（不含 java 本身）。需要长期保存的脚本用 WriteLaunchScript，避免引用临时配置。</summary>
     public List<string> BuildArguments(LaunchOptions options, Action<string>? notice = null) => BuildArguments(options, notice, out _);
 
+    /// <summary>导出可长期使用的脚本；无痕配置随脚本保存在“脚本名.amber”目录里，不参与启动时的临时文件清理。</summary>
+    public string WriteLaunchScript(string path, LaunchOptions options, Action<string>? notice = null)
+    {
+        var scriptPath = Path.GetFullPath(path);
+        var (launcher, mapped) = ForCurrentCodePage(options, notice);
+        var args = launcher.BuildArguments(mapped, notice, out _, scriptPath + ".amber");
+        return Toolbox.WriteLaunchScript(scriptPath, mapped.JavaPath, mapped.WorkingDirectory ?? launcher.GameDir.Root,
+            args, mapped.Session.AccessToken);
+    }
+
     /// <summary>noTraceDir：这次无痕模式配置放的临时目录（没生成时为 null），用完由调用方删掉。</summary>
-    internal List<string> BuildArguments(LaunchOptions options, Action<string>? notice, out string? noTraceDir)
+    internal List<string> BuildArguments(LaunchOptions options, Action<string>? notice, out string? noTraceDir, string? scriptConfigDir = null)
     {
         noTraceDir = null;
         var version = dir.ResolveVersion(options.VersionId);
@@ -126,7 +136,7 @@ public sealed class GameLauncher(GameDirectory dir)
             {
                 if (options.NoTrace)
                 {
-                    noTraceDir = NewNoTraceDir();
+                    noTraceDir = scriptConfigDir ?? NewNoTraceDir();
                     logPath = ChatLogFilter.Prepare(logPath, noTraceDir);
                     notice?.Invoke(L.T("core.launch.notrace.on"));
                 }
@@ -140,7 +150,7 @@ public sealed class GameLauncher(GameDirectory dir)
         else if (options.NoTrace)
         {
             // Forge 1.13+、NeoForge 的版本文件把 logging 清空了，游戏用加载器 jar 里自带的 log4j2.xml：取出来改好再指给它。
-            noTraceDir = NewNoTraceDir();
+            noTraceDir = scriptConfigDir ?? NewNoTraceDir();
             var extracted = ChatLogFilter.ExtractFromClasspath(classpath, Path.Combine(noTraceDir, "loader-log4j2.xml"));
             if (extracted is not null)
             {

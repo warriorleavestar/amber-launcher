@@ -164,7 +164,7 @@ public sealed class ChatHubHardeningTests
             await c.ConnectAsync("127.0.0.1", hub.Port);
             senders.Add(c);
         }
-        var text = new string('x', RoomChat.MaxTextLength);
+        var text = new string('x', RoomChat.MaxTextLength - 1);
         // 一条一条发，等快的那个收到再发下一条：快的人队列不会满，慢的人越积越多。
         var sent = 0;
         for (var i = 0; i < 5; i++)
@@ -195,7 +195,7 @@ public sealed class ChatHubHardeningTests
             senders.Add(c);
         }
         Assert.True(await WaitAsync(() => hub.MemberCount == 7));
-        var text = new string('x', RoomChat.MaxTextLength);
+        var text = new string('x', RoomChat.MaxTextLength - 1);
         for (var i = 0; i < 4; i++)
             foreach (var c in senders) await c.SendRawAsync(Msg(ChatKind.Message, c.SenderId, c.Name, text + i), default);
         await Task.Delay(300);
@@ -388,9 +388,61 @@ public sealed class ChatHubHardeningTests
         }
     }
 
-    /// <summary>太长的消息帧不转发（连接不断，正常消息照常）。</summary>
+    /// <summary>500 个 UTF-16 单元的中文、补充平面字符和需转义字符，连同最长名字都能通过真实 TCP 转发。</summary>
+    [Theory]
+    [InlineData("中")]
+    [InlineData("\U0001F600")]
+    [InlineData("<>&+\"\\")]
+    public async Task MaximumUnicodeMessageReachesAllMembers(string unit)
+    {
+        static string Repeat(string value, int length) => string.Concat(Enumerable.Repeat(value, length / value.Length + 1))[..length];
+        var name = Repeat(unit, RoomChat.MaxNameLength);
+        var text = Repeat(unit, RoomChat.MaxTextLength);
+        await using var hub = new ChatHub(Room, 0);
+        var (watcher, inbox) = NewClient("W");
+        await using var watcherLifetime = watcher;
+        var (sender, echoes) = NewClient(name);
+        await using var senderLifetime = sender;
+        await watcher.ConnectAsync("127.0.0.1", hub.Port);
+        await sender.ConnectAsync("127.0.0.1", hub.Port);
+        Assert.True(await WaitAsync(() => hub.MemberCount == 2));
+
+        Assert.True(await sender.SendAsync(text));
+        Assert.True(await WaitAsync(() => inbox.Any(m => m.Kind == ChatKind.Message && m.Text == text)
+                                      && echoes.Any(m => m.Kind == ChatKind.Message && m.Text == text)));
+        Assert.Equal(name, inbox.Single(m => m.Kind == ChatKind.Message).Name);
+    }
+
+    /// <summary>旧的 JSON 转义形式及最大 64 单元的发送者 id 仍能通过转发。</summary>
     [Fact]
-    public async Task OversizedMessageFrameIsDropped()
+    public async Task LegacyEscapedFrameWithMaximumFieldsIsForwarded()
+    {
+        await using var hub = new ChatHub(Room, 0);
+        var (watcher, inbox) = NewClient("W");
+        await using var watcherLifetime = watcher;
+        await watcher.ConnectAsync("127.0.0.1", hub.Port);
+        using var legacy = new TcpClient();
+        await legacy.ConnectAsync("127.0.0.1", hub.Port);
+        var sender = new string('源', RoomChat.MaxSenderLength);
+        var name = new string('名', RoomChat.MaxNameLength);
+        var text = new string('中', RoomChat.MaxTextLength);
+        byte[] LegacyFrame(ChatMessage message) => Encoding.UTF8.GetBytes(JsonNode.Parse(Cipher.Seal(message))!.ToJsonString());
+        await WriteAsync(legacy.GetStream(), LegacyFrame(Msg(ChatKind.Join, sender, name)));
+        var frame = LegacyFrame(Msg(ChatKind.Message, sender, name, text));
+        Assert.True(frame.Length > 4096, $"旧编码帧只有 {frame.Length} 字节，没有覆盖原来的限制");
+        Assert.True(frame.Length <= RoomChat.MaxFrameBytes);
+        await WriteAsync(legacy.GetStream(), frame);
+        Assert.True(await WaitAsync(() => inbox.Any(m => m.Kind == ChatKind.Message && m.Text == text)));
+        Assert.Equal(sender, inbox.Single(m => m.Kind == ChatKind.Message).SenderId);
+        Assert.Equal(name, inbox.Single(m => m.Kind == ChatKind.Message).Name);
+    }
+
+    /// <summary>原始文字超限仍丢弃（连接不断，正常消息照常），不能靠 Clean 截断绕过。</summary>
+    [Theory]
+    [InlineData(501, false)]
+    [InlineData(3500, false)]
+    [InlineData(1, true)]
+    public async Task OversizedMessageFrameIsDropped(int textLength, bool oversizedName)
     {
         await using var hub = new ChatHub(Room, 0);
         var (watcher, inbox) = NewClient("W");
@@ -398,11 +450,13 @@ public sealed class ChatHubHardeningTests
         using var raw = new TcpClient();
         await raw.ConnectAsync("127.0.0.1", hub.Port);
         await WriteAsync(raw.GetStream(), Cipher.Seal(Msg(ChatKind.Join, "big", "B")));
-        // 名字和文字都是自己拼的（正常客户端会截到 500 字）：帧超过 4 KB。
-        await WriteAsync(raw.GetStream(), Cipher.Seal(new ChatMessage(ChatKind.Message, "big", "B", new string('a', 3500), DateTimeOffset.UtcNow)));
+        // 正常客户端在发送前截断；手工拼帧即使没到 8 KiB，原始字段超长也不能转发。
+        var oversized = Cipher.Seal(Msg(ChatKind.Message, "big", oversizedName ? new string('B', RoomChat.MaxNameLength + 1) : "B", new string('a', textLength)));
+        Assert.True(oversized.Length <= RoomChat.MaxFrameBytes);
+        await WriteAsync(raw.GetStream(), oversized);
         await WriteAsync(raw.GetStream(), Cipher.Seal(Msg(ChatKind.Message, "big", "B", "短的")));
         Assert.True(await WaitAsync(() => inbox.Any(m => m.Text == "短的")));
-        Assert.DoesNotContain(inbox, m => m.Text.Length > 100);
+        Assert.Single(inbox, m => m.Kind == ChatKind.Message);
         await watcher.DisposeAsync();
     }
 

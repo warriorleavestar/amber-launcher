@@ -76,6 +76,14 @@ public sealed class GuestTestConsentTests
         Assert.True(c.End(Run, out var original));
         Assert.Same(Original, original);
         Assert.Equal("not-consented", c.BeginStep(Run, 1, false, false));
+        Assert.Null(c.ActiveRun);
+        Assert.Equal(Run, c.RestoringRun);
+        Assert.False(c.Request(new TestRequest("aaaaaaaaaaaaaaaa", false)));
+        Assert.False(c.End(Run, out _));
+        c.CompleteEnd("ffffffffffffffff");
+        Assert.Equal(Run, c.RestoringRun);
+        c.CompleteEnd(Run);
+        Assert.Null(c.RestoringRun);
         Assert.True(c.Request(new TestRequest("aaaaaaaaaaaaaaaa", false)));
     }
 

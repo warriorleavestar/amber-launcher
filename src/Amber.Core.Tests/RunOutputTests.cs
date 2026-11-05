@@ -76,4 +76,51 @@ public sealed class RunOutputTests
         Assert.Empty(output.Lines);
         Assert.True(output.NoTrace);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExportStillDropsChatWhenItsFirstLineHasLeftTheRing(bool xml)
+    {
+        var output = new RunOutput();
+        output.Begin(Options(true));
+        if (xml)
+        {
+            output.Add("""<log4j:Event logger="game" level="INFO" thread="Render thread">""");
+            output.Add("<log4j:Message><![CDATA[[CHAT] private first line");
+        }
+        else output.Add("[12:00:00] [Render thread/INFO]: [CHAT] private first line");
+
+        for (var i = 0; i < RunOutput.Kept + 10; i++) output.Add("private continuation " + i);
+        if (xml) output.Add("]]></log4j:Message></log4j:Event>");
+        output.Add("[12:00:01] [Render thread/ERROR]: failed");
+        output.Add("java.io.IOException: broken pipe");
+        output.Add("\tat game.Renderer.draw(Renderer.java:12)");
+
+        Assert.Equal(RunOutput.Kept, output.Lines.Length);
+        Assert.Contains(output.Lines, l => l.StartsWith("private continuation", StringComparison.Ordinal));
+        Assert.Equal(["[12:00:01] [Render thread/ERROR]: failed", "java.io.IOException: broken pipe", "\tat game.Renderer.draw(Renderer.java:12)"], Exported(output));
+    }
+
+    [Fact]
+    public void BeginClearsPreviousChatEventState()
+    {
+        var output = new RunOutput();
+        output.Begin(Options(true));
+        output.Add("<log4j:Event><log4j:Message><![CDATA[[CHAT] incomplete private message");
+        output.Begin(Options(true));
+        output.Add("java.lang.IllegalStateException: startup failed");
+        output.Add("\tat game.Main.main(Main.java:12)");
+        Assert.Equal(output.Lines, Exported(output));
+    }
+
+    [Fact]
+    public void NormalRunKeepsMultilineChatUnchanged()
+    {
+        var output = new RunOutput();
+        output.Begin(Options(false));
+        output.Add("<log4j:Event><log4j:Message><![CDATA[[CHAT] first line");
+        output.Add("second line]]></log4j:Message></log4j:Event>");
+        Assert.Equal(output.Lines, Exported(output));
+    }
 }

@@ -82,8 +82,127 @@ public static partial class ChatLogFilter
         return IsChat(ConsolePrefix().Replace(line, "", 1), ServerPrefix().IsMatch(line));
     }
 
-    /// <summary>去掉聊天行（无痕模式下导出错误报告用）。</summary>
-    public static IEnumerable<string> WithoutChat(IEnumerable<string> lines) => lines.Where(l => !IsChatLine(l));
+    /// <summary>按完整日志事件去掉聊天，消息换行后的内容也属于同一事件。</summary>
+    public static IEnumerable<string> WithoutChat(IEnumerable<string> lines)
+    {
+        var filter = new OutputFilter();
+        // 先读完再筛选：XML 的事件头在消息之前，聊天标记也可能出现在消息的后续行。
+        var output = lines.Select(filter.Add).ToList();
+        return output.Where(l => !l.IsChat).Select(l => l.Text);
+    }
+
+    /// <summary>一行原始输出及其所属事件。事件后来被认出是聊天时，之前的行也一并排除。</summary>
+    public sealed class OutputLine
+    {
+        private readonly OutputEvent _event;
+        internal OutputLine(string text, OutputEvent outputEvent) { Text = text; _event = outputEvent; }
+        public string Text { get; }
+        public bool IsChat => _event.IsChat;
+    }
+
+    /// <summary>
+    /// 在接收输出时识别事件，状态不依赖错误报告保留多少行。
+    /// 原版 XML 按 Event 边界识别；Forge 文本按时间和线程前缀识别，其后的无前缀行包括消息续行和异常堆栈。
+    /// </summary>
+    public sealed class OutputFilter
+    {
+        private OutputEvent? _current;
+
+        public OutputLine Add(string line)
+        {
+            // CDATA 内的文字不是 XML 标记，也不能冒充下一条日志或 Amber 自己的输出。
+            if (_current?.InCdata != true && line.TrimStart().StartsWith("<log4j:Event", StringComparison.Ordinal))
+                _current = new OutputEvent(isXml: true);
+            else if (_current?.IsXml != true &&
+                     (line.StartsWith("[Amber] ", StringComparison.Ordinal) || ConsolePrefix().IsMatch(line)))
+                _current = new OutputEvent(isXml: false);
+
+            _current ??= new OutputEvent(isXml: false);
+            var result = new OutputLine(line, _current);
+            _current.Observe(line);
+            if (_current.Closed) _current = null;
+            return result;
+        }
+    }
+
+    internal sealed class OutputEvent(bool isXml)
+    {
+        private readonly System.Text.StringBuilder _tag = new();
+        private bool _fromServer;
+        private bool _inMessage;
+        private bool _messageStarted;
+        private bool _firstLine = true;
+
+        public bool IsXml { get; } = isXml;
+        public bool InCdata { get; private set; }
+        public bool IsChat { get; private set; }
+        public bool Closed { get; private set; }
+
+        public void Observe(string line)
+        {
+            if (!IsXml)
+            {
+                if (_firstLine) IsChat = IsChatLine(line);
+                else if (line.Contains("[CHAT]", StringComparison.Ordinal)) IsChat = true;
+                _firstLine = false;
+                return;
+            }
+
+            // 只识别消息部分；CDATA 里的 </log4j:Event> 等字样属于消息，不能提前结束过滤。
+            for (var index = 0; index < line.Length;)
+            {
+                if (InCdata)
+                {
+                    var end = line.IndexOf("]]>", index, StringComparison.Ordinal);
+                    ObserveMessage(line[index..(end < 0 ? line.Length : end)]);
+                    if (end < 0) break;
+                    InCdata = false;
+                    index = end + 3;
+                }
+                else if (_tag.Length > 0)
+                {
+                    var end = line.IndexOf('>', index);
+                    _tag.Append(line, index, (end < 0 ? line.Length : end + 1) - index);
+                    if (end < 0) { _tag.Append('\n'); break; }
+                    ObserveTag(_tag.ToString());
+                    _tag.Clear();
+                    index = end + 1;
+                }
+                else if (line.AsSpan(index).StartsWith("<![CDATA[", StringComparison.Ordinal))
+                {
+                    InCdata = true;
+                    index += 9;
+                }
+                else if (line[index] == '<')
+                {
+                    _tag.Append('<');
+                    index++;
+                }
+                else
+                {
+                    var end = line.IndexOf('<', index);
+                    ObserveMessage(System.Net.WebUtility.HtmlDecode(line[index..(end < 0 ? line.Length : end)]));
+                    index = end < 0 ? line.Length : end;
+                }
+            }
+        }
+
+        private void ObserveTag(string tag)
+        {
+            if (tag.StartsWith("<log4j:Event", StringComparison.Ordinal)) _fromServer = ServerEvent().IsMatch(tag);
+            else if (tag.StartsWith("<log4j:Message", StringComparison.Ordinal)) { _inMessage = true; _messageStarted = false; }
+            else if (tag == "</log4j:Message>") _inMessage = false;
+            else if (tag == "</log4j:Event>") Closed = true;
+        }
+
+        private void ObserveMessage(string text)
+        {
+            if (!_inMessage || text.Length == 0) return;
+            if (text.Contains("[CHAT]", StringComparison.Ordinal) || (!_messageStarted && ChatLogFilter.IsChat(text, _fromServer)))
+                IsChat = true;
+            _messageStarted = true;
+        }
+    }
 
     /// <summary>这个版本的版本文件里有没有 log4j2 配置。</summary>
     public static bool Supported(VersionJson version) => version.Logging?.GetValueOrDefault("client") is { Argument: not null, File: not null };
