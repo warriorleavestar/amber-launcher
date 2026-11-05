@@ -9,36 +9,74 @@ using Amber.Core.Net;
 
 namespace Amber.Core.Content;
 
-/// <summary>整合包概况。Overrides 是压缩包里要原样复制到游戏目录的那一层（MultiMC / HMCL / MCBBS 用）。</summary>
-public sealed record ModpackInfo(string Format, string Name, string? Version, string McVersion, LoaderKind? Loader, string? LoaderVersion, int FileCount, string? Overrides = null);
+/// <summary>
+/// 整合包概况。Overrides 是压缩包里要原样复制到游戏目录的那一层（MultiMC / HMCL / MCBBS / 游戏文件夹压缩包用）。
+/// Root 是整合包套着的那一层文件夹（直接压缩整合包文件夹时会有），没有时为空。
+/// </summary>
+public sealed record ModpackInfo(string Format, string Name, string? Version, string McVersion, LoaderKind? Loader, string? LoaderVersion, int FileCount, string? Overrides = null, string Root = "");
 
-/// <summary>导入 mrpack、CurseForge、MultiMC / Prism、HMCL、MCBBS 整合包，导出 mrpack 和 CurseForge 整合包。</summary>
+/// <summary>
+/// 导入 mrpack、CurseForge、MultiMC / Prism、HMCL、MCBBS 整合包，PCL 那种带启动器的压缩包和直接打包的 .minecraft 文件夹；
+/// 导出 mrpack 和 CurseForge 整合包。
+/// </summary>
 public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider modrinth, CurseForgeProvider curseForge)
 {
     public static ModpackInfo Inspect(string packPath)
     {
-        using var zip = ZipFile.OpenRead(packPath);
-        if (zip.GetEntry("modrinth.index.json") is { } mr)
+        using var source = PackSource.Open(packPath);
+        return Inspect(source.Zip);
+    }
+
+    internal static ModpackInfo Inspect(ZipArchive zip)
+    {
+        var root = PackRoot(zip);
+        if (zip.GetEntry(root + "modrinth.index.json") is { } mr)
         {
             var index = ReadJson(mr);
             var deps = index["dependencies"]?.AsObject() ?? [];
             var (loader, version) = MrpackLoader(deps);
             return new ModpackInfo("Modrinth", index["name"]?.GetValue<string>() ?? L.T("core.content.modpack.defaultname"), index["versionId"]?.GetValue<string>(),
-                deps["minecraft"]?.GetValue<string>() ?? throw new InvalidDataException(L.T("core.content.modpack.nogameversion")), loader, version, (index["files"] as JsonArray)?.Count ?? 0);
+                deps["minecraft"]?.GetValue<string>() ?? throw new InvalidDataException(L.T("core.content.modpack.nogameversion")), loader, version, (index["files"] as JsonArray)?.Count ?? 0, Root: root);
         }
-        // MCBBS 整合包常常同时带一份 CurseForge 格式的 manifest.json，以 packmeta 为准。
-        if (zip.GetEntry("mcbbs.packmeta") is not null) return InspectOtherLaunchers(zip)!;
-        if (zip.GetEntry("manifest.json") is { } cf)
+        // MCBBS 整合包常常同时带一份 CurseForge 格式的 manifest.json，以 packmeta 为准；只有 manifest.json 但里面有 addons 的也是 MCBBS 格式。
+        if (McbbsMeta(zip, root) is not null) return InspectOtherLaunchers(zip, root)!;
+        if (zip.GetEntry(root + "manifest.json") is { } cf)
         {
             var manifest = ReadJson(cf);
             if (manifest["manifestType"]?.GetValue<string>() != "minecraftModpack") throw new InvalidDataException(L.T("core.content.modpack.notcurseforge"));
             var mc = manifest["minecraft"]!;
             var (loader, version) = CurseForgeLoader(mc);
             return new ModpackInfo("CurseForge", manifest["name"]?.GetValue<string>() ?? L.T("core.content.modpack.defaultname"), manifest["version"]?.GetValue<string>(),
-                mc["version"]!.GetValue<string>(), loader, version, (manifest["files"] as JsonArray)?.Count ?? 0);
+                mc["version"]!.GetValue<string>(), loader, version, (manifest["files"] as JsonArray)?.Count ?? 0, Root: root);
         }
-        return InspectOtherLaunchers(zip)
+        return InspectOtherLaunchers(zip, root)
+               ?? InspectGameFolder(zip)
                ?? throw new InvalidDataException(L.T("core.content.modpack.unrecognized"));
+    }
+
+    /// <summary>整合包的索引文件。</summary>
+    private static readonly string[] IndexFiles = ["modrinth.index.json", "mcbbs.packmeta", "manifest.json", "modpack.json"];
+
+    /// <summary>
+    /// 索引文件不在压缩包根上、而是在唯一的一层文件夹里时（把整合包文件夹直接压缩），返回“文件夹/”；否则返回空。
+    /// </summary>
+    internal static string PackRoot(ZipArchive zip)
+    {
+        if (IndexFiles.Any(f => zip.GetEntry(f) is not null)) return "";
+        var tops = zip.Entries
+            .Where(e => !e.FullName.StartsWith("__MACOSX/", StringComparison.Ordinal))
+            .Select(e => e.FullName.IndexOf('/') is var slash and > 0 ? e.FullName[..(slash + 1)] : null)
+            .Distinct().ToList();
+        if (tops.Count != 1 || tops[0] is not { } top) return "";
+        return IndexFiles.Any(f => zip.GetEntry(top + f) is not null) ? top : "";
+    }
+
+    /// <summary>MCBBS 的元数据：mcbbs.packmeta，或者带 addons 的 manifest.json。</summary>
+    private static ZipArchiveEntry? McbbsMeta(ZipArchive zip, string root)
+    {
+        if (zip.GetEntry(root + "mcbbs.packmeta") is { } meta) return meta;
+        if (zip.GetEntry(root + "manifest.json") is not { } manifest) return null;
+        return ReadJson(manifest)["addons"] is JsonArray ? manifest : null;
     }
 
     /// <summary>安装整合包：先装加载器（版本名字用 name），再下载文件、释放 overrides 到版本隔离目录。</summary>
@@ -46,7 +84,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
     public async Task<string> ImportAsync(string packPath, string name, Func<string, string> workDirForVersion, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default,
         Action<string>? onSkip = null)
     {
-        var info = Inspect(packPath);
+        using var source = PackSource.Open(packPath);
+        var zip = source.Zip;
+        var info = Inspect(zip);
         name = name.Trim();
         if (string.IsNullOrEmpty(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new ArgumentException(L.F("core.content.modpack.invalidname", name));
 
@@ -54,7 +94,6 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         var workDir = workDirForVersion(id);
         Directory.CreateDirectory(workDir);
 
-        using var zip = ZipFile.OpenRead(packPath);
         // 可疑的文件名（像 8.3 短名、带冒号、设备名）跳过这一个文件并说一声，不让整个导入失败。
         var target = new PackTarget(workDir, ctx.Dir.VersionDir(id), id) { OnSkip = path =>
         {
@@ -63,8 +102,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         } };
         switch (info.Format)
         {
-            case "Modrinth": await ImportMrpackFilesAsync(zip, target, progress, ct); break;
-            case "CurseForge": await ImportCurseForgeFilesAsync(zip, target, progress, ct); break;
+            case "Modrinth": await ImportMrpackFilesAsync(zip, info.Root, target, progress, ct); break;
+            case "CurseForge": await ImportCurseForgeFilesAsync(zip, info.Root, target, progress, ct); break;
+            case GameFolder: await ImportGameFolderFilesAsync(zip, info, target, progress, ct); break;
             default: await ImportOtherLauncherFilesAsync(zip, info, id, target, progress, ct); break;
         }
         return id;
@@ -93,9 +133,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         return version;
     }
 
-    private async Task ImportMrpackFilesAsync(ZipArchive zip, PackTarget pack, IProgress<LoaderProgress>? progress, CancellationToken ct)
+    private async Task ImportMrpackFilesAsync(ZipArchive zip, string root, PackTarget pack, IProgress<LoaderProgress>? progress, CancellationToken ct)
     {
-        var index = ReadJson(zip.GetEntry("modrinth.index.json")!);
+        var index = ReadJson(zip.GetEntry(root + "modrinth.index.json")!);
         var items = new List<DownloadItem>();
         foreach (var file in (index["files"] as JsonArray ?? []).OfType<JsonObject>())
         {
@@ -110,14 +150,14 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         await ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.content.modpack.downloadprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
         progress?.Report(new(L.T("core.content.modpack.extractconfig")));
-        ExtractPrefix(zip, "overrides/", pack);
-        ExtractPrefix(zip, "client-overrides/", pack);
+        ExtractPrefix(zip, root + "overrides/", pack);
+        ExtractPrefix(zip, root + "client-overrides/", pack);
     }
 
-    private async Task ImportCurseForgeFilesAsync(ZipArchive zip, PackTarget pack, IProgress<LoaderProgress>? progress, CancellationToken ct)
+    private async Task ImportCurseForgeFilesAsync(ZipArchive zip, string root, PackTarget pack, IProgress<LoaderProgress>? progress, CancellationToken ct)
     {
         var workDir = pack.WorkDir;
-        var manifest = ReadJson(zip.GetEntry("manifest.json")!);
+        var manifest = ReadJson(zip.GetEntry(root + "manifest.json")!);
         var ids = (manifest["files"] as JsonArray ?? []).OfType<JsonObject>().Select(f => f["fileID"]!.GetValue<long>()).ToList();
         progress?.Report(new(L.T("core.content.modpack.querymods")));
         var files = await curseForge.GetFilesByIdAsync(ids, ct);
@@ -128,7 +168,7 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         await ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.content.modpack.downloadprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
         var overrides = manifest["overrides"]?.GetValue<string>() ?? "overrides";
-        ExtractPrefix(zip, overrides.TrimEnd('/') + "/", pack);
+        ExtractPrefix(zip, root + overrides.TrimEnd('/') + "/", pack);
         if (missing > 0) throw new InvalidDataException(L.P("core.content.modpack.missingcursefiles", missing, missing));
     }
 
@@ -322,15 +362,17 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         };
     }
 
-    private static void ExtractPrefix(ZipArchive zip, string prefix, PackTarget target, IReadOnlyCollection<string>? skip = null)
+    private static void ExtractPrefix(ZipArchive zip, string prefix, PackTarget target, IReadOnlyCollection<string>? skip = null, Func<string, bool>? skipWhere = null)
     {
         foreach (var entry in zip.Entries)
         {
             if (!entry.FullName.StartsWith(prefix, StringComparison.Ordinal) || entry.FullName.EndsWith('/')) continue;
             // 前缀后面多出来的斜杠（“overrides//mods/x.jar”）只是多余的分隔符，不是绝对路径：去掉再判断。
             var relative = entry.FullName[prefix.Length..].TrimStart('/', '\\');
-            if (skip?.Contains(relative) == true) continue;
             if (target.Resolve(relative) is not { } path) continue;
+            // 过滤必须使用真正落盘的名字；否则“./launcher_accounts.json”“PCL./Setup.ini”等会绕过排除规则。
+            var normalized = Path.GetRelativePath(Path.GetFullPath(target.WorkDir), path).Replace('\\', '/');
+            if (skip?.Contains(normalized) == true || skipWhere?.Invoke(normalized) == true) continue;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             entry.ExtractToFile(path, true);
         }

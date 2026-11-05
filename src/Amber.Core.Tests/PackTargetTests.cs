@@ -118,7 +118,7 @@ public sealed class PackTargetTests
             stream.Position = 0;
             using var read = new ZipArchive(stream, ZipArchiveMode.Read);
             var extract = typeof(ModpackService).GetMethod("ExtractPrefix", BindingFlags.NonPublic | BindingFlags.Static)!;
-            extract.Invoke(null, [read, "overrides/", new ModpackService.PackTarget(dir, dir, "Pack"), null]);
+            extract.Invoke(null, [read, "overrides/", new ModpackService.PackTarget(dir, dir, "Pack"), null, null]);
             Assert.True(File.Exists(Path.Combine(dir, "mods", "a.jar")));
         }
         finally

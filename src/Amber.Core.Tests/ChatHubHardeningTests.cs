@@ -163,6 +163,8 @@ public sealed class ChatHubHardeningTests
             var (c, _) = NewClient("s" + s);
             await c.ConnectAsync("127.0.0.1", hub.Port);
             senders.Add(c);
+            // 初始化也逐个等快成员读完；否则 6 条加入通知会把容量仅 4 的测试队列瞬间填满。
+            Assert.True(await WaitAsync(() => inbox.Any(m => m.Kind == ChatKind.Join && m.SenderId == c.SenderId)));
         }
         var text = new string('x', RoomChat.MaxTextLength - 1);
         // 一条一条发，等快的那个收到再发下一条：快的人队列不会满，慢的人越积越多。
