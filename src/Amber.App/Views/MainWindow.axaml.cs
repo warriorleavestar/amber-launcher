@@ -35,6 +35,9 @@ public partial class MainWindow : Window
                 File.AppendAllText(Path.Combine(layoutDir, "layout.txt"), $"total {problems.Count}" + Environment.NewLine);
                 Close();
             };
+        // 开发用：AMBER_SPIKE=报告目录，界面改版第 0 批的技术验证。
+        if (Environment.GetEnvironmentVariable("AMBER_SPIKE") is { Length: > 0 } spikeDir)
+            Opened += async (_, _) => await new Spike(this, spikeDir).RunAsync();
         // 开发用：AMBER_SELFTEST=报告目录，走一遍端到端自检。
         if (Environment.GetEnvironmentVariable("AMBER_SELFTEST") is { Length: > 0 } report)
             Opened += async (_, _) => await new SelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
