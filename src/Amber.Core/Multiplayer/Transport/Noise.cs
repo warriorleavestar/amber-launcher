@@ -1,6 +1,8 @@
 using Amber.Core.Localization;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using Org.BouncyCastle.Math.EC.Rfc7748;
+using Org.BouncyCastle.Security;
 using System.Text;
 
 namespace Amber.Core.Multiplayer.Transport;
@@ -198,22 +200,28 @@ public sealed class SymmetricState : IDisposable
     }
 }
 
-/// <summary>X25519 密钥对，用 Windows CNG 的 curve25519（已用 RFC 7748 的测试向量验证过，见测试）。</summary>
+/// <summary>X25519 密钥对，使用跨平台的 RFC 7748 实现。</summary>
 public sealed class X25519KeyPair : IDisposable
 {
     public const int Length = 32;
-    private static readonly ECCurve Curve = ECCurve.CreateFromFriendlyName("curve25519");
-    private readonly ECDiffieHellman _key;
+    private readonly byte[] _privateKey;
+    private bool _disposed;
 
     public byte[] PublicKey { get; }
 
-    private X25519KeyPair(ECDiffieHellman key)
+    private X25519KeyPair(byte[] privateKey)
     {
-        _key = key;
-        PublicKey = key.ExportParameters(false).Q.X!;
+        _privateKey = privateKey;
+        PublicKey = new byte[Length];
+        X25519.GeneratePublicKey(_privateKey, PublicKey);
     }
 
-    public static X25519KeyPair Generate() => new(ECDiffieHellman.Create(Curve));
+    public static X25519KeyPair Generate()
+    {
+        var privateKey = new byte[Length];
+        X25519.GeneratePrivateKey(new SecureRandom(), privateKey);
+        return new X25519KeyPair(privateKey);
+    }
 
     /// <summary>测试用：按 RFC 7748 的格式导入私钥（小端、会先做 clamp）和对应公钥。</summary>
     internal static X25519KeyPair Import(byte[] privateKey, byte[] publicKey)
@@ -222,21 +230,27 @@ public sealed class X25519KeyPair : IDisposable
         d[0] &= 248;
         d[31] &= 127;
         d[31] |= 64;
-        return new X25519KeyPair(ECDiffieHellman.Create(new ECParameters { Curve = Curve, D = d, Q = new ECPoint { X = publicKey, Y = new byte[Length] } }));
+        var pair = new X25519KeyPair(d);
+        if (!CryptographicOperations.FixedTimeEquals(pair.PublicKey, publicKey))
+        {
+            pair.Dispose();
+            throw new CryptographicException(L.T("core.mp.noise.invalidpublickey"));
+        }
+        return pair;
     }
 
     public byte[] Dh(ReadOnlySpan<byte> remotePublic)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (remotePublic.Length != Length) throw new CryptographicException(L.T("core.mp.noise.publickeylength"));
-        byte[] shared;
+        var shared = new byte[Length];
         try
         {
-            using var remote = ECDiffieHellman.Create(new ECParameters { Curve = Curve, Q = new ECPoint { X = remotePublic.ToArray(), Y = new byte[Length] } });
-            shared = _key.DeriveRawSecretAgreement(remote.PublicKey);
+            if (!X25519.CalculateAgreement(_privateKey, remotePublic, shared))
+                throw new CryptographicException(L.T("core.mp.noise.zerosharedkey"));
         }
-        catch (PlatformNotSupportedException e)
+        catch (ArgumentException e)
         {
-            // CNG 拒绝导入不合法的点（比如全零），统一当作握手失败。
             throw new CryptographicException(L.T("core.mp.noise.invalidpublickey"), e);
         }
         // 全零结果说明对方给了小阶点，直接拒绝（RFC 7748 第 6.1 节建议的检查）。
@@ -244,7 +258,12 @@ public sealed class X25519KeyPair : IDisposable
         return shared;
     }
 
-    public void Dispose() => _key.Dispose();
+    public void Dispose()
+    {
+        if (_disposed) return;
+        CryptographicOperations.ZeroMemory(_privateKey);
+        _disposed = true;
+    }
 }
 
 public enum NoisePattern { NNpsk0, NNhfspsk0 }

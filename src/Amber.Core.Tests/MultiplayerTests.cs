@@ -304,6 +304,26 @@ public class ExitNodeArgsTests
 
 public class EasyTierExtractTests
 {
+    [Theory]
+    [InlineData("windows", System.Runtime.InteropServices.Architecture.X64, "easytier-windows-x86_64-v2.6.4.zip", "easytier-core.exe")]
+    [InlineData("macos", System.Runtime.InteropServices.Architecture.Arm64, "easytier-macos-aarch64-v2.6.4.zip", "easytier-core")]
+    [InlineData("linux", System.Runtime.InteropServices.Architecture.X64, "easytier-linux-x86_64-v2.6.4.zip", "easytier-core")]
+    [InlineData("linux", System.Runtime.InteropServices.Architecture.Arm64, "easytier-linux-aarch64-v2.6.4.zip", "easytier-core")]
+    public void ChoosesOfficialPackage(string os, System.Runtime.InteropServices.Architecture arch, string name, string core)
+    {
+        var asset = EasyTierRelease.For(os, arch);
+        Assert.Equal(name, asset.Name);
+        Assert.Equal(core, asset.CoreName);
+        Assert.Equal(64, asset.Sha256.Length);
+        Assert.True(asset.Size > 1_000_000);
+    }
+
+    [Fact]
+    public void RejectsUnsupportedPackage()
+    {
+        Assert.Throws<PlatformNotSupportedException>(() => EasyTierRelease.For("linux", System.Runtime.InteropServices.Architecture.Wasm));
+    }
+
     [Fact]
     public void KeepsCoreCliDllsAndWinDivert()
     {
@@ -316,8 +336,31 @@ public class EasyTierExtractTests
                 foreach (var name in new[] { "easytier-core.exe", "easytier-cli.exe", "wintun.dll", "Packet.dll", "WinDivert64.sys", "easytier-web.exe", "easytier-web-embed.exe" })
                     using (var w = new StreamWriter(archive.CreateEntry("easytier-windows-x86_64/" + name).Open())) w.Write(name);
             var target = Path.Combine(root, "out");
-            EasyTierInstaller.Extract(zip, target);
+            EasyTierInstaller.Extract(zip, target, EasyTierRelease.For("windows", System.Runtime.InteropServices.Architecture.X64));
             Assert.Equal(["easytier-cli.exe", "easytier-core.exe", "Packet.dll", "WinDivert64.sys", "wintun.dll"],
+                Directory.EnumerateFiles(target).Select(Path.GetFileName).Order(StringComparer.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+
+    [Fact]
+    public void KeepsUnixExecutablesAndLibraries()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "amber-et-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var zip = Path.Combine(root, "et.zip");
+            using (var archive = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create))
+                foreach (var name in new[] { "easytier-core", "easytier-cli", "libeasytier.so", "easytier-web" })
+                    using (var w = new StreamWriter(archive.CreateEntry("easytier-linux-x86_64/" + name).Open())) w.Write(name);
+            var target = Path.Combine(root, "out");
+            EasyTierInstaller.Extract(zip, target, EasyTierRelease.For("linux", System.Runtime.InteropServices.Architecture.X64));
+            Assert.Equal(["easytier-cli", "easytier-core", "libeasytier.so"],
                 Directory.EnumerateFiles(target).Select(Path.GetFileName).Order(StringComparer.OrdinalIgnoreCase));
         }
         finally

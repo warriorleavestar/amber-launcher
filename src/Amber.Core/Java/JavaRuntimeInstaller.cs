@@ -19,7 +19,15 @@ public sealed class JavaRuntimeInstaller(Downloader downloader, string gameRoot)
                 return arch switch { Architecture.Arm64 => "windows-arm64", Architecture.X86 => "windows-x86", _ => "windows-x64" };
             if (OperatingSystem.IsMacOS())
                 return arch == Architecture.Arm64 ? "mac-os-arm64" : "mac-os";
-            return arch == Architecture.X86 ? "linux-i386" : "linux";
+            // Mojang 目前只发布 Linux x86/x64 运行时；ARM Linux 要使用系统安装的 Java，
+            // 不能把 x64 包误装到 ARM 机器上。
+            return arch switch
+            {
+                Architecture.X64 => "linux",
+                Architecture.X86 => "linux-i386",
+                Architecture.Arm64 => "linux-arm64",
+                _ => "linux-" + arch.ToString().ToLowerInvariant(),
+            };
         }
     }
 

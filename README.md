@@ -8,7 +8,7 @@
 
 [![最新版本](https://img.shields.io/github/v/release/warriorleavestar/amber-launcher?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=d98a1f)](https://github.com/warriorleavestar/amber-launcher/releases/latest)
 [![许可证](https://img.shields.io/github/license/warriorleavestar/amber-launcher?label=%E8%AE%B8%E5%8F%AF%E8%AF%81)](LICENSE)
-![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20x64-blue)
+![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
 简体中文 | [English](README.en.md)
 
@@ -18,13 +18,22 @@
 
 ## 下载安装
 
-1. 到 [Releases](https://github.com/warriorleavestar/amber-launcher/releases/latest) 下载 `Amber-win-x64-aot.zip`（推荐）。
-2. 解压到任意文件夹，双击里面的 `Amber.exe` 运行。不用安装，也不用另外装 .NET。
+到 [Releases](https://github.com/warriorleavestar/amber-launcher/releases/latest) 下载与你的电脑对应的包：
+
+| 系统 | 文件 | 运行方式 |
+|---|---|---|
+| Windows 10+ x64 | `Amber-win-x64-aot.zip`（推荐） | 解压后双击 `Amber.exe` |
+| macOS Apple 芯片 | `Amber-osx-arm64.tar.gz` | 解压后在终端运行 `./Amber` |
+| macOS Intel | `Amber-osx-x64.tar.gz` | 解压后在终端运行 `./Amber` |
+| Linux x64 | `Amber-linux-x64.tar.gz` | 解压后运行 `./Amber` |
+| Linux ARM64 | `Amber-linux-arm64.tar.gz` | 解压后运行 `./Amber`，并使用系统安装的 Java |
 
 推荐的 zip 是预先编译成本机代码的版本（Native AOT），启动更快（窗口约 0.3 秒打开）、占内存更少，解压后是 4 个文件，要放在同一个文件夹里。
 同一个发布里还有单个文件的 `Amber.exe`，下载即可运行，适合只想要一个文件的情况，启动稍慢一些。两个版本功能和数据完全相同，可以随时换用。
 
-需要 64 位 Windows 10 或更新的系统。Java 不用提前准备：Amber 会按游戏版本自动选择本机的 Java，没有合适的就下载一个。
+发布包自带 .NET，不用安装。Amber 会按游戏版本选择本机 Java，并在 Mojang 提供对应平台运行时时自动下载；Linux ARM64 需要先安装合适版本的 64 位 Java。
+
+macOS/Linux 版本目前没有代码签名。macOS 第一次运行若被 Gatekeeper 拦截，可在“系统设置 → 隐私与安全性”中确认打开。完整局域网和出口节点模式仍只支持 Windows；普通房间、直连、聊天和仅游戏转发可跨平台使用。
 
 ## 功能
 
@@ -39,7 +48,7 @@
 
 - 微软账号（设备码登录）、authlib-injector 外置登录、离线账号
 - 支持多账号切换和皮肤预览
-- 不保存密码，登录令牌用 Windows DPAPI 加密
+- 不保存密码；登录令牌在 Windows 上用 DPAPI 加密，在 macOS/Linux 上用仅当前系统用户可读的本机密钥加密
 
 ### 模组与整合包
 
@@ -100,24 +109,24 @@
 | 微软 Client ID | 「账号」页 | `AMBER_MS_CLIENT_ID` | 留空使用内置的默认值。优先级：界面填写 > 环境变量 > 默认值 |
 | CurseForge API Key | 「设置」页 | `AMBER_CF_KEY` | 到 [console.curseforge.com](https://console.curseforge.com) 免费申请。没有 Key 时不能使用 CurseForge，其他功能不受影响 |
 
-设置保存在 `%APPDATA%\Amber\settings.json`。
+设置保存在系统应用数据目录的 `Amber/settings.json`（Windows 为 `%APPDATA%\Amber`，macOS 为 `~/Library/Application Support/Amber`，Linux 通常为 `~/.config/Amber`）。
 
 ## 从源码构建
 
 需要 [.NET 10 SDK](https://dotnet.microsoft.com/download)。
 
-```powershell
+```shell
 git clone https://github.com/warriorleavestar/amber-launcher.git
-cd amber-launcher\src
+cd amber-launcher/src
 dotnet build
 dotnet test
 dotnet run --project Amber.App
 ```
 
-打包成单个 exe：
+打包当前平台的单文件版本（把 RID 换成 `win-x64`、`osx-arm64`、`osx-x64`、`linux-x64` 或 `linux-arm64`）：
 
-```powershell
-dotnet publish Amber.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishReadyToRun=true -p:DebugType=none -o ..\publish
+```shell
+dotnet publish Amber.App -c Release -r osx-arm64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishReadyToRun=true -p:DebugType=none -o ../publish
 ```
 
 还有一个命令行版本，例如 `dotnet run --project Amber.Cli -- list-remote`。
@@ -145,7 +154,7 @@ CurseForge 的接口需要 API Key，见上面的[配置](#配置)。Modrinth �
 在「设置」页切换下载源，试试官方源或 BMCLAPI 镜像。
 
 **支持 macOS 和 Linux 吗？**
-目前只提供 Windows 版本。
+支持 macOS Intel/Apple 芯片和 Linux x64/ARM64。完整局域网、出口节点和极端加密仍受 Windows 系统能力限制；其他主要功能可跨平台使用。
 
 **有哪些做不到的？**
 在 Fabric / Quilt 上运行 Forge 模组：目前没有可靠的兼容层，Amber 会直接说明。

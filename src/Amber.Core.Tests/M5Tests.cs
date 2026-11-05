@@ -299,4 +299,17 @@ public class M5Tests : IDisposable
         Assert.DoesNotContain("SECRET123", text);
         Assert.Contains("REPLACE_WITH_TOKEN", text);
     }
+
+    [Fact]
+    public void LaunchScript_OnUnixQuotesPathsAndIsExecutable()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var path = Path.Combine(_root, "run.sh");
+        Toolbox.WriteLaunchScript(path, "/opt/Java's/bin/java", "/tmp/game dir", ["-Dname=Steve's world"], "");
+        var text = File.ReadAllText(path);
+        Assert.StartsWith("#!/bin/sh\n", text);
+        Assert.Contains("'/opt/Java'\"'\"'s/bin/java'", text);
+        Assert.Contains("'-Dname=Steve'\"'\"'s world'", text);
+        Assert.True(File.GetUnixFileMode(path).HasFlag(UnixFileMode.UserExecute));
+    }
 }

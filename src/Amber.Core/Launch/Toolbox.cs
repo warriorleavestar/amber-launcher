@@ -103,18 +103,25 @@ public static class Toolbox
         else
         {
             builder.AppendLine("#!/bin/sh");
-            builder.AppendLine($"cd \"{workDir}\"");
-            builder.Append($"\"{javaPath}\"");
+            builder.AppendLine($"cd {ShellQuote(workDir)}");
+            builder.Append(ShellQuote(javaPath));
         }
         foreach (var arg in args)
         {
             var value = accessToken.Length > 0 ? arg.Replace(accessToken, "REPLACE_WITH_TOKEN") : arg;
-            builder.Append(' ').Append(value.Contains(' ') ? $"\"{value}\"" : value);
+            builder.Append(' ').Append(OperatingSystem.IsWindows()
+                ? value.Contains(' ') ? $"\"{value}\"" : value
+                : ShellQuote(value));
         }
         builder.AppendLine();
         File.WriteAllText(path, builder.ToString(), new UTF8Encoding(false));
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, File.GetUnixFileMode(path)
+                | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
         return path;
     }
+
+    private static string ShellQuote(string value) => "'" + value.Replace("'", "'\"'\"'") + "'";
 
     /// <summary>版本文件的大小统计，用于实例页显示。</summary>
     public static long InstanceSize(GameInstance instance) => SizeOf([instance.WorkDir]);

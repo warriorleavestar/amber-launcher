@@ -4,7 +4,7 @@ using Amber.Core.Launch;
 
 namespace Amber.App.Services;
 
-/// <summary>启动器设置，保存在 %APPDATA%\Amber\settings.json。</summary>
+/// <summary>启动器设置，保存在系统应用数据目录的 Amber/settings.json。</summary>
 public sealed class AppSettings
 {
     public string GameDirectory { get; set; } = Amber.Core.Game.GameDirectory.DefaultRoot();
