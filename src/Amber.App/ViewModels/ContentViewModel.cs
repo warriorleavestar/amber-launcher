@@ -250,7 +250,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("content.search.failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("content.search.failed", e, ErrorText.Describe(e)));
         }
     }
 
@@ -328,7 +328,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("content.files.fetch_failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("content.files.fetch_failed", e, ErrorText.Describe(e)));
         }
     }
 
@@ -396,7 +396,9 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             var problems = plan.Problems.Count > 0 ? L.F("content.install.problems", string.Join(L.T("common.list_separator"), plan.Problems)) : "";
             var noLoader = CurrentType == ContentType.Mod && instance.Loader is null ? L.T("content.install.no_loader") : "";
             var where = IsDatapack ? L.F("content.install.world_target", instance.Id, world!.Label) : instance.Id;
-            SetStatus(StatusMessage.Success("content.install.completed", file.DisplayName, extra, where, problems, noLoader));
+            // 带“注意：”的（依赖有问题、实例没装加载器）用警告色，不当成单纯的成功。
+            var kind = problems.Length > 0 || noLoader.Length > 0 ? StatusKind.Warning : StatusKind.Success;
+            SetStatus(new StatusMessage("content.install.completed", [file.DisplayName, extra, where, problems, noLoader], kind));
             _service.NotifyContentChanged();
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)

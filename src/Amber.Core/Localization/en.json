@@ -1086,5 +1086,18 @@
   "instance.delete.body": "This permanently deletes the folder of instance {0}, including its isolated worlds and mods ({1} in total). This can't be undone, and it won't go to the Amber trash folder.",
   "instance.delete.computing": "calculating size…",
   "instance.delete.done": "Deleted instance {0}",
-  "common.confirm_remove": "Confirm remove"
+  "common.confirm_remove": "Confirm remove",
+  "error.timeout": "The connection timed out. The network may be slow or the other side isn't responding",
+  "error.tls": "Couldn't set up a secure connection. Check that the system clock is right and that no proxy is intercepting it",
+  "error.dns": "Couldn't find the server's address. Check your connection or DNS",
+  "error.refused": "The connection was refused. The service may not be running",
+  "error.offline": "The network is unreachable. Check that you're online",
+  "error.http_rate_limited": "Too many requests. The server is rate-limiting; try again later",
+  "error.http_not_found": "The file isn't on the server (404)",
+  "error.http_server": "The server had an error. Try again later or switch download source",
+  "error.access_denied": "No permission to access this file or folder",
+  "error.file_in_use": "The file is in use by another program (for example, the game is still open). Close it and try again",
+  "error.disk_full": "Not enough disk space",
+  "error.path_too_long": "The path is too long. Use a shorter folder",
+  "error.network": "Couldn't connect. Check that you're online"
 }

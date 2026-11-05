@@ -134,7 +134,7 @@ public sealed partial class MultiplayerViewModel
         catch (Exception e) when (e is OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             await direct.DisposeAsync();
-            SetStatus(StatusMessage.Failure("multiplayer.direct.create_failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("multiplayer.direct.create_failed", e, ErrorText.Describe(e)));
         }
     }
 
@@ -205,7 +205,7 @@ public sealed partial class MultiplayerViewModel
             _direct = null;
             IsDirect = false;
             Mode = "";
-            SetStatus(StatusMessage.Failure("multiplayer.direct.connect_failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("multiplayer.direct.connect_failed", e, ErrorText.Describe(e)));
         }
     }
 
@@ -292,7 +292,7 @@ public sealed partial class MultiplayerViewModel
         }
         catch (Exception e) when (e is InvalidOperationException or IOException or System.Net.Sockets.SocketException)
         {
-            SetStatus(StatusMessage.Failure("multiplayer.matrix.failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("multiplayer.matrix.failed", e, ErrorText.Describe(e)));
         }
         finally
         {

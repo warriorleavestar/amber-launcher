@@ -293,7 +293,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         catch (SocketException e)
         {
-            SetStatus(StatusMessage.Failure("multiplayer.lan.scan_failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("multiplayer.lan.scan_failed", e, ErrorText.Describe(e)));
         }
         finally
         {
@@ -527,7 +527,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
         {
-            SetStatus(StatusMessage.Failure("multiplayer.room.start_failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("multiplayer.room.start_failed", e, ErrorText.Describe(e)));
             return false;
         }
         if (!TryStartTransport(options)) return false;
@@ -552,7 +552,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         {
             _session?.Dispose();
             _session = null;
-            SetStatus(StatusMessage.Failure("multiplayer.transport.port_in_use", e, TunnelSettings.Port, e.Message));
+            SetStatus(StatusMessage.Failure("multiplayer.transport.port_in_use", e, TunnelSettings.Port, ErrorText.Describe(e)));
             return false;
         }
         _service.ActiveGameProxy = _transport.Proxy;
@@ -771,7 +771,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         {
             // 用户拒绝了权限确认：旧会话已经停了，按“结束联机”处理，网络恢复正常。
             StopSession();
-            SetStatus(StatusMessage.Failure("multiplayer.exit.switch_failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("multiplayer.exit.switch_failed", e, ErrorText.Describe(e)));
             return false;
         }
     }

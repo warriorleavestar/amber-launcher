@@ -1057,5 +1057,18 @@
   "instance.delete.body": "將永久刪除實例 {0} 的資料夾（含隔離的存檔與模組），共 {1}。此操作無法復原，也不會放入回收目錄。",
   "instance.delete.computing": "正在計算大小…",
   "instance.delete.done": "已刪除實例 {0}",
-  "common.confirm_remove": "確認移除"
+  "common.confirm_remove": "確認移除",
+  "error.timeout": "連線逾時，網路可能太慢或對方沒有回應",
+  "error.tls": "無法建立安全連線，請確認系統時間是否正確，或是否有代理伺服器在攔截",
+  "error.dns": "找不到伺服器位址，請檢查網路連線或 DNS",
+  "error.refused": "對方拒絕了連線，服務可能沒有開啟",
+  "error.offline": "網路不通，請確認是否已連上網路",
+  "error.http_rate_limited": "請求太頻繁，被伺服器限制了，請稍後再試",
+  "error.http_not_found": "伺服器上沒有這個檔案（404）",
+  "error.http_server": "伺服器發生錯誤，請稍後再試或換一個下載來源",
+  "error.access_denied": "沒有權限存取這個檔案或資料夾",
+  "error.file_in_use": "檔案正被其他程式使用（例如遊戲還開著），關閉後再試",
+  "error.disk_full": "磁碟空間不足",
+  "error.path_too_long": "路徑太長，請換一個短一點的目錄",
+  "error.network": "網路連線失敗，請確認是否已連上網路"
 }

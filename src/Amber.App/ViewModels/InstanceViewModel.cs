@@ -271,7 +271,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, ErrorText.Describe(e)));
         }
         return false;
     }
@@ -323,7 +323,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, ErrorText.Describe(e)));
         }
     }
 
@@ -435,7 +435,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("instance.status.failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("instance.status.failed", e, ErrorText.Describe(e)));
         }
         finally
         {
@@ -801,7 +801,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e) when (e is IOException or InvalidDataException)
         {
-            SetStatus(StatusMessage.Failure("instance.worlds.import_failed", e, e.Message));
+            SetStatus(StatusMessage.Failure("instance.worlds.import_failed", e, ErrorText.Describe(e)));
         }
     }
 
