@@ -72,7 +72,7 @@
                 <Button Classes="amber" Content="{l:T multiplayer.direct.create}" Command="{Binding CreateDirectRoomCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
               </StackPanel>
               <StackPanel Grid.Column="2" Spacing="6">
-                <TextBlock Text="{l:T multiplayer.direct.join_title}" FontWeight="SemiBold" />
+                <TextBlock Text="{l:T multiplayer.direct.join_title}" FontWeight="SemiBold" TextWrapping="Wrap" />
                 <TextBox Text="{Binding DirectInviteInput}" PlaceholderText="{l:T multiplayer.direct.invite_placeholder}" />
                 <Button Classes="amber" Content="{l:T common.join}" Command="{Binding JoinDirectCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
               </StackPanel>

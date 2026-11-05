@@ -24,6 +24,8 @@ internal sealed class LayoutCheck(MainWindow window, MainViewModel main, string 
     public static readonly (double Width, double Height, string Name)[] Sizes =
     [
         (760, 440, "最小窗口"),
+        // 1280×720 开 150%、任务栏 48：可用区域 853×432，减去标题栏约 30，客户区约 853×402（真机量的，见 AMBER_MEASURE）。
+        (853, 402, "1280x720@150%客户区"),
         (853, 448, "1280x720@150%"),
         (960, 500, "1920x1080@200%"),
         (1093, 580, "1366x768@125%"),
@@ -71,7 +73,7 @@ internal sealed class LayoutCheck(MainWindow window, MainViewModel main, string 
                         return [];
                     }
                     // 截图：最小和用户那种小屏幕按 1.5 倍渲染，最大的按 2 倍，其余 1 倍，够看清字有没有被切。
-                    var scale = name switch { "最小窗口" => 1.0, "1280x720@150%" => 1.5, "2560x1440@175%" => 2.0, _ => 1.0 };
+                    var scale = name switch { "最小窗口" => 1.0, "1280x720@150%" or "1280x720@150%客户区" => 1.5, "2560x1440@175%" => 2.0, _ => 1.0 };
                     using var bitmap = new RenderTargetBitmap(new PixelSize((int)(w * scale), (int)(h * scale)), new Vector(96 * scale, 96 * scale));
                     bitmap.Render(root);
                     bitmap.Save(Path.Combine(reportDir, $"{language}-{main.Pages.IndexOf(page) + 1}-{name.Replace('%', 'p')}.png"));

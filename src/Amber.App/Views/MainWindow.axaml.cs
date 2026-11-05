@@ -21,6 +21,8 @@ public partial class MainWindow : Window
         _settings = settings;
         InitializeComponent();
         FitToScreen(settings?.LauncherWindow);
+        // 窗口打开后才知道标题栏有多高：Width/Height 是客户区，加上标题栏可能比屏幕的可用区域还高（底下被任务栏挡住）。
+        Opened += (_, _) => FitFrameToScreen();
         Closing += (_, _) => RememberPlacement();
         // 开发用：设置 AMBER_SNAPSHOT_DIR 后，依次把每个页面渲染成 PNG 然后退出。
         if (Environment.GetEnvironmentVariable("AMBER_SNAPSHOT_DIR") is { Length: > 0 } dir)
@@ -36,6 +38,22 @@ public partial class MainWindow : Window
         // 开发用：AMBER_SELFTEST=报告目录，走一遍端到端自检。
         if (Environment.GetEnvironmentVariable("AMBER_SELFTEST") is { Length: > 0 } report)
             Opened += async (_, _) => await new SelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
+        // 开发用：AMBER_MEASURE=文件，记下屏幕可用区域、缩放、窗口外框和客户区的大小，然后退出。
+        if (Environment.GetEnvironmentVariable("AMBER_MEASURE") is { Length: > 0 } measure)
+            Opened += (_, _) => Dispatcher.UIThread.Post(() =>
+            {
+                var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+                var frame = FrameSize;
+                File.WriteAllText(measure, string.Join(Environment.NewLine,
+                    $"scaling={screen?.Scaling}",
+                    $"screen_px={screen?.Bounds.Width}x{screen?.Bounds.Height}",
+                    $"work_px={screen?.WorkingArea.Width}x{screen?.WorkingArea.Height}",
+                    $"work_logical={screen?.WorkingArea.Width / screen?.Scaling:F1}x{screen?.WorkingArea.Height / screen?.Scaling:F1}",
+                    $"frame_logical={frame?.Width:F1}x{frame?.Height:F1}",
+                    $"client_logical={ClientSize.Width:F1}x{ClientSize.Height:F1}",
+                    $"chrome_logical={frame?.Width - ClientSize.Width:F1}x{frame?.Height - ClientSize.Height:F1}") + Environment.NewLine);
+                Close();
+            }, DispatcherPriority.Background);
         // 开发用：记录启动各阶段耗时，窗口打开后退出。
         if (StartupTrace.Enabled)
         {
@@ -80,6 +98,28 @@ public partial class MainWindow : Window
         // 整个窗口都要在可用区域里（标题栏不能跑到屏幕外拖不回来）。
         Position = new PixelPoint(Math.Clamp(x, work.X, Math.Max(work.X, work.Right - pixelWidth)), Math.Clamp(y, work.Y, Math.Max(work.Y, work.Bottom - pixelHeight)));
         if (onScreen && saved!.Maximized) WindowState = WindowState.Maximized;
+    }
+
+    /// <summary>
+    /// 按实际的窗口外框收一次：客户区高度 + 标题栏不超过可用区域，窗口上沿在可用区域里。
+    /// 外框里还有看不见的缩放边（左右和下边各约 7 像素），按左右的宽度扣掉，不算进标题栏。
+    /// </summary>
+    private void FitFrameToScreen()
+    {
+        if (WindowState != WindowState.Normal || FrameSize is not { } frame) return;
+        var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+        if (screen is null) return;
+        var scale = screen.Scaling;
+        var work = screen.WorkingArea;
+        var side = Math.Max(0, (frame.Width - ClientSize.Width) / 2);
+        var title = Math.Max(0, frame.Height - ClientSize.Height - side);
+        var maxClientHeight = work.Height / scale - title;
+        if (maxClientHeight <= 0) return;
+        MinHeight = Math.Min(MinHeight, maxClientHeight);
+        if (Height > maxClientHeight) Height = maxClientHeight;
+        var visibleHeight = (int)Math.Ceiling((title + Height) * scale);
+        var y = Math.Clamp(Position.Y, work.Y, Math.Max(work.Y, work.Bottom - visibleHeight));
+        if (y != Position.Y) Position = new PixelPoint(Position.X, y);
     }
 
     private void RememberPlacement()
