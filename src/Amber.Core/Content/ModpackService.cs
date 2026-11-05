@@ -49,10 +49,20 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         var info = Inspect(packPath);
         name = name.Trim();
         if (string.IsNullOrEmpty(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new ArgumentException(L.F("core.content.modpack.invalidname", name));
-
-        var id = await InstallBaseAsync(info, name, progress, ct);
-        var workDir = workDirForVersion(id);
+        InstanceInstallDirectory.CheckBase(ctx.Dir, name, info.McVersion);
+        var versionDir = ctx.Dir.VersionDir(name);
+        var workDir = InstanceInstallDirectory.Normalize(workDirForVersion(name));
+        var baseDir = ctx.Dir.VersionDir(info.McVersion);
+        // 游戏目录不能盖住原版依赖，也不能作为目标版本的祖先而把共享目录纳入回滚。
+        if (InstanceInstallDirectory.Same(workDir, baseDir) || GameDirectory.IsWithin(workDir, baseDir) ||
+            GameDirectory.IsWithin(baseDir, workDir) || GameDirectory.IsWithin(workDir, versionDir))
+            throw new InvalidDataException(L.F("core.install.targetbase", name));
+        using var targetDirectory = InstanceInstallDirectory.Reserve(versionDir);
+        using var separateWorkDirectory = InstanceInstallDirectory.Same(workDir, versionDir) || GameDirectory.IsWithin(versionDir, workDir)
+            ? null : InstanceInstallDirectory.Reserve(workDir);
         Directory.CreateDirectory(workDir);
+
+        var id = await InstallBaseAsync(info, name, targetDirectory, progress, ct);
 
         using var zip = ZipFile.OpenRead(packPath);
         // 可疑的文件名（像 8.3 短名、带冒号、设备名）跳过这一个文件并说一声，不让整个导入失败。
@@ -67,10 +77,12 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
             case "CurseForge": await ImportCurseForgeFilesAsync(zip, target, progress, ct); break;
             default: await ImportOtherLauncherFilesAsync(zip, info, id, target, progress, ct); break;
         }
+        separateWorkDirectory?.Complete();
+        targetDirectory.Complete();
         return id;
     }
 
-    private async Task<string> InstallBaseAsync(ModpackInfo info, string name, IProgress<LoaderProgress>? progress, CancellationToken ct)
+    private async Task<string> InstallBaseAsync(ModpackInfo info, string name, InstanceInstallDirectory targetDirectory, IProgress<LoaderProgress>? progress, CancellationToken ct)
     {
         if (info.Loader is not { } kind)
         {
@@ -81,7 +93,11 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
             return name;
         }
         var version = PackLoaderVersion(kind, info);
-        return await LoaderInstallers.Create(kind, ctx).InstallAsync(new LoaderVersion(kind, info.McVersion, version), name, progress, ct);
+        var installer = LoaderInstallers.Create(kind, ctx);
+        var loaderVersion = new LoaderVersion(kind, info.McVersion, version);
+        return installer is ForgeLikeInstaller forge
+            ? await forge.InstallReservedAsync(loaderVersion, name, targetDirectory, progress, ct)
+            : await installer.InstallAsync(loaderVersion, name, progress, ct);
     }
 
     private static string PackLoaderVersion(LoaderKind kind, ModpackInfo info)
@@ -439,7 +455,7 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
 
     private static JsonObject ReadJson(ZipArchiveEntry entry)
     {
-        using var stream = entry.Open();
-        return JsonNode.Parse(stream)?.AsObject() ?? throw new InvalidDataException(L.F("core.content.modpack.parsefailed", entry.FullName));
+        var text = ArchiveMetadata.ReadText(entry, ArchiveMetadata.MaxPackMetadataBytes);
+        return JsonNode.Parse(text)?.AsObject() ?? throw new InvalidDataException(L.F("core.content.modpack.parsefailed", entry.FullName));
     }
 }
