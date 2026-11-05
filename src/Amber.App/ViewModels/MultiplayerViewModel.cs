@@ -226,7 +226,6 @@ public sealed partial class MultiplayerViewModel : PageViewModel
 
     [ObservableProperty] public partial string RoomCodeText { get; set; } = "";
     [ObservableProperty] public partial string JoinAddress { get; set; } = "";
-    [ObservableProperty] public partial string Status { get; set; } = "";
 
     public string ComponentText => IsComponentReady
         ? L.F("multiplayer.component.ready", EasyTierRelease.Version)
@@ -241,6 +240,10 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         SelectedTransport = TransportChoices[0];
         service.GameOutput += OnGameOutput;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
+        service.CurrentInstanceChanged += () => Dispatcher.UIThread.Post(() =>
+        {
+            if (_service.CurrentInstance is { } id && Instances.Contains(id)) TargetInstance = id;
+        });
         InitDirect();
     }
 
@@ -252,14 +255,13 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         // 不自动听局域网广播：绑定端口可能让 Windows 弹防火墙询问。用 Amber 启动的游戏从日志就能认出端口。
     }
 
+    partial void OnTargetInstanceChanged(string? value) => _service.SetCurrentInstance(value);
+
     private void RefreshInstances()
     {
-        var keep = TargetInstance;
         Instances.Clear();
         foreach (var v in _service.InstalledVersions()) Instances.Add(v);
-        TargetInstance = keep is not null && Instances.Contains(keep) ? keep
-            : _service.Settings.LastVersion is { } last && Instances.Contains(last) ? last
-            : Instances.FirstOrDefault();
+        TargetInstance = _service.CurrentOr(Instances, Instances.FirstOrDefault());
     }
 
     private void OnGameOutput(string versionId, string line)
@@ -270,7 +272,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             var item = new LanGameItem(new LanGame(versionId, port), L.T("multiplayer.lan.amber_source"));
             LanGames.Insert(0, item);
             SelectedLanGame = item;
-            if (IsIdle) Status = L.F("multiplayer.lan.opened", versionId, port);
+            if (IsIdle) SetStatus(StatusMessage.Success("multiplayer.lan.opened", versionId, port));
         });
     }
 
@@ -290,11 +292,11 @@ public sealed partial class MultiplayerViewModel : PageViewModel
                 LanGames.Add(new LanGameItem(game, L.T("multiplayer.lan.broadcast_source")));
             }
             SelectedLanGame ??= LanGames.FirstOrDefault();
-            if (IsIdle && LanGames.Count == 0) Status = L.T("multiplayer.lan.not_found");
+            if (IsIdle && LanGames.Count == 0) SetStatus(StatusMessage.Error("multiplayer.lan.not_found"));
         }
         catch (SocketException e)
         {
-            Status = L.F("multiplayer.lan.scan_failed", e.Message);
+            SetStatus(StatusMessage.Failure("multiplayer.lan.scan_failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -310,21 +312,21 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _downloadCts = new CancellationTokenSource();
         try
         {
-            Status = L.T("multiplayer.component.downloading");
+            SetStatus(StatusMessage.Info("multiplayer.component.downloading"));
             await _service.EasyTier.EnsureAsync(new Progress<DownloadProgress>(p =>
             {
                 DownloadPercent = Math.Min(100, 100.0 * p.BytesDownloaded / EasyTierRelease.Current.Size);
             }), _downloadCts.Token);
             IsComponentReady = true;
-            Status = L.T("multiplayer.component.downloaded");
+            SetStatus(StatusMessage.Success("multiplayer.component.downloaded"));
         }
         catch (OperationCanceledException) when (_downloadCts.IsCancellationRequested)
         {
-            Status = L.T("multiplayer.component.download_cancelled");
+            SetStatus(StatusMessage.Warning("multiplayer.component.download_cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("multiplayer.component.download_failed", e is OperationCanceledException ? L.T("common.request_timeout") : e.Message);
+            SetStatus(StatusMessage.Failure("multiplayer.component.download_failed", e, e is OperationCanceledException ? L.T("common.request_timeout") : e.Message));
         }
         finally
         {
@@ -361,22 +363,29 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         var url = NewNodeUrl.Trim();
         if (!RelayNodes.IsValid(url))
         {
-            Status = L.F("multiplayer.nodes.invalid_address", url);
+            SetStatus(StatusMessage.Error("multiplayer.nodes.invalid_address", url));
             return;
         }
         if (Nodes.Any(n => n.Url == url)) return;
         Nodes.Add(new NodeItem(url));
         SaveNodes();
         NewNodeUrl = "";
-        Status = L.T("multiplayer.nodes.added");
+        SetStatus(StatusMessage.Success("multiplayer.nodes.added"));
     }
 
     [RelayCommand]
     private void RemoveNode(NodeItem? item)
     {
         if (item is null) return;
+        var index = Nodes.IndexOf(item);
         Nodes.Remove(item);
         SaveNodes();
+        Toasts.Removed(item.Url, () =>
+        {
+            if (Nodes.Any(n => n.Url == item.Url)) return;
+            Nodes.Insert(Math.Clamp(index, 0, Nodes.Count), item);
+            SaveNodes();
+        });
     }
 
 
@@ -397,7 +406,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         ShareCodeText = RelayNodes.Encode(null, Nodes.Select(n => n.Url));
         if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
             await clipboard.SetTextAsync(ShareCodeText);
-        Status = L.T("multiplayer.nodes.exported");
+        SetStatus(StatusMessage.Success("multiplayer.nodes.exported"));
     }
 
     [RelayCommand]
@@ -405,7 +414,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     {
         if (!RelayNodes.TryDecode(ShareCodeText, out var name, out var urls))
         {
-            Status = L.T("multiplayer.nodes.invalid_share_code");
+            SetStatus(StatusMessage.Error("multiplayer.nodes.invalid_share_code"));
             return;
         }
         var added = 0;
@@ -435,23 +444,23 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (!IsIdle) return;
         if (!IsComponentReady)
         {
-            Status = L.T("multiplayer.component.download_required");
+            SetStatus(StatusMessage.Warning("multiplayer.component.download_required"));
             return;
         }
         var port = int.TryParse(ManualPort.Trim(), out var manual) && manual is > 0 and < 65536 ? manual : SelectedLanGame?.Game.Port;
         if (port is null)
         {
-            Status = L.T("multiplayer.lan.port_required");
+            SetStatus(StatusMessage.Warning("multiplayer.lan.port_required"));
             return;
         }
         if (!await CanConnectAsync(port.Value))
         {
-            Status = L.F("multiplayer.lan.port_unavailable", port);
+            SetStatus(StatusMessage.Error("multiplayer.lan.port_unavailable", port));
             return;
         }
         if ((TestPeers ?? _service.MultiplayerPeers).Count == 0 && TestListeners is null)
         {
-            Status = L.T("multiplayer.nodes.host_required");
+            SetStatus(StatusMessage.Warning("multiplayer.nodes.host_required"));
             return;
         }
         var room = RoomCode.Create(port.Value) with { Tunnel = new TunnelSettings(SelectedTransport.Mode, CanDisguise && DisguiseAsMinecraft) };
@@ -475,22 +484,22 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (!IsIdle) return;
         if (!IsComponentReady)
         {
-            Status = L.T("multiplayer.component.download_required");
+            SetStatus(StatusMessage.Warning("multiplayer.component.download_required"));
             return;
         }
         if (!RoomCode.TryParse(JoinCode, out var room))
         {
-            Status = L.T("multiplayer.room.invalid_code");
+            SetStatus(StatusMessage.Error("multiplayer.room.invalid_code"));
             return;
         }
         if (room.Tunnel.Mode == TransportMode.Extreme && !NoiseHandshake.HybridSupported)
         {
-            Status = L.T("multiplayer.room.extreme_unsupported");
+            SetStatus(StatusMessage.Warning("multiplayer.room.extreme_unsupported"));
             return;
         }
         if ((TestPeers ?? _service.MultiplayerPeers).Count == 0)
         {
-            Status = L.T("multiplayer.nodes.join_required");
+            SetStatus(StatusMessage.Warning("multiplayer.nodes.join_required"));
             return;
         }
         // 封装模式下游戏和聊天都先连本机的 Amber，再封装着发给房主（完整局域网模式也一样）。
@@ -513,7 +522,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         RoomCodeText = room.ToString();
         // 游戏的“多人游戏”列表里也会出现这个房间。
         if (local is { } port) _ = Amber.Core.Multiplayer.LanGames.AnnounceAsync(L.T("multiplayer.room.server_name"), port, _sessionCts!.Token);
-        Status = L.T("multiplayer.room.connecting");
+        SetStatus(StatusMessage.Info("multiplayer.room.connecting"));
     }
 
     private bool TryStartSession(EasyTierOptions options)
@@ -528,7 +537,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
         {
-            Status = L.F("multiplayer.room.start_failed", e.Message);
+            SetStatus(StatusMessage.Failure("multiplayer.room.start_failed", e, ErrorText.Of(e)));
             return false;
         }
         if (!TryStartTransport(options)) return false;
@@ -553,7 +562,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         {
             _session?.Dispose();
             _session = null;
-            Status = L.F("multiplayer.transport.port_in_use", TunnelSettings.Port, e.Message);
+            SetStatus(StatusMessage.Failure("multiplayer.transport.port_in_use", e, TunnelSettings.Port, ErrorText.Of(e)));
             return false;
         }
         _service.ActiveGameProxy = _transport.Proxy;
@@ -591,7 +600,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             LocalExitPort = current.Tun ? null : EasyTierArgs.FreeTcpPort(),
         };
         if (await RestartForProxyAsync(options))
-            Status = L.F("multiplayer.proxy.switching", peer.Name, peer.Peer.Ip);
+            SetStatus(StatusMessage.Info("multiplayer.proxy.switching", peer.Name, peer.Peer.Ip));
     }
 
     [RelayCommand]
@@ -599,7 +608,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     {
         if (_currentOptions is not { } current || !UsingGameProxy) return;
         if (await RestartForProxyAsync(current with { ProxyExit = null, LocalSocksPort = null, LocalExitPort = null }))
-            Status = L.T("multiplayer.proxy.stopped");
+            SetStatus(StatusMessage.Info("multiplayer.proxy.stopped"));
     }
 
     /// <summary>换“仅游戏”转发的设置：不建网卡时要重启联机组件（转发规则是启动参数）；完整局域网模式下只换 Amber 自己的部分。</summary>
@@ -622,7 +631,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             catch (Exception e) when (e is IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
             {
                 StopSession();
-                Status = L.T("multiplayer.proxy.restart_failed") + e.Message;
+                SetStatus(new StatusMessage("common.raw", [L.T("multiplayer.proxy.restart_failed") + e.Message], StatusKind.Error, e.ToString()));
                 return false;
             }
         }
@@ -726,7 +735,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             return l.IsNotice ? L.F("multiplayer.chat.export_notice", time, l.Text) : L.F("multiplayer.chat.export_line", time, l.Name, l.Text);
         });
         File.WriteAllLines(path, lines);
-        Status = L.F("multiplayer.chat.exported", path);
+        SetStatus(StatusMessage.Success("multiplayer.chat.exported", path));
     }
 
     /// <summary>每次刷新时看看聊天要不要连：房主在完整局域网模式下等虚拟网卡就绪后再监听虚拟 IP；加入方看到房主后连。</summary>
@@ -774,7 +783,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         {
             // 用户拒绝了权限确认：旧会话已经停了，按“结束联机”处理，网络恢复正常。
             StopSession();
-            Status = L.F("multiplayer.exit.switch_failed", e.Message);
+            SetStatus(StatusMessage.Failure("multiplayer.exit.switch_failed", e, ErrorText.Of(e)));
             return false;
         }
     }
@@ -786,7 +795,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (RestartWithExit(peer.Peer.Ip))
         {
             ExitNodeIp = peer.Peer.Ip;
-            Status = L.F("multiplayer.exit.switching", peer.Name, peer.Peer.Ip);
+            SetStatus(StatusMessage.Info("multiplayer.exit.switching", peer.Name, peer.Peer.Ip));
         }
     }
 
@@ -800,7 +809,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             _ = StopGuestTestAsync();
             return;
         }
-        if (RestartWithExit(null)) Status = L.T("multiplayer.exit.stopped");
+        if (RestartWithExit(null)) SetStatus(StatusMessage.Info("multiplayer.exit.stopped"));
         ExitNodeIp = "";
     }
 
@@ -838,7 +847,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             TickChat(host is not null);
             if (host is not null) _hostSeen = true;
             if (IsJoined && host is null && !_hostSeen && DateTime.UtcNow - _joinedAt > TimeSpan.FromSeconds(20))
-                Status = L.T("multiplayer.room.not_connected_hint");
+                SetStatus(StatusMessage.Info("multiplayer.room.not_connected_hint"));
             else if (IsJoined)
                 Status = host is null ? L.T("multiplayer.room.connecting_first_time")
                     : L.F("multiplayer.room.connected", (host.Peer.LatencyMs is { } ms ? L.F("multiplayer.room.latency", ms) : ""), JoinAddress);
@@ -872,7 +881,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
         {
             await clipboard.SetTextAsync(RoomCodeText);
-            Status = L.T("multiplayer.room.code_copied");
+            SetStatus(StatusMessage.Success("multiplayer.room.code_copied"));
         }
     }
 
@@ -884,7 +893,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         var workDir = _service.WorkDirFor(id);
         Directory.CreateDirectory(workDir);
         ServerList.Add(workDir, new ServerEntry(L.T("multiplayer.room.server_name"), JoinAddress));
-        Status = L.F("multiplayer.room.added_to_servers", id, JoinAddress);
+        SetStatus(StatusMessage.Success("multiplayer.room.added_to_servers", id, JoinAddress));
     }
 
     /// <summary>主窗口设置：启动请求发出后切回启动页。</summary>
@@ -902,7 +911,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private void Stop()
     {
         StopSession();
-        Status = L.T("multiplayer.room.stopped");
+        SetStatus(StatusMessage.Info("multiplayer.room.stopped"));
     }
 
     private void StopSession()

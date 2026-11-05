@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:l="using:Amber.App.Localization"
              xmlns:vm="using:Amber.App.ViewModels"
+             xmlns:c="using:Amber.App.Views.Controls"
              x:Class="Amber.App.Views.ContentPage"
              x:DataType="vm:ContentViewModel">
   <Grid RowDefinitions="Auto,Auto,*,Auto">
@@ -15,11 +16,19 @@
         <ComboBox ItemsSource="{Binding TypeNames}" SelectedIndex="{Binding TypeIndex}" MinWidth="96" />
         <ComboBox Grid.Column="1" ItemsSource="{Binding SourceNames}" SelectedIndex="{Binding SourceIndex}" MinWidth="120" Margin="8,0,0,0" />
         <TextBox Grid.Column="2" Text="{Binding Query}" PlaceholderText="{l:T common.search_placeholder}" Margin="8,0" KeyDown="Query_KeyDown" />
-        <Button Grid.Column="3" Classes="amber" Content="{l:T common.search}" Command="{Binding SearchCommand}" Padding="20,6" />
+        <Button Grid.Column="3" Classes="primary" Content="{l:T common.search}" Command="{Binding SearchCommand}" Padding="20,6" />
       </Grid>
       <WrapPanel ItemSpacing="10" LineSpacing="4" IsVisible="{Binding !IsModpack}">
         <TextBlock Text="{l:T content.install.target}" VerticalAlignment="Center" />
         <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding TargetInstance}" MinWidth="260" />
+        <Border IsVisible="{Binding IsTemporaryTarget}" Background="{DynamicResource WarningTint}" CornerRadius="{DynamicResource RadiusPill}" Padding="8,2" VerticalAlignment="Center"
+                ToolTip.Tip="{l:T content.install.temporary_hint}">
+          <TextBlock Text="{l:T content.install.temporary}" Foreground="{DynamicResource WarningText}" FontSize="{StaticResource FontCaption}" />
+        </Border>
+        <Border IsVisible="{Binding IsSharedTarget}" Background="{DynamicResource AccentTint}" CornerRadius="{DynamicResource RadiusPill}" Padding="8,2" VerticalAlignment="Center"
+                ToolTip.Tip="{l:T content.install.shared_hint}">
+          <TextBlock Text="{l:T content.install.shared}" Foreground="{DynamicResource AccentText}" FontSize="{StaticResource FontCaption}" />
+        </Border>
         <CheckBox Content="{l:T content.search.filter_by_instance}" IsChecked="{Binding FilterByInstance}" />
       </WrapPanel>
       <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding IsDatapack}">
@@ -41,13 +50,13 @@
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:ProjectItem">
                 <Grid ColumnDefinitions="48,*" Margin="2">
-                  <Border Width="48" Height="48" CornerRadius="6" Background="{DynamicResource PageBackground}" ClipToBounds="True" VerticalAlignment="Top">
+                  <Border Width="48" Height="48" CornerRadius="6" Background="{DynamicResource PageBg}" ClipToBounds="True" VerticalAlignment="Top">
                     <Image Source="{Binding Icon}" />
                   </Border>
                   <StackPanel Grid.Column="1" Margin="10,0,0,0">
-                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Text="{Binding Summary}" Classes="hint" MaxLines="2" FontSize="12" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Text="{Binding Meta}" Classes="hint" FontSize="11" />
+                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
+                    <TextBlock Text="{Binding Summary}" Classes="hint" MaxLines="2" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Summary}" />
+                    <TextBlock Text="{Binding Meta}" Classes="caption" />
                   </StackPanel>
                 </Grid>
               </DataTemplate>
@@ -71,8 +80,8 @@
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:FileItem">
                 <StackPanel>
-                  <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" FontSize="13" />
-                  <TextBlock Text="{Binding Meta}" Classes="hint" FontSize="11" TextTrimming="CharacterEllipsis" />
+                  <c:MiddleEllipsisTextBlock FullText="{Binding Name}" FontSize="13" />
+                  <TextBlock Text="{Binding Meta}" Classes="caption" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Meta}" />
                 </StackPanel>
               </DataTemplate>
             </ListBox.ItemTemplate>
@@ -82,7 +91,7 @@
               <TextBlock Text="{l:T content.modpack.instance_name}" />
               <TextBox Text="{Binding NewInstanceName}" />
             </StackPanel>
-            <Button Classes="amber" Content="{l:T content.install.selected}" Command="{Binding InstallCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+            <Button Classes="primary" Content="{l:T content.install.selected}" Command="{Binding InstallCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
           </StackPanel>
         </Grid>
       </Border>
@@ -91,7 +100,7 @@
     <Border Grid.Row="3" Classes="card" Margin="0">
       <Grid ColumnDefinitions="*,Auto">
         <StackPanel Spacing="6" VerticalAlignment="Center">
-          <TextBlock Text="{Binding Status}" TextTrimming="CharacterEllipsis" />
+          <c:StatusBar Message="{Binding StatusInfo}" />
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
         </StackPanel>
         <Button Grid.Column="1" Content="{l:T common.cancel}" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />

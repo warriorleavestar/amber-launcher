@@ -81,6 +81,43 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     public bool IsConfiguring => Target is not null;
     public string InstallTitle => L.F("download.install.title", Target?.Id);
 
+    /// <summary>刚装好的实例；非空时右侧显示成功卡（立即启动、添加模组、打开实例）。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasInstalled), nameof(InstalledTitle), nameof(InstalledHasLoader))]
+    public partial string? JustInstalled { get; set; }
+
+    public bool HasInstalled => JustInstalled is not null;
+    public string InstalledTitle => L.F("download.installed.title", JustInstalled);
+
+    /// <summary>原版实例装不了模组，成功卡不给“添加模组”。</summary>
+    public bool InstalledHasLoader { get; private set; }
+
+    /// <summary>成功卡上的去处（MainViewModel 接上）。</summary>
+    public Action<string>? LaunchInstance { get; set; }
+    public Action<string>? OpenInstance { get; set; }
+    public Action<string>? BrowseModsFor { get; set; }
+
+    [RelayCommand]
+    private void LaunchInstalled()
+    {
+        if (JustInstalled is { } id) LaunchInstance?.Invoke(id);
+    }
+
+    [RelayCommand]
+    private void OpenInstalled()
+    {
+        if (JustInstalled is { } id) OpenInstance?.Invoke(id);
+    }
+
+    [RelayCommand]
+    private void AddModsToInstalled()
+    {
+        if (JustInstalled is { } id) BrowseModsFor?.Invoke(id);
+    }
+
+    [RelayCommand]
+    private void CloseInstalled() => JustInstalled = null;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(NeedsLoaderVersion))]
     public partial LoaderChoice SelectedLoader { get; set; }
@@ -147,9 +184,6 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial double Progress { get; set; }
 
-    [ObservableProperty]
-    public partial string Status { get; set; } = "";
-
     public DownloadViewModel(LauncherService service)
     {
         _service = service;
@@ -169,17 +203,17 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private async Task RefreshAsync()
     {
-        Status = L.T("download.status.fetching_versions");
+        SetStatus(StatusMessage.Info("download.status.fetching_versions"));
         try
         {
             var manifest = await _service.Installer.GetManifestAsync();
             _all = manifest.Versions;
             ApplyFilter();
-            Status = L.F("download.status.latest", manifest.Latest.GetValueOrDefault("release"), manifest.Latest.GetValueOrDefault("snapshot"));
+            SetStatus(StatusMessage.Success("download.status.latest", manifest.Latest.GetValueOrDefault("release"), manifest.Latest.GetValueOrDefault("snapshot")));
         }
         catch (Exception e)
         {
-            Status = L.F("download.status.fetch_failed", e.Message);
+            SetStatus(StatusMessage.Failure("download.status.fetch_failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -202,6 +236,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     private void Configure(RemoteVersionItem? item)
     {
         Target = item;
+        if (item is not null) JustInstalled = null;
         SelectedLoader = LoaderChoices[0];
         UpdateDefaultName();
     }
@@ -259,7 +294,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         var loader = SelectedLoader.Kind;
         if (loader is not null && SelectedLoaderVersion is null)
         {
-            Status = L.T("download.status.loader_required");
+            SetStatus(StatusMessage.Warning("download.status.loader_required"));
             return;
         }
 
@@ -267,13 +302,17 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         _installCts = new CancellationTokenSource();
         var watch = Stopwatch.StartNew();
         var ct = _installCts.Token;
+        // 先放“安装未完成”标记：中途取消或失败时，实例列表会显示“安装未完成”，补全文件可以接着装。
+        var expectedId = loader is null ? item.Id : string.IsNullOrWhiteSpace(CustomName) ? SelectedLoaderVersion!.DefaultId : CustomName.Trim();
+        try { _service.MarkInstallStarted(expectedId); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         try
         {
             string id;
             if (loader is { } kind)
             {
                 var chosen = SelectedLoaderVersion!;
-                Status = L.F("download.status.installing", chosen.DefaultId);
+                SetStatus(StatusMessage.Info("download.status.installing", chosen.DefaultId));
                 id = await LoaderInstallers.Create(kind, _service.Loaders).InstallAsync(chosen, CustomName, new Progress<LoaderProgress>(p =>
                 {
                     Status = p.Stage;
@@ -283,13 +322,13 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             else
             {
                 id = item.Id;
-                Status = L.F("download.status.installing", id);
+                SetStatus(StatusMessage.Info("download.status.installing", id));
                 await _service.Installer.InstallAsync(id, new Progress<InstallProgress>(p =>
                 {
                     if (p.Stage != InstallStage.Files || p.Files.TotalFiles == 0) return;
                     Progress = 100.0 * p.Files.CompletedFiles / p.Files.TotalFiles;
                     var mb = p.Files.BytesDownloaded / 1024.0 / 1024;
-                    Status = L.F("download.status.progress", id, p.Files.CompletedFiles, p.Files.TotalFiles, mb, mb / Math.Max(watch.Elapsed.TotalSeconds, 0.1));
+                    SetStatus(StatusMessage.Info("download.status.progress", id, p.Files.CompletedFiles, p.Files.TotalFiles, mb, mb / Math.Max(watch.Elapsed.TotalSeconds, 0.1)));
                 }), ct);
                 item.Installed = true;
             }
@@ -297,18 +336,27 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             var elapsedSeconds = watch.Elapsed.TotalSeconds;
             Status = L.P("download.status.installed", (long)Math.Round(elapsedSeconds), id, elapsedSeconds);
             Target = null;
+            _service.MarkInstallFinished(id);
+            if (id != expectedId) _service.MarkInstallFinished(expectedId);
             _service.NotifyInstalledChanged();
+            _service.SetCurrentInstance(id);
+            InstalledHasLoader = loader is not null;
+            JustInstalled = id;
+            // 装的时候切到别的页面了：用 Toast 告诉一声，带“打开实例”。
+            if (!IsCurrent) Toasts.WithAction(L.F("download.installed.title", id), L.T("download.installed.open"), () => OpenInstance?.Invoke(id));
         }
         catch (OperationCanceledException)
         {
-            Status = L.T("download.status.cancelled");
+            SetStatus(StatusMessage.Warning("download.status.cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("common.install_failed", e.Message);
+            SetStatus(StatusMessage.Failure("common.install_failed", e, ErrorText.Of(e)));
         }
         finally
         {
+            // 取消、失败时“安装未完成”标记留着：通知界面刷新标注。
+            _service.NotifyInstanceStateChanged(expectedId);
             IsBusy = false;
             Progress = 0;
         }

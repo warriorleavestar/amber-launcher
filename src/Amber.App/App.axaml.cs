@@ -30,6 +30,7 @@ public sealed class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        DevCrashGuard.HookDispatcher();
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var settings = AppSettings.Load();
@@ -41,6 +42,12 @@ public sealed class App : Application
             desktop.MainWindow = new MainWindow(settings) { DataContext = viewModel };
             StartupTrace.Mark("window");
             desktop.Exit += (_, _) => service.Dispose();
+            // 回收目录里过期的条目放到后台清，不拖慢启动。
+            _ = Task.Run(() =>
+            {
+                try { service.PurgeTrash(); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            });
             // 清掉以前留下的无痕模式临时配置（Amber 没等到游戏退出就关了、崩溃了之类）。
             _ = Task.Run(() => Amber.Core.Launch.GameLauncher.SweepNoTrace());
         }

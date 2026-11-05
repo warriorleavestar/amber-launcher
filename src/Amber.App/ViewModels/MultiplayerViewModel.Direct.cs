@@ -126,17 +126,17 @@ public sealed partial class MultiplayerViewModel
         if (!IsIdle) return;
         if (!IsComponentReady)
         {
-            Status = L.T("multiplayer.component.download_required");
+            SetStatus(StatusMessage.Warning("multiplayer.component.download_required"));
             return;
         }
         var port = int.TryParse(ManualPort.Trim(), out var manual) && manual is > 0 and < 65536 ? manual : SelectedLanGame?.Game.Port;
         if (port is null)
         {
-            Status = L.T("multiplayer.lan.port_required");
+            SetStatus(StatusMessage.Warning("multiplayer.lan.port_required"));
             return;
         }
         var room = RoomCode.Create(port.Value);
-        Status = L.T("multiplayer.direct.gathering_host");
+        SetStatus(StatusMessage.Info("multiplayer.direct.gathering_host"));
         var direct = new DirectSession(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier"), room, true, MakeDirectOptions(), _diag);
         try
         {
@@ -149,12 +149,12 @@ public sealed partial class MultiplayerViewModel
                 ? L.T("multiplayer.direct.host_reachable")
                 : L.F("multiplayer.direct.host_reply_hint", DirectText.Nat(code.Nat));
             StartHub(room);
-            Status = L.T("multiplayer.direct.created");
+            SetStatus(StatusMessage.Success("multiplayer.direct.created"));
         }
-        catch (Exception e) when (e is OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception e) when (e is OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException)
         {
             await direct.DisposeAsync();
-            Status = L.F("multiplayer.direct.create_failed", e.Message);
+            SetStatus(StatusMessage.Failure("multiplayer.direct.create_failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -168,15 +168,15 @@ public sealed partial class MultiplayerViewModel
             Status = error ?? L.T("multiplayer.direct.invalid_reply");
             return;
         }
-        Status = L.T("multiplayer.direct.punching");
+        SetStatus(StatusMessage.Info("multiplayer.direct.punching"));
         try
         {
-            Status = await direct.AddReplyAsync(reply) ? L.T("multiplayer.direct.punch_succeeded") : L.T("multiplayer.direct.punch_failed");
+            SetStatus(await direct.AddReplyAsync(reply) ? StatusMessage.Success("multiplayer.direct.punch_succeeded") : StatusMessage.Error("multiplayer.direct.punch_failed"));
             DirectReplyInput = "";
         }
         catch (DirectFailedException e)
         {
-            Status = e.Message;
+            SetStatus(StatusMessage.Plain(e.Message, StatusKind.Error));
         }
     }
 
@@ -187,7 +187,7 @@ public sealed partial class MultiplayerViewModel
         if (!IsIdle) return;
         if (!IsComponentReady)
         {
-            Status = L.T("multiplayer.component.download_required");
+            SetStatus(StatusMessage.Warning("multiplayer.component.download_required"));
             return;
         }
         if (!DirectCode.TryParse(DirectInviteInput, out var invite, out var error) || invite.IsReply)
@@ -215,7 +215,7 @@ public sealed partial class MultiplayerViewModel
         });
         try
         {
-            Status = L.T("multiplayer.direct.gathering_guest");
+            SetStatus(StatusMessage.Info("multiplayer.direct.gathering_guest"));
             var code = await direct.PrepareAsync();
             Mode = "join";
             IsDirect = true;
@@ -226,7 +226,7 @@ public sealed partial class MultiplayerViewModel
             DirectHint = invite.DirectlyReachable
                 ? L.T("multiplayer.direct.guest_reachable")
                 : L.T("multiplayer.direct.guest_reply_hint");
-            Status = L.T("multiplayer.direct.punching");
+            SetStatus(StatusMessage.Info("multiplayer.direct.punching"));
             await direct.JoinAsync(invite);
             AttachDirect(direct, invite.Room);
             JoinAddress = FullLanMode ? $"{EasyTierArgs.HostIp}:{invite.Room.Port}" : $"127.0.0.1:{direct.LocalGamePort}";
@@ -238,7 +238,7 @@ public sealed partial class MultiplayerViewModel
             // 万一请求在界面订阅前就到了（或者事件被错过）：按会话里记着的待确认请求补上。
             if (direct.TestConsent.Pending is { } pending && !TestRequestPending) ShowTestRequest(pending);
         }
-        catch (Exception e) when (e is DirectFailedException or OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception e) when (e is DirectFailedException or OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException)
         {
             await direct.DisposeAsync();
             _direct = null;
@@ -246,7 +246,7 @@ public sealed partial class MultiplayerViewModel
             Mode = "";
             // 打洞期间可能已经收到测试请求：一起收起。
             ResetGuestTest();
-            Status = L.F("multiplayer.direct.connect_failed", e.Message);
+            SetStatus(StatusMessage.Failure("multiplayer.direct.connect_failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -258,7 +258,7 @@ public sealed partial class MultiplayerViewModel
         TestAllowFullLan = false;
         TestAllowExit = false;
         TestRequestPending = true;
-        Status = L.T("multiplayer.matrix.request_status");
+        SetStatus(StatusMessage.Info("multiplayer.matrix.request_status"));
     }
 
     /// <summary>加入方：测试的一步开始了。完整局域网/出口时显示提示；出口那几步把出口横幅也显示出来（经房主上网）。</summary>
@@ -304,7 +304,7 @@ public sealed partial class MultiplayerViewModel
         // 同一次结束事件可能已先收起横幅；只有换会话或显示了另一轮时才忽略这次停止结果。
         if (_direct != direct || _guestTestRun is not null && _guestTestRun != run) return;
         ResetGuestTest();
-        Status = L.T("multiplayer.matrix.cancelled");
+        SetStatus(StatusMessage.Warning("multiplayer.matrix.cancelled"));
     }
 
     private void AttachDirect(DirectSession direct, RoomCode room)
@@ -320,6 +320,7 @@ public sealed partial class MultiplayerViewModel
         var starts = direct.EasyTierStarts;
         direct.StateChanged += () => Dispatcher.UIThread.Post(() =>
         {
+            if (_direct != direct) return;
             // 直连会话自己启动或重启了 EasyTier（打不通改用节点、已提权的原地重启）：从这次开始重新计时。
             if (direct.EasyTierStarts != starts)
             {
@@ -331,7 +332,7 @@ public sealed partial class MultiplayerViewModel
             if (direct.GuestIsLegacy && !_legacyGuestWarned)
             {
                 _legacyGuestWarned = true;
-                Status = L.T("multiplayer.direct.legacy_guest");
+                SetStatus(StatusMessage.Warning("multiplayer.direct.legacy_guest"));
             }
         });
         if (FullLanMode && direct.EasyTier?.Options is { } o) MyVirtualIp = EasyTierArgs.Build(o)[EasyTierArgs.Build(o).IndexOf("--ipv4") + 1];
@@ -376,7 +377,7 @@ public sealed partial class MultiplayerViewModel
         if (_direct is not { IsHost: true } direct || MatrixRunning) return;
         if (direct.Bridge?.Peers.Count is not > 0)
         {
-            Status = L.T("multiplayer.matrix.peer_required");
+            SetStatus(StatusMessage.Warning("multiplayer.matrix.peer_required"));
             return;
         }
         MatrixRunning = true;
@@ -385,26 +386,26 @@ public sealed partial class MultiplayerViewModel
         var results = new List<MatrixResult>();
         try
         {
-            Status = L.T("multiplayer.matrix.waiting_guest");
+            SetStatus(StatusMessage.Info("multiplayer.matrix.waiting_guest"));
             var progress = new Progress<MatrixResult>(r =>
             {
                 results.Add(r);
                 MatrixLines.Clear();
                 foreach (var line in TestMatrix.FormatTable(results)) MatrixLines.Add(line);
-                Status = L.F("multiplayer.matrix.progress", r.Step.Index, (r.Passed switch { true => L.T("common.passed"), false => L.T("common.failed"), _ => L.T("common.skipped") }));
+                SetStatus(StatusMessage.Info("multiplayer.matrix.progress", r.Step.Index, (r.Passed switch { true => L.T("common.passed"), false => L.T("common.failed"), _ => L.T("common.skipped") })));
             });
             _lastMatrix = await direct.RunMatrixAsync(MatrixFullLan, progress, null, _matrixCts.Token);
             MatrixLines.Clear();
             foreach (var line in TestMatrix.FormatTable(_lastMatrix)) MatrixLines.Add(line);
-            Status = L.F("multiplayer.matrix.completed", _lastMatrix.Count(r => r.Passed == true), _lastMatrix.Count);
+            SetStatus(StatusMessage.Success("multiplayer.matrix.completed", _lastMatrix.Count(r => r.Passed == true), _lastMatrix.Count));
         }
         catch (OperationCanceledException)
         {
-            Status = L.T("multiplayer.matrix.cancelled");
+            SetStatus(StatusMessage.Warning("multiplayer.matrix.cancelled"));
         }
-        catch (Exception e) when (e is InvalidOperationException or IOException or System.Net.Sockets.SocketException)
+        catch (Exception e) when (e is InvalidOperationException or IOException or System.Net.Sockets.SocketException or PlatformNotSupportedException)
         {
-            Status = L.F("multiplayer.matrix.failed", e.Message);
+            SetStatus(StatusMessage.Failure("multiplayer.matrix.failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -434,12 +435,12 @@ public sealed partial class MultiplayerViewModel
             // 同意后马上显示横幅和“停止测试”（不等第一步到）。
             GuestTestRunning = true;
             GuestTestBanner = L.T("multiplayer.matrix.banner_running");
-            Status = L.T("multiplayer.matrix.running");
+            SetStatus(StatusMessage.Info("multiplayer.matrix.running"));
         }
         else
         {
             ResetGuestTest();
-            Status = L.T(accept ? "multiplayer.matrix.request_gone" : "multiplayer.matrix.cancelled");
+            SetStatus(StatusMessage.Warning(accept ? "multiplayer.matrix.request_gone" : "multiplayer.matrix.cancelled"));
         }
     }
 
@@ -449,7 +450,7 @@ public sealed partial class MultiplayerViewModel
         if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
         {
             await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(clipboard, MyDirectCode);
-            Status = L.T("common.copied");
+            SetStatus(StatusMessage.Success("common.copied"));
         }
     }
 
@@ -462,7 +463,7 @@ public sealed partial class MultiplayerViewModel
         if (_session is { } s) extra.AddRange(s.RecentOutput.Select(l => new DiagnosticEntry(DateTime.Now, L.T("multiplayer.diagnostics.recent_output"), l)));
         var report = NetDiagnostics.BuildReport(Amber.Core.Launch.UpdateChecker.CurrentVersion, _diag.Snapshot().Concat(extra), table, secrets, IncludePublicIps);
         File.WriteAllText(path, report);
-        Status = L.F("multiplayer.diagnostics.exported", path);
+        SetStatus(StatusMessage.Success("multiplayer.diagnostics.exported", path));
     }
 
     private async Task StopDirectAsync()

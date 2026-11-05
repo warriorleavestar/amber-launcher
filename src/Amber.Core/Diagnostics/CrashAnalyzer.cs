@@ -144,10 +144,14 @@ public static partial class CrashAnalyzer
         return value.Length <= 400 ? value : value[..400] + "…";
     }
 
-    /// <summary>分析一次运行：取启动之后产生的崩溃报告和 JVM 错误文件，加上 latest.log 和内存里的输出。</summary>
-    public static CrashAnalysis AnalyzeRun(string workDir, DateTime startedUtc, IEnumerable<string> recentOutput)
+    /// <summary>
+    /// 分析一次运行：取启动之后产生的崩溃报告和 JVM 错误文件，加上 latest.log 和内存里的输出。
+    /// pid 给了时只认这个进程的 hs_err_pid 文件；sharedWorkDir（期间另一局游戏也用这个目录）时
+    /// 崩溃报告和 latest.log 可能是那一局的，只用自己的输出和自己的 hs_err_pid 文件。
+    /// </summary>
+    public static CrashAnalysis AnalyzeRun(string workDir, DateTime startedUtc, IEnumerable<string> recentOutput, int? pid = null, bool sharedWorkDir = false)
     {
-        var sources = FindRunFiles(workDir, startedUtc);
+        var sources = FindRunFiles(workDir, startedUtc, pid, sharedWorkDir);
         var parts = new List<string>();
         foreach (var path in sources)
         {
@@ -165,11 +169,11 @@ public static partial class CrashAnalyzer
         return Analyze(string.Join("\n\n", parts), sources);
     }
 
-    public static List<string> FindRunFiles(string workDir, DateTime startedUtc)
+    public static List<string> FindRunFiles(string workDir, DateTime startedUtc, int? pid = null, bool sharedWorkDir = false)
     {
         var result = new List<string>();
         var crashDir = Path.Combine(workDir, "crash-reports");
-        if (Directory.Exists(crashDir))
+        if (!sharedWorkDir && Directory.Exists(crashDir))
         {
             result.AddRange(Directory.EnumerateFiles(crashDir, "crash-*.txt")
                 .Where(f => File.GetLastWriteTimeUtc(f) >= startedUtc)
@@ -177,13 +181,21 @@ public static partial class CrashAnalyzer
         }
         if (Directory.Exists(workDir))
         {
-            result.AddRange(Directory.EnumerateFiles(workDir, "hs_err_pid*.log")
-                .Where(f => File.GetLastWriteTimeUtc(f) >= startedUtc)
-                .OrderByDescending(File.GetLastWriteTimeUtc).Take(1));
+            if (pid is { } id)
+            {
+                var own = Path.Combine(workDir, $"hs_err_pid{id}.log");
+                if (File.Exists(own)) result.Add(own);
+            }
+            else if (!sharedWorkDir)
+            {
+                result.AddRange(Directory.EnumerateFiles(workDir, "hs_err_pid*.log")
+                    .Where(f => File.GetLastWriteTimeUtc(f) >= startedUtc)
+                    .OrderByDescending(File.GetLastWriteTimeUtc).Take(1));
+            }
         }
         // 进程没来得及写日志时，latest.log 还是上一次的，不能算进来。
         var latest = Path.Combine(workDir, "logs", "latest.log");
-        if (File.Exists(latest) && File.GetLastWriteTimeUtc(latest) >= startedUtc) result.Add(latest);
+        if (!sharedWorkDir && File.Exists(latest) && File.GetLastWriteTimeUtc(latest) >= startedUtc) result.Add(latest);
         return result;
     }
 

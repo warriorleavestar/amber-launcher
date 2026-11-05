@@ -46,7 +46,6 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
     [ObservableProperty] public partial string? UpdateUrl { get; set; }
     [ObservableProperty] public partial bool IsBusy { get; set; }
     [ObservableProperty] public partial double Progress { get; set; }
-    [ObservableProperty] public partial string Status { get; set; } = "";
 
     [RelayCommand]
     private async Task ScanJunkAsync()
@@ -81,11 +80,11 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
         }
         catch (OperationCanceledException)
         {
-            Status = L.T("common.cancelled");
+            SetStatus(StatusMessage.Warning("common.cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("instance.status.failed", e.Message);
+            SetStatus(StatusMessage.Failure("instance.status.failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -105,29 +104,29 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
         var name = Path.GetFileName(Uri.UnescapeDataString(uri.AbsolutePath));
         if (string.IsNullOrWhiteSpace(name)) name = "download.bin";
         var target = Path.Combine(DownloadFolder.Trim(), name);
-        Status = L.F("tools.download.downloading", name);
+        SetStatus(StatusMessage.Info("tools.download.downloading", name));
         var item = new DownloadItem(uri.ToString(), target, string.IsNullOrWhiteSpace(DownloadSha1) ? null : DownloadSha1.Trim());
         await service.Downloader.DownloadOneAsync(item, new Progress<long>(bytes =>
         {
-            Status = L.F("tools.download.progress", name, bytes / 1024.0 / 1024);
+            SetStatus(StatusMessage.Info("tools.download.progress", name, bytes / 1024.0 / 1024));
         }), ct);
         await Ui.FlushAsync();
-        Status = L.F("tools.download.completed", target);
+        SetStatus(StatusMessage.Success("tools.download.completed", target));
     });
 
     [RelayCommand]
     private Task InstallJavaAsync() => RunAsync(async ct =>
     {
         var major = SelectedJavaMajor;
-        Status = L.F("tools.java.downloading", major);
+        SetStatus(StatusMessage.Info("tools.java.downloading", major));
         var path = await new JavaRuntimeInstaller(service.Downloader, service.Directory.Root).InstallAsync(null, major, new Progress<DownloadProgress>(p =>
         {
             Progress = 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles);
-            Status = L.F("tools.java.progress", major, p.CompletedFiles, p.TotalFiles);
+            SetStatus(StatusMessage.Info("tools.java.progress", major, p.CompletedFiles, p.TotalFiles));
         }), ct);
         await service.Java.ScanAsync(true);
         await Ui.FlushAsync();
-        Status = L.F("tools.java.installed", path);
+        SetStatus(StatusMessage.Success("tools.java.installed", path));
     });
 
     [RelayCommand]

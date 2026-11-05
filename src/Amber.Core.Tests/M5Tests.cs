@@ -105,8 +105,16 @@ public class M5Tests : IDisposable
         var first = (Dictionary<string, object>)((Nbt.NbtList)root["servers"]).Items[0];
         Assert.Equal("base64", first["icon"]);
 
-        ServerList.Remove(_root, "a.example:25566");
+        var removed = ServerList.Remove(_root, "a.example:25566");
         Assert.Equal("新服", Assert.Single(ServerList.Read(_root)).Name);
+
+        // 撤销：放回原来的位置，图标这类不认识的字段原样保留；再撤销一次不会重复。
+        ServerList.Restore(_root, removed!);
+        ServerList.Restore(_root, removed!);
+        Assert.Equal(["老服", "新服"], ServerList.Read(_root).Select(s => s.Name));
+        var restored = (Dictionary<string, object>)((Nbt.NbtList)Nbt.ReadFile(path)["servers"]).Items[0];
+        Assert.Equal("base64", restored["icon"]);
+        Assert.Null(ServerList.Remove(_root, "missing.example"));
     }
 
     [Theory]

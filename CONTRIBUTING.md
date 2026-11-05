@@ -32,7 +32,7 @@ AMBER_LAYOUTCHECK=<dir> src/Amber.App/bin/Release/net10.0/Amber.exe
 
 ## Translations
 
-UI text lives in `src/Amber.Core/Localization/`:
+UI text lives in `src/Amber.Core/Localization/`. Use the terms in [docs/i18n-glossary.md](docs/i18n-glossary.md) (for example, an installed game folder is an *instance*, never a *version*).
 
 | File | Language |
 |---|---|

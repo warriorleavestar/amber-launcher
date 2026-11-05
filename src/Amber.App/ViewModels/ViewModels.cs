@@ -56,9 +56,16 @@ public abstract class PageViewModel : ObservableObject
         get => _isCurrent;
         set
         {
-            if (SetProperty(ref _isCurrent, value) && value) Badge = 0;
+            if (SetProperty(ref _isCurrent, value) && value)
+            {
+                Badge = 0;
+                OnBecameCurrent();
+            }
         }
     }
+
+    /// <summary>切到这一页时调用（每次）。</summary>
+    protected virtual void OnBecameCurrent() { }
 
     /// <summary>页面第一次显示时调用一次。启动时不联网、不扫描，都放在这里。</summary>
     public void Activate()
@@ -69,6 +76,35 @@ public abstract class PageViewModel : ObservableObject
     }
 
     protected virtual void OnFirstActivated() { }
+
+    private StatusMessage? _statusInfo;
+
+    /// <summary>
+    /// 页面底部状态条显示的消息（null 时显示 DefaultStatus）。用 SetStatus 设：带翻译键和种类（成功/警告/错误），换语言时跟着换。
+    /// </summary>
+    public StatusMessage? StatusInfo => _statusInfo ?? DefaultStatus;
+
+    /// <summary>
+    /// 状态文字（StatusInfo 按当前语言格式化的结果）。直接赋字符串是旧写法：当作普通信息显示，不跟着换语言。
+    /// </summary>
+    public string Status
+    {
+        get => StatusInfo?.Text ?? "";
+        set => SetStatus(string.IsNullOrEmpty(value) ? null : StatusMessage.Plain(value));
+    }
+
+    /// <summary>没有消息时显示的内容（比如首页的“准备就绪”）。</summary>
+    protected virtual StatusMessage? DefaultStatus => null;
+
+    public void SetStatus(StatusMessage? message)
+    {
+        _statusInfo = message;
+        OnPropertyChanged(nameof(StatusInfo));
+        OnPropertyChanged(nameof(Status));
+        OnStatusChanged();
+    }
+
+    protected virtual void OnStatusChanged() { }
 }
 
 /// <summary>开发用：截图模式下让页面走一遍真实流程。</summary>
@@ -81,16 +117,6 @@ public static class Ui
 {
     /// <summary>等已排队的进度回调跑完，这样最后写的状态文字不会被迟到的进度盖掉。</summary>
     public static async Task FlushAsync() => await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
-}
-
-public static class Converters
-{
-    public static readonly IValueConverter DeleteLabel =
-        new FuncValueConverter<bool, string>(armed => armed ? L.T("common.confirm_delete") : L.T("instance.version.delete"));
-
-    /// <summary>有问题时用醒目的橙色，没问题时用普通的灰色提示色。</summary>
-    public static readonly IValueConverter ProblemBrush =
-        new FuncValueConverter<bool, IBrush>(problem => problem ? new SolidColorBrush(Color.FromRgb(0xE0, 0x70, 0x3A)) : new SolidColorBrush(Color.FromRgb(0x8C, 0x86, 0x7E)));
 }
 
 public sealed partial class MainViewModel : ObservableObject
@@ -117,20 +143,53 @@ public sealed partial class MainViewModel : ObservableObject
         var instance = new InstanceViewModel(service) { NavigateHome = null };
         var content = new ContentViewModel(service);
         var multiplayer = new MultiplayerViewModel(service);
+        var download = new DownloadViewModel(service);
         Pages =
         [
             home,
             new AccountsViewModel(service),
             instance,
-            new DownloadViewModel(service),
+            download,
             content,
             multiplayer,
             new ToolsViewModel(service),
             new SettingsViewModel(service),
             log,
         ];
+        var accounts = Pages[1];
+        home.NavigateToAccounts = () => CurrentPage = accounts;
+        home.NavigateToNewInstance = () => CurrentPage = download;
+        home.NavigateToLog = () => CurrentPage = log;
+        home.NavigateHere = () => CurrentPage = home;
+        home.Onboarding.MicrosoftLogin = () =>
+        {
+            if (accounts is AccountsViewModel a) a.LoginTab = 1;
+            CurrentPage = accounts;
+        };
+        home.Onboarding.ChooseVersion = () => CurrentPage = download;
+        home.Onboarding.ImportPack = async path =>
+        {
+            CurrentPage = content;
+            await content.ImportLocalPackAsync(path);
+        };
         instance.NavigateHome = () => CurrentPage = home;
         multiplayer.NavigateHome = () => CurrentPage = home;
+        download.LaunchInstance = id =>
+        {
+            service.SetCurrentInstance(id);
+            CurrentPage = home;
+            service.RequestLaunch(new LaunchRequest(id));
+        };
+        download.OpenInstance = id =>
+        {
+            service.SetCurrentInstance(id);
+            CurrentPage = instance;
+        };
+        download.BrowseModsFor = id =>
+        {
+            CurrentPage = content;
+            content.BrowseModsFor(id);
+        };
         instance.NavigateToDatapacks = (id, world) =>
         {
             CurrentPage = content;
@@ -152,7 +211,7 @@ public sealed partial class SettingsViewModel : PageViewModel
 
     /// <summary>下拉框的选项列表本身不变，换语言时只换文字（不然选中的序号会被清成 -1、保存时丢设置）。</summary>
     public Amber.App.Localization.OptionItem[] SourceOptions { get; } = Amber.App.Localization.OptionItem.Keys("settings.source.auto", "settings.source.official", "settings.source.mirror");
-    private static readonly string[] SourceKeys = ["auto", "official", "mirror"];
+    internal static readonly string[] SourceKeys = ["auto", "official", "mirror"];
 
     public ObservableCollection<JavaOption> JavaOptions { get; } = [];
 
@@ -173,7 +232,6 @@ public sealed partial class SettingsViewModel : PageViewModel
     [ObservableProperty] public partial string CurseForgeKey { get; set; }
     [ObservableProperty] public partial string CurseForgeRoot { get; set; }
     [ObservableProperty] public partial string UpdateFeed { get; set; }
-    [ObservableProperty] public partial string Status { get; set; } = "";
 
     public string SettingsPath => AppSettings.FilePath;
     public string SettingsPathLabel => L.F("settings.file_path", SettingsPath);
@@ -193,6 +251,11 @@ public sealed partial class SettingsViewModel : PageViewModel
         var s = service.Settings;
         GameDirectory = s.GameDirectory;
         SourceIndex = Math.Max(0, Array.IndexOf(SourceKeys, s.DownloadSource));
+        service.SettingsChangedElsewhere += () => Dispatcher.UIThread.Post(() =>
+        {
+            GameDirectory = service.Settings.GameDirectory;
+            SourceIndex = Math.Max(0, Array.IndexOf(SourceKeys, service.Settings.DownloadSource));
+        });
         Concurrency = s.DownloadConcurrency.ToString();
         AutoJavaDownload = s.AutoJavaDownload;
         NoTrace = s.NoTrace;
@@ -282,16 +345,45 @@ public sealed partial class SettingsViewModel : PageViewModel
         App.ApplyTheme(s.Theme);
         s.Save();
         _service.Reload();
-        Status = dirChanged ? L.T("settings.saved_directory_changed") : L.T("common.saved");
+        SetStatus(StatusMessage.Success(dirChanged ? "settings.saved_directory_changed" : "common.saved"));
         if (dirChanged) _ = LoadJavaAsync(true);
     }
 }
 
-public sealed record LogEntry(string Time, string Level, string Message, GameLogLevel Severity);
+public sealed record LogEntry(DateTimeOffset Timestamp, string Level, string Message, GameLogLevel Severity)
+{
+    public string Time => Fmt.Time(Timestamp);
+    public bool IsError => Severity >= GameLogLevel.Error;
+    public bool IsWarning => Severity == GameLogLevel.Warn;
+    public bool IsMuted => Severity <= GameLogLevel.Debug;
+}
+
+/// <summary>一次启动的日志。多开时各存各的，日志页选看哪一个。</summary>
+public sealed class RunLog : ObservableObject
+{
+    public RunLog(string? instance, DateTimeOffset startedAt)
+    {
+        Instance = instance;
+        StartedAt = startedAt;
+    }
+
+    /// <summary>启动的实例；null 是不属于任何一次启动的日志（还没启动过游戏时）。</summary>
+    public string? Instance { get; }
+    public DateTimeOffset StartedAt { get; }
+    internal List<LogEntry> All { get; } = [];
+
+    /// <summary>“实例 · 开始时间”，日志页页头和选择框里显示。</summary>
+    public string Label => Instance is null ? "" : L.F("log.run_summary", Instance, Fmt.Time(StartedAt));
+
+    internal void RefreshLabel() => OnPropertyChanged(nameof(Label));
+}
 
 public sealed partial class LogViewModel : PageViewModel
 {
     private const int MaxLines = 5000;
+
+    /// <summary>最多留几次启动的日志（多开测联机时够用）。</summary>
+    internal const int KeptRuns = 6;
 
     public override string Title => L.T("log.title");
     public override string Icon => "M4 5h16v2H4zM4 11h16v2H4zM4 17h11v2H4z";
@@ -304,28 +396,112 @@ public sealed partial class LogViewModel : PageViewModel
     [ObservableProperty]
     public partial bool FollowLatest { get; set; } = true;
 
-    private readonly List<LogEntry> _all = [];
-    private readonly List<LogEntry> _pending = [];
+    /// <summary>还没启动过游戏时的日志。</summary>
+    private readonly RunLog _launcher = new(null, DateTimeOffset.Now);
+
+    /// <summary>最近几次启动的日志，最新的在最后。</summary>
+    public ObservableCollection<RunLog> Runs { get; } = [];
+
+    /// <summary>日志页正在看的那次启动。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasRun), nameof(RunSummary))]
+    public partial RunLog? SelectedRun { get; set; }
+
+    public bool HasSeveralRuns => Runs.Count > 1;
+
+    private RunLog Shown => SelectedRun ?? _launcher;
+    private List<LogEntry> _all => Shown.All;
+
+    /// <summary>待进界面的日志行和它属于哪次启动（null：正在看的那次）。</summary>
+    private readonly List<(RunLog? Target, LogEntry Entry)> _pending = [];
     private bool _flushQueued;
+    private RunLog? _clearTarget;
+    private bool _clearPending;
+
+    partial void OnSelectedRunChanged(RunLog? value)
+    {
+        Recount();
+        Rebuild();
+    }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ErrorSummary))]
+    public partial int ErrorCount { get; private set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(WarningSummary))]
+    public partial int WarningCount { get; private set; }
+
+    public string ErrorSummary => L.F("log.errors", ErrorCount);
+    public string WarningSummary => L.F("log.warnings", WarningCount);
+    public string EmptyMessage => L.T(_all.Count > 0 && OnlyProblems ? "log.empty_filtered" : "log.empty");
 
     partial void OnOnlyProblemsChanged(bool value) => Rebuild();
 
-    public void Add(GameLogLine line) => Post(new LogEntry(line.Time.ToString("HH:mm:ss"), line.Level.ToString().ToUpperInvariant(), line.Message, line.Level));
-
-    public void AddRaw(string message) => Post(new LogEntry(DateTime.Now.ToString("HH:mm:ss"), "AMBER", message, GameLogLevel.Info));
-
-    public void Clear()
+    protected override void OnLanguageChanged()
     {
-        lock (_pending) _pending.Clear();
-        Dispatcher.UIThread.Post(() => { _all.Clear(); Lines.Clear(); });
+        Rebuild();
+        foreach (var run in Runs) run.RefreshLabel();
+        OnPropertyChanged(nameof(RunSummary));
+        OnPropertyChanged(nameof(CopyLabel));
     }
 
-    /// <summary>模组加载时日志一秒上千行，攒成一批再进界面，不然界面会卡。</summary>
-    private void Post(LogEntry entry)
+    public void Add(GameLogLine line) => Add(null, line);
+
+    /// <summary>加到某次启动的日志里（多开时游戏输出各进各的）；run 为 null 时加到正在看的那次。</summary>
+    public void Add(RunLog? run, GameLogLine line)
+    {
+        var level = LogLevelParser.Parse(line.Message, line.Level);
+        Post(run, new LogEntry(line.Time, level.ToString().ToUpperInvariant(), line.Message, level));
+    }
+
+    public void AddRaw(string message) => AddRaw(null, message);
+
+    public void AddRaw(RunLog? run, string message)
+    {
+        var level = LogLevelParser.Parse(message);
+        Post(run, new LogEntry(DateTimeOffset.Now, level == GameLogLevel.Info ? "AMBER" : level.ToString().ToUpperInvariant(), message, level));
+    }
+
+    /// <summary>清空正在看的那次启动的日志（别的启动的不动）。</summary>
+    public void Clear()
     {
         lock (_pending)
         {
-            _pending.Add(entry);
+            var target = Shown;
+            _pending.RemoveAll(p => (p.Target ?? target) == target);
+            _clearTarget = target;
+            _clearPending = true;
+        }
+        // 清空和新到的日志在同一批中按顺序处理，旧的延迟回调不能把它们混在一起。
+        Dispatcher.UIThread.Post(Flush);
+    }
+
+    /// <summary>
+    /// 开始一次启动的日志（在界面线程上调）：新开一份，日志页切过去看它。别的还在运行的游戏的日志留着，页头可以切回去。
+    /// </summary>
+    public RunLog BeginRun(string instance, DateTimeOffset startedAt)
+    {
+        var run = new RunLog(instance, startedAt);
+        Runs.Add(run);
+        while (Runs.Count > KeptRuns) Runs.RemoveAt(0);
+        OnPropertyChanged(nameof(HasSeveralRuns));
+        SelectedRun = run;
+        return run;
+    }
+
+    /// <summary>日志页显示某次启动的日志（崩溃卡的“查看日志”看崩的那一个）。已经不在列表里的不换。</summary>
+    public void Show(RunLog? run)
+    {
+        if (run is not null && Runs.Contains(run)) SelectedRun = run;
+    }
+
+    /// <summary>模组加载时日志一秒上千行，攒成一批再进界面，不然界面会卡。</summary>
+    private void Post(RunLog? target, LogEntry entry)
+    {
+        lock (_pending)
+        {
+            _pending.Add((target, entry));
             if (_flushQueued) return;
             _flushQueued = true;
         }
@@ -333,19 +509,60 @@ public sealed partial class LogViewModel : PageViewModel
         _ = Task.Delay(100).ContinueWith(_ => Dispatcher.UIThread.Post(Flush), TaskScheduler.Default);
     }
 
-    private void Flush()
+    internal void Flush()
     {
-        List<LogEntry> batch;
+        List<(RunLog? Target, LogEntry Entry)> pending;
+        RunLog? clear;
         lock (_pending)
         {
-            batch = [.. _pending];
+            pending = [.. _pending];
             _pending.Clear();
             _flushQueued = false;
+            clear = _clearPending ? _clearTarget : null;
+            _clearPending = false;
+            _clearTarget = null;
         }
+        if (clear is not null)
+        {
+            clear.All.Clear();
+            if (clear == Shown)
+            {
+                Lines.Clear();
+                ErrorCount = WarningCount = Badge = 0;
+                OnPropertyChanged(nameof(EmptyMessage));
+            }
+        }
+        if (pending.Count == 0) return;
+
+        var shown = Shown;
+        if (!IsCurrent) Badge += pending.Count(p => p.Entry.IsError);
+        // 别的启动的日志只存起来，正在看的那次才进界面。
+        foreach (var group in pending.Where(p => (p.Target ?? shown) != shown).GroupBy(p => p.Target!))
+        {
+            group.Key.All.AddRange(group.Select(p => p.Entry));
+            if (group.Key.All.Count > MaxLines) group.Key.All.RemoveRange(0, group.Key.All.Count - MaxLines);
+        }
+        var batch = pending.Where(p => (p.Target ?? shown) == shown).Select(p => p.Entry).ToList();
+        if (batch.Count == 0) return;
+
+        var previousCount = _all.Count;
         _all.AddRange(batch);
-        if (_all.Count > MaxLines) _all.RemoveRange(0, _all.Count - MaxLines);
-        foreach (var entry in batch.Where(Visible)) Lines.Add(entry);
-        while (Lines.Count > MaxLines) Lines.RemoveAt(0);
+        var removed = Math.Max(0, _all.Count - MaxLines);
+        if (removed > 0)
+        {
+            var visibleRemoved = _all.Take(Math.Min(removed, previousCount)).Count(Visible);
+            for (var i = 0; i < visibleRemoved; i++) Lines.RemoveAt(0);
+            _all.RemoveRange(0, removed);
+        }
+        foreach (var entry in batch.Skip(Math.Max(0, removed - previousCount)).Where(Visible)) Lines.Add(entry);
+        Recount();
+    }
+
+    private void Recount()
+    {
+        ErrorCount = _all.Count(e => e.IsError);
+        WarningCount = _all.Count(e => e.IsWarning);
+        OnPropertyChanged(nameof(EmptyMessage));
     }
 
     private bool Visible(LogEntry e) => !OnlyProblems || e.Severity >= GameLogLevel.Warn;
@@ -354,13 +571,90 @@ public sealed partial class LogViewModel : PageViewModel
     {
         Lines.Clear();
         foreach (var e in _all.Where(Visible)) Lines.Add(e);
+        OnPropertyChanged(nameof(EmptyMessage));
     }
 
     [RelayCommand]
     private async Task CopyAsync()
     {
         var text = string.Join(Environment.NewLine, _all.Select(e => $"[{e.Time}] [{e.Level}] {e.Message}"));
-        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
-            await clipboard.SetTextAsync(text);
+        var ok = false;
+        try
+        {
+            if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
+            {
+                await clipboard.SetTextAsync(text);
+                ok = true;
+            }
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
+        SetCopyLabel(ok ? "common.copied" : "log.copy_failed");
+        await Task.Delay(1500);
+        SetCopyLabel("log.copy_all");
+    }
+
+    private string _copyLabelKey = "log.copy_all";
+
+    private void SetCopyLabel(string key)
+    {
+        _copyLabelKey = key;
+        OnPropertyChanged(nameof(CopyLabel));
+    }
+
+    /// <summary>“复制全部”按钮的文字：点了之后短暂显示“已复制”或“复制失败”。存翻译键，换语言跟着换。</summary>
+    public string CopyLabel => L.T(_copyLabelKey);
+
+    // ---- 正在看的那次启动的实例和开始时间（页头小字） ----
+
+    public bool HasRun => SelectedRun is not null;
+    public string RunSummary => SelectedRun?.Label ?? "";
+
+    // ---- 跳到下一个错误 / 警告 ----
+
+    /// <summary>LogPage 订阅：滚动到这一行并选中它。</summary>
+    public event Action<LogEntry>? JumpRequested;
+
+    [ObservableProperty]
+    public partial LogEntry? SelectedLine { get; set; }
+
+    public bool HasErrors => ErrorCount > 0;
+    public bool HasWarnings => WarningCount > 0;
+
+    partial void OnErrorCountChanged(int value) => OnPropertyChanged(nameof(HasErrors));
+    partial void OnWarningCountChanged(int value) => OnPropertyChanged(nameof(HasWarnings));
+
+    [RelayCommand]
+    private void NextError() => JumpTo(NextMatch(_all, SelectedLine, e => e.IsError));
+
+    [RelayCommand]
+    private void NextWarning() => JumpTo(NextMatch(_all, SelectedLine, e => e.IsWarning));
+
+    private void JumpTo(LogEntry? target)
+    {
+        if (target is null) return;
+        // 跳转时不再跟随最新，不然马上又滚回底部；筛选把它藏起来时（理论上不会，错误和警告都在筛选里）先关掉筛选。
+        FollowLatest = false;
+        if (!Visible(target)) OnlyProblems = false;
+        SelectedLine = target;
+        JumpRequested?.Invoke(target);
+    }
+
+    /// <summary>从 current 之后找下一个满足条件的行，到末尾回到开头；current 不在列表里时从头找。</summary>
+    internal static LogEntry? NextMatch(IReadOnlyList<LogEntry> lines, LogEntry? current, Func<LogEntry, bool> match)
+    {
+        if (lines.Count == 0) return null;
+        var start = current is null ? -1 : IndexOf(lines, current);
+        for (var step = 1; step <= lines.Count; step++)
+        {
+            var entry = lines[(start + step + lines.Count) % lines.Count];
+            if (match(entry)) return entry;
+        }
+        return null;
+    }
+
+    private static int IndexOf(IReadOnlyList<LogEntry> lines, LogEntry entry)
+    {
+        for (var i = 0; i < lines.Count; i++) if (ReferenceEquals(lines[i], entry)) return i;
+        return -1;
     }
 }

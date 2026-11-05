@@ -9,48 +9,137 @@
       <TextBlock Text="{Binding Label}" />
     </DataTemplate>
   </Application.DataTemplates>
+  <!-- 资源要写在样式前面：样式里的 StaticResource 在加载时就查，后面的资源那时还没有。 -->
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://Amber/Themes/Tokens.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
   <Application.Styles>
     <FluentTheme />
+    <Style Selector=":is(Window)">
+      <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+      <Setter Property="Background" Value="{DynamicResource PageBg}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <!-- 提示条：色调底、左侧一道强调色（改版规格的 callout.info / warning） -->
+    <Style Selector="Border.callout">
+      <Setter Property="BorderThickness" Value="3,0,0,0" />
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}" />
+      <Setter Property="Padding" Value="10,6" />
+    </Style>
+    <Style Selector="Border.callout.info">
+      <Setter Property="Background" Value="{DynamicResource AccentTint}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+    </Style>
+    <Style Selector="Border.callout.warning">
+      <Setter Property="Background" Value="{DynamicResource WarningTint}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Warning}" />
+    </Style>
     <Style Selector="Border.card">
-      <Setter Property="Background" Value="{DynamicResource CardBackground}" />
-      <Setter Property="CornerRadius" Value="10" />
-      <Setter Property="Padding" Value="18" />
-      <Setter Property="Margin" Value="0,0,0,14" />
+      <Setter Property="Background" Value="{DynamicResource Surface}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusLg}" />
+      <Setter Property="Padding" Value="{StaticResource CardPadding}" />
+      <Setter Property="Margin" Value="0,0,0,12" />
     </Style>
     <Style Selector="TextBlock.h1">
-      <Setter Property="FontSize" Value="22" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="FontSize" Value="{StaticResource FontTitle}" />
       <Setter Property="FontWeight" Value="SemiBold" />
-      <Setter Property="Margin" Value="0,0,0,14" />
+      <Setter Property="Margin" Value="0,0,0,12" />
     </Style>
     <Style Selector="TextBlock.h2">
-      <Setter Property="FontSize" Value="15" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="FontSize" Value="{StaticResource FontSubtitle}" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Margin" Value="0,0,0,10" />
     </Style>
-    <!-- 表单：左边一列是标签，宽度按内容，太长就换行（英文、日文的标签比中文长） -->
-    <Style Selector="Grid.form > TextBlock">
+    <Style Selector="TextBlock.caption">
+      <Setter Property="FontSize" Value="{StaticResource FontCaption}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextTertiary}" />
+    </Style>
+    <!-- 兼容提示：没问题时是普通的次要文字，有问题时用警告色 -->
+    <Style Selector="TextBlock.compat">
+      <Setter Property="Foreground" Value="{DynamicResource TextTertiary}" />
+    </Style>
+    <Style Selector="TextBlock.compat.problem">
+      <Setter Property="Foreground" Value="{DynamicResource WarningText}" />
+    </Style>
+    <!-- 表单：左边一列是标签，宽度按内容，太长就换行（英文、日文的标签比中文长）；值那一列里的说明（hint）不受限，跟着列宽排 -->
+    <Style Selector="Grid.form > TextBlock:not(.hint)">
       <Setter Property="MaxWidth" Value="190" />
       <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
+    <!-- 说明文字：用 TextSecondary，不再用半透明（半透明在色调底上对比度不够） -->
     <Style Selector="TextBlock.hint">
-      <Setter Property="Opacity" Value="0.65" />
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
       <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
-    <Style Selector="Button.amber">
-      <Setter Property="Background" Value="{DynamicResource AmberAccent}" />
-      <Setter Property="Foreground" Value="White" />
+
+    <!-- 按钮四种：primary（每块区域最多一个）、secondary、ghost、danger。 -->
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="{DynamicResource Accent}" />
+      <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}" />
     </Style>
-    <Style Selector="Button.amber:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="{DynamicResource AmberAccentHover}" />
-      <Setter Property="Foreground" Value="White" />
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentHover}" />
+      <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
     </Style>
-    <Style Selector="Button.amber:pressed /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="{DynamicResource AmberAccentPressed}" />
+    <Style Selector="Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentPressed}" />
+      <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
     </Style>
-    <Style Selector="Button.amber:disabled /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="{DynamicResource AmberAccentDisabled}" />
-      <Setter Property="Foreground" Value="#FFFFFFAA" />
+    <Style Selector="Button.secondary">
+      <Setter Property="Background" Value="{DynamicResource Surface}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}" />
     </Style>
+    <Style Selector="Button.secondary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SurfaceRaised}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+    </Style>
+    <Style Selector="Button.ghost">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}" />
+    </Style>
+    <Style Selector="Button.ghost:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SurfaceRaised}" />
+    </Style>
+    <Style Selector="Button.danger">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource DangerText}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}" />
+    </Style>
+    <Style Selector="Button.danger:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource DangerTint}" />
+      <Setter Property="Foreground" Value="{DynamicResource DangerText}" />
+    </Style>
+    <!-- 两步确认的待确认状态：实心红底 -->
+    <Style Selector="Button.danger.armed">
+      <Setter Property="Background" Value="{DynamicResource Danger}" />
+      <Setter Property="Foreground" Value="{DynamicResource OnDanger}" />
+    </Style>
+    <Style Selector="Button.danger.armed:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource Danger}" />
+      <Setter Property="Foreground" Value="{DynamicResource OnDanger}" />
+    </Style>
+    <!-- 禁用态统一：DisabledFill + DisabledText（不再用半透明琥珀） -->
+    <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource DisabledFill}" />
+      <Setter Property="Foreground" Value="{DynamicResource DisabledText}" />
+    </Style>
+
+    <!-- 导航：选中项左边一条琥珀色指示条（在 MainWindow 的模板里），背景稍亮 -->
     <Style Selector="ListBox.nav ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource NavSelected}" />
     </Style>
@@ -58,47 +147,11 @@
       <Setter Property="Background" Value="{DynamicResource NavHover}" />
     </Style>
     <Style Selector="ProgressBar">
-      <Setter Property="Foreground" Value="{DynamicResource AmberAccent}" />
+      <Setter Property="Foreground" Value="{DynamicResource Accent}" />
     </Style>
     <Style Selector="CheckBox:checked /template/ Border#NormalRectangle">
-      <Setter Property="Background" Value="{DynamicResource AmberAccent}" />
-      <Setter Property="BorderBrush" Value="{DynamicResource AmberAccent}" />
+      <Setter Property="Background" Value="{DynamicResource Accent}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
     </Style>
   </Application.Styles>
-  <Application.Resources>
-    <ResourceDictionary>
-      <!-- Fluent 主题的强调色全部换成琥珀色（滑块、复选框、选中项等） -->
-      <Color x:Key="SystemAccentColor">#D98A1E</Color>
-      <Color x:Key="SystemAccentColorLight1">#E79A2E</Color>
-      <Color x:Key="SystemAccentColorLight2">#F0AE4E</Color>
-      <Color x:Key="SystemAccentColorLight3">#F6C67C</Color>
-      <Color x:Key="SystemAccentColorDark1">#B97314</Color>
-      <Color x:Key="SystemAccentColorDark2">#985E10</Color>
-      <Color x:Key="SystemAccentColorDark3">#77490C</Color>
-      <ResourceDictionary.ThemeDictionaries>
-        <ResourceDictionary x:Key="Light">
-          <SolidColorBrush x:Key="CardBackground" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="PageBackground" Color="#F4F1EC" />
-          <SolidColorBrush x:Key="SidebarBackground" Color="#2B2622" />
-          <SolidColorBrush x:Key="AmberAccent" Color="#D98A1E" />
-          <SolidColorBrush x:Key="AmberAccentHover" Color="#E79A2E" />
-          <SolidColorBrush x:Key="AmberAccentPressed" Color="#B97314" />
-          <SolidColorBrush x:Key="AmberAccentDisabled" Color="#80D98A1E" />
-          <SolidColorBrush x:Key="NavSelected" Color="#3A322B" />
-          <SolidColorBrush x:Key="NavHover" Color="#332D27" />
-        </ResourceDictionary>
-        <ResourceDictionary x:Key="Dark">
-          <SolidColorBrush x:Key="CardBackground" Color="#2A2724" />
-          <SolidColorBrush x:Key="PageBackground" Color="#1C1A18" />
-          <SolidColorBrush x:Key="SidebarBackground" Color="#141210" />
-          <SolidColorBrush x:Key="AmberAccent" Color="#E89B32" />
-          <SolidColorBrush x:Key="AmberAccentHover" Color="#F2AC4A" />
-          <SolidColorBrush x:Key="AmberAccentPressed" Color="#C27F22" />
-          <SolidColorBrush x:Key="AmberAccentDisabled" Color="#60E89B32" />
-          <SolidColorBrush x:Key="NavSelected" Color="#2E2924" />
-          <SolidColorBrush x:Key="NavHover" Color="#24201C" />
-        </ResourceDictionary>
-      </ResourceDictionary.ThemeDictionaries>
-    </ResourceDictionary>
-  </Application.Resources>
 </Application>

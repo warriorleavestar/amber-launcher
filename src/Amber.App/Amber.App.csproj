@@ -11,6 +11,7 @@
     <ApplicationManifest Condition="$([MSBuild]::IsOSPlatform('Windows'))">app.manifest</ApplicationManifest>
     <ApplicationIcon Condition="$([MSBuild]::IsOSPlatform('Windows'))">Assets\amber.ico</ApplicationIcon>
     <TieredPGO>false</TieredPGO>
+    <!-- Avalonia 的编译统计在 src/Directory.Build.targets 里统一关掉。 -->
   </PropertyGroup>
 
   <ItemGroup>

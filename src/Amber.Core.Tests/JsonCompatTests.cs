@@ -175,4 +175,33 @@ public class JsonCompatTests
         Assert.Equal(JsonSerializer.Serialize(reflectionRead, Reflection(AppSettingsJson.Options)), JsonSerializer.Serialize(generatedRead, GeneratedOnly(AppSettingsJson.Options, AppSettingsJson.Generated)));
         AssertSame<AppSettings>(json, AppSettingsJson.Options, AppSettingsJson.Generated);
     }
+
+    /// <summary>界面改版新加的设置：编译时生成的读写和反射一致；旧文件（没有这些字段）读出默认值。</summary>
+    [Fact]
+    public void AppSettings_RedesignFields()
+    {
+        var json = """
+            {"Theme":"dark","RecentInstances":["1.21.1 Fabric","fabric-loader-0.20.1-1.21.1"],"SidebarCollapsed":true,"ReduceMotion":true,
+             "AfterLaunch":"tray","CheckUpdatesOnStart":false,"TrashRetentionDays":3,
+             "Instances":{"fabric-loader-0.20.1-1.21.1":{"DisplayName":"我的生存服","State":"incomplete"},"1.20.1":{"DisplayName":null,"State":null}}}
+            """;
+        AssertSame<AppSettings>(json, AppSettingsJson.Options, AppSettingsJson.Generated);
+        var read = JsonSerializer.Deserialize(json, AppJsonContext.Default.AppSettings)!;
+        Assert.Equal(["1.21.1 Fabric", "fabric-loader-0.20.1-1.21.1"], read.RecentInstances);
+        Assert.True(read.SidebarCollapsed && read.ReduceMotion);
+        Assert.Equal("tray", read.AfterLaunch);
+        Assert.False(read.CheckUpdatesOnStart);
+        Assert.Equal(3, read.TrashRetentionDays);
+        Assert.Equal("我的生存服", read.Instances!["fabric-loader-0.20.1-1.21.1"].DisplayName);
+        Assert.Equal("incomplete", read.Instances["fabric-loader-0.20.1-1.21.1"].State);
+
+        // v0.5.x 写的文件：新字段取默认值。
+        var old = JsonSerializer.Deserialize("""{"Theme":"light","Language":"en"}""", AppJsonContext.Default.AppSettings)!;
+        Assert.Null(old.RecentInstances);
+        Assert.False(old.SidebarCollapsed || old.ReduceMotion);
+        Assert.Equal("minimize", old.AfterLaunch);
+        Assert.True(old.CheckUpdatesOnStart);
+        Assert.Equal(7, old.TrashRetentionDays);
+        Assert.Null(old.Instances);
+    }
 }

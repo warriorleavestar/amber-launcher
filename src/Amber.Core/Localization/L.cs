@@ -92,8 +92,24 @@ public static class L
 
     public static string T(string key) => Lookup(_state.Table, key);
 
-    private static string Lookup(IReadOnlyDictionary<string, string> table, string key) =>
-        table.TryGetValue(key, out var text) ? text : FallbackText(key) ?? key;
+    private static string Lookup(IReadOnlyDictionary<string, string> table, string key)
+    {
+        var text = table.TryGetValue(key, out var found) ? found : FallbackText(key) ?? key;
+        return Pseudo ? PseudoLocalize(text) : text;
+    }
+
+    /// <summary>
+    /// 伪本地化（开发用，启动参数 --pseudo-loc 或环境变量 AMBER_PSEUDO_LOC=1）：每段文字加长 40% 并加上括号，
+    /// 用来检查长译文会不会被切掉、有没有漏掉没走翻译的文字。占位符原样保留。
+    /// </summary>
+    public static bool Pseudo { get; set; }
+
+    internal static string PseudoLocalize(string text)
+    {
+        if (text.Length == 0) return text;
+        var padding = (int)Math.Ceiling(text.Length * 0.4);
+        return "⟦" + text + new string('·', padding) + "⟧";
+    }
 
     /// <summary>简体原文；单复数变体（key.one / key.other）在原文表里只有 key。</summary>
     private static string? FallbackText(string key) =>

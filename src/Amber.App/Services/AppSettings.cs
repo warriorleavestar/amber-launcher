@@ -59,6 +59,27 @@ public sealed class AppSettings
     /// <summary>联机用的 EasyTier 中继节点，空表示用 EasyTier 社区的公共节点。</summary>
     public List<string>? MultiplayerPeers { get; set; }
 
+    /// <summary>最近玩过的实例 id，最近的在前（启动页的“最近游玩”）。</summary>
+    public List<string>? RecentInstances { get; set; }
+
+    /// <summary>侧边栏手动收成图标栏。</summary>
+    public bool SidebarCollapsed { get; set; }
+
+    /// <summary>减少动画（页面切换、抽屉滑入这些都不做过渡）。</summary>
+    public bool ReduceMotion { get; set; }
+
+    /// <summary>启动游戏后启动器怎么办：minimize（最小化，默认）/ keep（保持）/ tray（隐藏到托盘）。</summary>
+    public string AfterLaunch { get; set; } = "minimize";
+
+    /// <summary>打开启动器时检查一次更新（只在设置导航上显示提示，不自动下载）。</summary>
+    public bool CheckUpdatesOnStart { get; set; } = true;
+
+    /// <summary>删除的模组、存档等在回收目录里保留几天，过期自动清掉。</summary>
+    public int TrashRetentionDays { get; set; } = 7;
+
+    /// <summary>实例的显示名和状态，按实例 id（文件夹名）记。显示名和文件夹名分开，改名只改显示名。</summary>
+    public Dictionary<string, InstanceMeta>? Instances { get; set; }
+
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -66,7 +87,10 @@ public sealed class AppSettings
         TypeInfoResolver = AmberJson.WithReflectionFallback(AppJsonContext.Default),
     };
 
-    public static string DataDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Amber");
+    /// <summary>Amber 自己的数据目录。单元测试用 AMBER_DATA_DIR 指到临时目录，免得读写真实的设置和账号。</summary>
+    public static string DataDir => Environment.GetEnvironmentVariable("AMBER_DATA_DIR") is { Length: > 0 } dir
+        ? dir
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Amber");
     public static string FilePath => Path.Combine(DataDir, "settings.json");
 
     public InstanceSettings ToGlobalInstanceSettings() => new()
@@ -99,13 +123,27 @@ public sealed class AppSettings
         return new AppSettings();
     }
 
+    /// <summary>测试用：这份设置存到别的文件（不序列化）。</summary>
+    internal string? SavePathForTest { get; set; }
+
     public void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        var temp = FilePath + ".tmp";
+        var path = SavePathForTest ?? FilePath;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(this, JsonOptions.Info<AppSettings>()));
-        File.Move(temp, FilePath, true);
+        File.Move(temp, path, true);
     }
+}
+
+/// <summary>实例在启动器里的附加信息（不写进游戏的版本文件）。</summary>
+public sealed class InstanceMeta
+{
+    /// <summary>界面上显示的名字；null 时按游戏版本和加载器生成。</summary>
+    public string? DisplayName { get; set; }
+
+    /// <summary>null 表示正常；incomplete（安装未完成）/ broken（已损坏）。</summary>
+    public string? State { get; set; }
 }
 
 [System.Text.Json.Serialization.JsonSerializable(typeof(AppSettings))]

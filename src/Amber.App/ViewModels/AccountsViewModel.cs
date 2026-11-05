@@ -97,9 +97,6 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial bool IsBusy { get; set; }
 
-    [ObservableProperty]
-    public partial string Status { get; set; } = "";
-
     public AccountsViewModel(LauncherService service)
     {
         _service = service;
@@ -159,7 +156,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     {
         if (item is null) return;
         _service.Accounts.Store.Remove(item.Account);
-        Status = L.F("accounts.status.removed", item.Name);
+        SetStatus(StatusMessage.Success("accounts.status.removed", item.Name));
         Changed();
     }
 
@@ -169,17 +166,20 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         var name = OfflineName.Trim();
         if (!IsValidOfflineName(name))
         {
-            Status = L.T("accounts.status.invalid_offline_name");
+            SetStatus(StatusMessage.Error("accounts.status.invalid_offline_name"));
             return;
         }
         _service.Accounts.AddOffline(name);
         OfflineName = "";
-        Status = L.F("accounts.status.offline_added", name);
+        // 中文之类的名字能用，只提醒一句（规则和新手卡一样）。
+        SetStatus(OfflineNameRules.Check(name).NotAscii
+            ? StatusMessage.Warning("accounts.status.offline_added_not_ascii", name)
+            : StatusMessage.Success("accounts.status.offline_added", name));
         Changed();
     }
 
-    public static bool IsValidOfflineName(string name) =>
-        name.Length is >= 3 and <= 16 && name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_');
+    /// <summary>硬性规则见 OfflineNameRules：3–16 个字符、没有空格；非英文字母数字只提醒。</summary>
+    public static bool IsValidOfflineName(string name) => OfflineNameRules.Check(name).Ok;
 
     [RelayCommand]
     private void SaveClientId()
@@ -187,7 +187,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         _service.Settings.MicrosoftClientId = string.IsNullOrWhiteSpace(ClientIdInput) ? null : ClientIdInput.Trim();
         _service.Settings.Save();
         OnPropertyChanged(nameof(MicrosoftMissingClientId));
-        Status = L.T("accounts.status.client_id_saved");
+        SetStatus(StatusMessage.Success("accounts.status.client_id_saved"));
     }
 
     [RelayCommand]
@@ -196,7 +196,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         SaveClientId();
         if (_service.Accounts.MicrosoftClientId is null)
         {
-            Status = L.T("accounts.status.client_id_missing");
+            SetStatus(StatusMessage.Warning("accounts.status.client_id_missing"));
             return;
         }
 
@@ -205,23 +205,23 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         try
         {
             var auth = _service.Accounts.CreateMicrosoftAuth();
-            Status = L.T("accounts.status.requesting_device_code");
+            SetStatus(StatusMessage.Info("accounts.status.requesting_device_code"));
             var code = await auth.BeginDeviceCodeAsync(_loginCts.Token);
             DeviceCode = code.UserCode;
             DeviceUri = code.VerificationUri;
-            Status = L.T("accounts.status.awaiting_device_login");
+            SetStatus(StatusMessage.Info("accounts.status.awaiting_device_login"));
             var account = await auth.CompleteDeviceCodeAsync(code, new Progress<string>(s => Status = s), _loginCts.Token);
             _service.Accounts.Store.AddOrUpdate(account);
-            Status = L.F("accounts.status.logged_in", account.Name);
+            SetStatus(StatusMessage.Success("accounts.status.logged_in", account.Name));
             Changed();
         }
         catch (OperationCanceledException)
         {
-            Status = L.T("accounts.status.login_cancelled");
+            SetStatus(StatusMessage.Warning("accounts.status.login_cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("accounts.status.login_failed", e.Message);
+            SetStatus(StatusMessage.Failure("accounts.status.login_failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -245,7 +245,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     {
         if (string.IsNullOrWhiteSpace(ServerUrl) || string.IsNullOrWhiteSpace(ExternalUser) || string.IsNullOrEmpty(ExternalPassword))
         {
-            Status = L.T("accounts.status.external_credentials_required");
+            SetStatus(StatusMessage.Warning("accounts.status.external_credentials_required"));
             return;
         }
         _loginCts = new CancellationTokenSource();
@@ -254,7 +254,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         ExternalPassword = "";
         try
         {
-            Status = L.T("accounts.status.connecting_external");
+            SetStatus(StatusMessage.Info("accounts.status.connecting_external"));
             var auth = _service.Accounts.External;
             var api = await auth.ResolveApiRootAsync(ServerUrl, _loginCts.Token);
             var result = await auth.LoginAsync(api, ExternalUser.Trim(), password, _loginCts.Token);
@@ -264,18 +264,18 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
                 foreach (var p in result.Profiles) ExternalProfiles.Add(p);
                 SelectedProfile = ExternalProfiles[0];
                 PendingExternal = result.Account;
-                Status = L.T("accounts.status.choose_profile");
+                SetStatus(StatusMessage.Info("accounts.status.choose_profile"));
                 return;
             }
             FinishExternal(result.Account);
         }
         catch (OperationCanceledException)
         {
-            Status = L.T("accounts.status.login_cancelled");
+            SetStatus(StatusMessage.Warning("accounts.status.login_cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("accounts.status.login_failed", e.Message);
+            SetStatus(StatusMessage.Failure("accounts.status.login_failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -296,7 +296,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            Status = L.F("accounts.status.profile_selection_failed", e.Message);
+            SetStatus(StatusMessage.Failure("accounts.status.profile_selection_failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -307,7 +307,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     private void FinishExternal(Account account)
     {
         _service.Accounts.Store.AddOrUpdate(account);
-        Status = L.F("accounts.status.external_logged_in", account.Name, account.ServerName);
+        SetStatus(StatusMessage.Success("accounts.status.external_logged_in", account.Name, account.ServerName));
         Changed();
     }
 

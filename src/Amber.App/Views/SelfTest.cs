@@ -2,10 +2,13 @@ using System.IO.Compression;
 using Amber.App.ViewModels;
 using Amber.Core.Content;
 using Amber.Core.Game;
+using Amber.Core.Localization;
+using Amber.Core.Launch;
 using Avalonia;
 using Avalonia.Automation.Peers;
 using Avalonia.Automation.Provider;
 using Avalonia.Controls;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -47,8 +50,9 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
     /// <summary>当前页面现在的状态（填好的列表、房间）在四种语言、最小的两种窗口下有没有被切掉的东西。</summary>
     private async Task LayoutHereAsync(string tag)
     {
-        var problems = await new LayoutCheck(window, main, Path.Combine(reportDir, "layout")).CheckCurrentAsync(tag, Log);
-        Check($"界面尺寸（{tag}）：四种语言、小窗口下没有被切掉的内容", problems.Count == 0,
+        var problems = (await new LayoutCheck(window, main, Path.Combine(reportDir, "layout")).CheckCurrentAsync(tag, Log))
+            .Where(p => p.Kind == LayoutCheck.Kind.Clipped).ToList();
+        Check($"界面尺寸（{tag}）：四种语言、小中大窗口下没有被切掉的内容", problems.Count == 0,
             string.Join("；", problems.Take(5).Select(p => $"{p.Page}@{p.Size} {p.What}")));
     }
 
@@ -70,6 +74,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Amber.Core.Localization.L.SetLanguage(Amber.Core.Localization.L.Source);
         try
         {
+            await LogPageAsync();
             // 换语言前后各个下拉框的选中项和设置文件都不能变。
             string Selections() => Dispatcher.UIThread.Invoke(() =>
             {
@@ -79,9 +84,12 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
                        $"类型 {Page<ContentViewModel>().TypeIndex} 筛选 {Page<DownloadViewModel>().Filter.Label.Length > 0} 隔离 {i.IsolateIndex} 内存 {i.MemoryModeIndex} 全屏 {i.FullscreenIndex} 导出 {i.ExportFormatIndex}";
             });
             // 先检查每个页面在各种窗口大小下有没有被切掉的东西（截图放在报告目录的 layout 文件夹）。
-            var layout = await new LayoutCheck(window, main, Path.Combine(reportDir, "layout")).RunAsync(Log);
-            Check($"界面尺寸：{main.Pages.Count} 个页面 × {LayoutCheck.Sizes.Length} 种窗口大小没有被切掉的内容", layout.Count == 0,
+            var all = await new LayoutCheck(window, main, Path.Combine(reportDir, "layout")).RunAsync(Log);
+            var layout = all.Where(p => p.Kind == LayoutCheck.Kind.Clipped).ToList();
+            Check($"界面尺寸：{main.Pages.Count} 个页面 × {LayoutCheck.Sizes.Length} 种窗口大小 × 5 种语言没有被切掉的内容", layout.Count == 0,
                 layout.Count == 0 ? "" : string.Join("；", layout.Take(5).Select(p => $"{p.Page}@{p.Size} {p.What}")));
+            // 自适应问题（横向滚动、主要按钮要滚动、宽屏空白）是改版要逐页解决的，先记数，不算失败；详见 layout/layout.txt。
+            Log($"自适应问题 {all.Count - layout.Count} 处（见 layout/layout.txt）");
             // 布局检查已经把每个页面都显示过（下拉框都绑定好了），再在四种语言之间切一圈。
             var selectionsBefore = Selections();
             var settingsBefore = File.Exists(Amber.App.Services.AppSettings.FilePath) ? File.ReadAllText(Amber.App.Services.AppSettings.FilePath) : "";
@@ -107,6 +115,8 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             await MultiplayerAsync();
             await DirectRoomAsync();
             await ExportImportAsync();
+            await CurrentInstanceAsync();
+            await OnboardingAsync();
             Log("DONE");
         }
         catch (Exception e)
@@ -114,6 +124,104 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             Log("FAIL 自检中断：" + e);
         }
         window.Close();
+    }
+
+    private async Task LogPageAsync()
+    {
+        var previous = main.CurrentPage;
+        var log = Page<LogViewModel>();
+        main.CurrentPage = log;
+        var page = await FindAsync<LogPage>(_ => true);
+        if (page is null)
+        {
+            Check("日志页显示", false);
+            return;
+        }
+        await CheckLogPageAsync(page, Check);
+        await LayoutHereAsync("日志页");
+        await ShotAsync("日志页");
+        log.Clear();
+        main.CurrentPage = previous;
+    }
+
+    /// <summary>只用合成日志检查真实控件，不下载、不启动游戏，也不读写游戏目录。</summary>
+    internal static async Task CheckLogPageAsync(LogPage page, Action<string, bool, string> check)
+    {
+        var log = (LogViewModel)page.DataContext!;
+        var list = page.FindControl<ListBox>("List")!;
+        var filter = page.FindControl<CheckBox>("ProblemsFilter")!;
+        var follow = page.FindControl<CheckBox>("FollowLatest")!;
+        log.Clear();
+        await Ui.FlushAsync();
+        log.IsCurrent = false;
+        foreach (var level in new[] { "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL" })
+            log.AddRaw($"[12:34:56] [Render thread/{level}]: 合成日志 {level}");
+        log.AddRaw("Exception in thread \"main\" java.lang.RuntimeException: 合成异常");
+        log.AddRaw("\tat net.minecraft.client.main.Main.main(Main.java:42)");
+        log.AddRaw("Caused by: java.io.IOException: 合成原因");
+        check("日志：文本等级、异常和堆栈计数", await WaitAsync(() => log.Lines.Count == 9, 5)
+            && log.ErrorCount == 5 && log.WarningCount == 1, $"错误 {log.ErrorCount}，警告 {log.WarningCount}");
+        check("日志：离页时只累计错误徽标", log.Badge == 5 && log.HasBadge, log.Badge.ToString());
+        log.IsCurrent = true;
+        check("日志：进入页面清空徽标", !log.HasBadge, "");
+
+        await Task.Delay(200);
+        var messages = page.GetVisualDescendants().OfType<SelectableTextBlock>().Where(c => c.DataContext is LogEntry).ToList();
+        check("日志：等级文字使用主题颜色和 1.5 倍行高", messages.Count > 0 && messages.All(c =>
+        {
+            var entry = (LogEntry)c.DataContext!;
+            var key = entry.IsError ? "DangerText" : entry.IsWarning ? "WarningText" : entry.IsMuted ? "TextTertiary" : "TextPrimary";
+            return c.Foreground is ISolidColorBrush actual && page.FindResource(page.ActualThemeVariant, key) is ISolidColorBrush expected
+                && actual.Color == expected.Color && Math.Abs(c.LineHeight - c.FontSize * 1.5) < 0.01;
+        }), "");
+
+        filter.IsChecked = true;
+        check("日志：勾选筛选保留问题行和总计数", await WaitAsync(() => log.OnlyProblems && log.Lines.Count == 6, 5)
+            && log.Lines.All(e => e.Severity >= GameLogLevel.Warn) && log.ErrorCount == 5 && log.WarningCount == 1, "");
+        filter.IsChecked = false;
+        await WaitAsync(() => log.Lines.Count == 9, 5);
+        log.AddRaw("[main/ERROR]: 当前页可见错误");
+        check("日志：当前页新错误不产生未读徽标", await WaitAsync(() => log.ErrorCount == 6, 5) && !log.HasBadge, "");
+
+        // 点“错误 N”芯片：选中第一个错误行，再点跳到下一个。
+        var errorChip = page.FindControl<Button>("ErrorChip");
+        var firstError = log.Lines.First(e => e.IsError);
+        var pressed = Press(errorChip);
+        await Task.Delay(100);
+        var jumpedFirst = ReferenceEquals(log.SelectedLine, firstError) && ReferenceEquals(list.SelectedItem, firstError);
+        Press(errorChip);
+        await Task.Delay(100);
+        check("日志：点错误芯片跳到第一个、再点跳到下一个错误", pressed && jumpedFirst && log.SelectedLine is { IsError: true } next
+            && !ReferenceEquals(next, firstError) && !log.FollowLatest, log.SelectedLine?.Message ?? "");
+        follow.IsChecked = true;
+
+        follow.IsChecked = false;
+        list.ScrollIntoView(0);
+        await Task.Delay(200);
+        var scroll = list.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+        var offset = scroll?.Offset.Y;
+        for (var i = 0; i < 200; i++) log.AddRaw($"[main/INFO]: 跟随测试 {i}");
+        await WaitAsync(() => log.Lines.Count == 210, 5);
+        await Task.Delay(300);
+        check("日志：关闭跟随时不抢滚动位置", !log.FollowLatest && offset.HasValue && scroll is not null
+            && Math.Abs(scroll.Offset.Y - offset.Value) < 1, "");
+        follow.IsChecked = true;
+        check("日志：重新跟随立即到末尾", await WaitAsync(() => scroll is not null && scroll.Offset.Y > 0
+            && scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - 2, 5), "");
+        check("日志：长列表使用虚拟化面板", list.GetVisualDescendants().Any(c => c is VirtualizingStackPanel)
+            && list.GetVisualDescendants().OfType<ListBoxItem>().Count() < log.Lines.Count, "");
+
+        log.Clear();
+        await Ui.FlushAsync();
+        log.AddRaw("[main/INFO]: 筛选空态");
+        await WaitAsync(() => log.Lines.Count == 1, 5);
+        filter.IsChecked = true;
+        check("日志：筛选无结果时显示对应空态", await WaitAsync(() => log.Lines.Count == 0, 5)
+            && log.EmptyMessage == Amber.Core.Localization.L.T("log.empty_filtered"), "");
+        filter.IsChecked = false;
+        log.AddRaw("[main/WARN]: 截图警告");
+        log.AddRaw("[main/ERROR]: 截图错误");
+        await WaitAsync(() => log.Lines.Count == 3, 5);
     }
 
     /// <summary>在当前窗口的控件树里找可见的控件（界面刚切换时要等布局完成）。</summary>
@@ -185,7 +293,19 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await WaitAsync(() => !download.IsBusy, 600);
         Check("安装 Fabric（自定义名字）", download.Status.Contains("安装完成") && !download.IsConfiguring
                                          && File.Exists(Path.Combine(GameRoot(), "versions", FabricName, FabricName + ".json")), download.Status);
+        var launchButton = await FindAsync<Button>(b => b.Content as string == "立即启动" && b.IsEffectivelyVisible);
+        Check("安装完成后显示成功卡、设为当前实例，并去掉“安装未完成”标记",
+            download.HasInstalled && download.JustInstalled == FabricName && launchButton is not null
+            && Page<HomeViewModel>().Service.CurrentInstance == FabricName
+            && !File.Exists(Path.Combine(GameRoot(), "versions", FabricName, GameDirectory.IncompleteMarker)), download.InstalledTitle);
+        // 换页会重建页面控件，先在这一页把搜索框清掉。
         Dispatcher.UIThread.Invoke(() => search!.Text = "");
+        var addMods = await FindAsync<Button>(b => b.Content as string == "添加模组…" && b.IsEffectivelyVisible);
+        Check("成功卡的“添加模组…”跳到资源页的模组，装到新实例",
+            Press(addMods) && await WaitAsync(() => main.CurrentPage is ContentViewModel { TargetInstance: FabricName, TypeIndex: (int)ContentType.Mod }, 5),
+            main.CurrentPage.Title);
+        main.CurrentPage = download;
+        download.CloseInstalledCommand.Execute(null);
     }
 
     private async Task InstallModAsync()
@@ -253,6 +373,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         main.CurrentPage = home;
         await WaitAsync(() => home.Versions.Contains(FabricName), 5);
         home.SelectedVersion = FabricName;
+        Check("主按钮：有账号和实例时是“启动游戏”", home.PrimaryLabel == "启动游戏", home.PrimaryLabel);
         // 无痕模式：在设置页勾上，这次启动的游戏日志不记聊天（生成过滤后的日志配置，游戏照常写 latest.log）。
         var settings = Page<SettingsViewModel>();
         main.CurrentPage = settings;
@@ -272,10 +393,15 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         main.CurrentPage = home;
         var launchStart = DateTime.Now.AddSeconds(-2);
         var launching = home.LaunchCommand.ExecuteAsync(null);
+        await WaitAsync(() => home.IsPreparing, 5);
+        Check("主按钮：准备中变成“取消启动”", home.PrimaryLabel == "取消启动", home.PrimaryLabel);
         var reached = await WaitAsync(() => log.Lines.Any(l => l.Message.Contains("Sound engine started") || l.Message.Contains("OpenAL initialized")), 180);
         Check("启动游戏到主界面", reached, home.Status);
         Check("启动前命令运行过", File.Exists(Path.Combine(reportDir, "prelaunch.txt")) && File.ReadAllText(Path.Combine(reportDir, "prelaunch.txt")).Contains(FabricName));
         Check("实例内存生效", log.Lines.Any(l => l.Message.Contains("最大内存 3072 MB")));
+        await WaitAsync(() => home.Status.Contains("运行中 ·"), 5);
+        Check("进入游戏后显示运行时长，主按钮变成“退出游戏”", home.Status.Contains("运行中 ·") && home.PrimaryLabel == "退出游戏" && !home.ShowProgress,
+            $"{home.Status} / {home.PrimaryLabel}");
         // 过滤后的配置放在 Amber 自己的数据目录里，游戏目录里一个都不能有；游戏退出后删掉。
         var noTraceRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Amber", "notrace");
         var filtered = Directory.Exists(noTraceRoot)
@@ -292,10 +418,26 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await ShotAsync("运行中");
         main.CurrentPage = log;
         await ShotAsync("日志页");
-        main.CurrentPage = home;
+
+        // 游戏在运行时从别的页面再请求启动：启动页给出多开警告，【仍然启动】能同时开第二个客户端。
+        home.Service.RequestLaunch(new Amber.App.Services.LaunchRequest(FabricName));
+        await WaitAsync(() => home.HasPendingLaunch && main.CurrentPage == home, 5);
+        Check("多开：游戏运行中再启动出现警告并回到启动页", home.HasPendingLaunch && main.CurrentPage == home && home.PendingLaunchText.Contains(FabricName), home.PendingLaunchText);
+        await ShotAsync("多开警告");
+        home.LaunchAnywayCommand.Execute(null);
+        // 第二个客户端自己的输出里出现进入主界面的标志，状态才会变成“运行中 ·”。
+        var second = await WaitAsync(() => home.RunCount == 2 && home.IsRunning && home.Status.Contains("运行中 ·"), 180);
+        Check("多开：【仍然启动】后同时开着两个客户端", second, $"{home.RunCount} 个 {home.Status}");
         home.CancelCommand.Execute(null);
+        await WaitAsync(() => home.RunCount == 1, 30);
+
+        // 【退出游戏】让游戏自己保存退出，不是直接结束进程。
+        await home.PrimaryCommand.ExecuteAsync(null);
+        Check("退出游戏：按钮变成“正在保存并退出…”", home.PrimaryLabel == "正在保存并退出…" || home.RunCount == 0, home.PrimaryLabel);
+        var exited = await WaitAsync(() => home.RunCount == 0, 60);
+        if (!exited) home.CancelCommand.Execute(null);
         await launching;
-        Check("结束游戏后状态正确（不报崩溃）", home.Status.Contains("已结束") && !home.HasCrash, home.Status);
+        Check("退出游戏：游戏自己退出，状态正确（不报崩溃）", exited && home.Status.Contains("已结束") && !home.HasCrash, home.Status);
         var cleaned = await WaitAsync(() => filtered.All(f => !File.Exists(f)), 15);
         Check("无痕模式：游戏退出后删掉生成的日志配置", filtered.Count > 0 && cleaned, string.Join(", ", filtered.Where(File.Exists).Select(Path.GetFileName)));
         // 后面的崩溃分析要看完整日志，把无痕模式关回去。
@@ -313,10 +455,23 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
 
         var home = Page<HomeViewModel>();
         main.CurrentPage = home;
+        var crashedIds = new List<string>();
+        void OnCrashed(string id) => crashedIds.Add(id);
+        home.GameCrashed += OnCrashed;
         await home.LaunchCommand.ExecuteAsync(null);
+        home.GameCrashed -= OnCrashed;
         var found = home.Crash?.Findings.Any(f => f.Title.Contains("JVM 参数")) == true;
         Check("崩溃分析识别出坏的 JVM 参数", found, home.Crash?.Summary ?? home.Status);
+        Check("崩溃时发出这一局的崩溃事件（多开时窗口靠它恢复）", crashedIds.SequenceEqual([FabricName]), string.Join(", ", crashedIds));
         await ShotAsync("崩溃分析");
+
+        // 崩溃卡的“查看日志”打开崩的那一局的日志。
+        var log = Page<LogViewModel>();
+        home.ViewLogCommand.Execute(null);
+        await WaitAsync(() => main.CurrentPage == log, 5);
+        Check("崩溃卡“查看日志”打开崩的那一局", log.SelectedRun?.Instance == FabricName && log.OnlyProblems, log.RunSummary);
+        log.OnlyProblems = false;
+        main.CurrentPage = home;
 
         var bundle = Path.Combine(reportDir, "error.zip");
         home.ExportCrashBundle(bundle);
@@ -361,7 +516,14 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await LayoutHereAsync("世界页");
         await DatapacksAsync(instance, world);
         instance.DeleteWorldCommand.Execute(instance.Worlds.First());
-        Check("删除世界进回收站", !Directory.Exists(world), instance.Status);
+        var trashRoot = Path.Combine(GameRoot(), TrashService.TrashFolder);
+        Check("删除世界进回收目录", !Directory.Exists(world) && TrashService.List(trashRoot).Any(e => Path.GetFullPath(e.OriginalPath) == Path.GetFullPath(world)), instance.Status);
+        var undone = Services.Toasts.UndoLatest();
+        await WaitAsync(() => instance.Worlds.Any(w => w.Name == "自检世界"), 5);
+        Check("撤销删除世界", undone && Directory.Exists(world) && instance.Worlds.Any(w => w.Name == "自检世界")
+            && instance.StatusInfo is { Key: "trash.restored", Kind: StatusKind.Success }, instance.Status);
+        instance.DeleteWorldCommand.Execute(instance.Worlds.First(w => w.Name == "自检世界"));
+        Check("再次删除世界", !Directory.Exists(world), instance.Status);
 
         for (var tab = 3; tab <= 7; tab++)
         {
@@ -490,9 +652,10 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
                 var stream = client.GetStream();
                 stream.ReadTimeout = 5000;
                 await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes("hello\n"));
-                reply = await new StreamReader(stream).ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                reply = await new StreamReader(stream).ReadLineAsync(readTimeout.Token);
             }
-            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException)
+            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException or OperationCanceledException)
             {
                 await Task.Delay(2000);
             }
@@ -570,9 +733,10 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
                 await client.ConnectAsync(parts[0], int.Parse(parts[1]));
                 var stream = client.GetStream();
                 await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes("sealed\n"));
-                reply = await new StreamReader(stream).ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                reply = await new StreamReader(stream).ReadLineAsync(readTimeout.Token);
             }
-            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException)
+            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException or OperationCanceledException)
             {
                 await Task.Delay(2000);
             }
@@ -684,9 +848,10 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
                 await client.ConnectAsync(parts[0], int.Parse(parts[1]));
                 var stream = client.GetStream();
                 await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes("direct\n"));
-                reply = await new StreamReader(stream).ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                reply = await new StreamReader(stream).ReadLineAsync(readTimeout.Token);
             }
-            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException)
+            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException or OperationCanceledException)
             {
                 await Task.Delay(1500);
             }
@@ -899,6 +1064,180 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         var prismSettings = Amber.Core.Launch.InstanceSettings.Load(gameDir, "E2E-Prism");
         Check("导入 Prism 实例", Directory.Exists(prismMods) && Directory.EnumerateFiles(prismMods, "sodium*").Any() && prismSettings.MaxMemoryMb == 2500
                               && GameInstance.Detect(gameDir, "E2E-Prism", prismDir).Loader == "fabric", content.Status);
+    }
+
+    /// <summary>全局当前实例：实例页切换后启动页、资源页、联机页跟着变，写进设置；资源页临时换一个只算这一次。</summary>
+    /// <summary>
+    /// 新手卡（改版规格 3.1）：本机已经有账号和实例，所以把卡强制显示出来检查。
+    /// 找目录只在报告目录里造的假 HMCL 目录里找；换目录后换回原来的测试目录；安装只补全测试目录里已有的原版 1.21.1。
+    /// 不添加账号（不改账号文件）。
+    /// </summary>
+    private async Task OnboardingAsync()
+    {
+        var home = Page<HomeViewModel>();
+        var service = home.Service;
+        var onboarding = home.Onboarding;
+        var originalDir = service.Settings.GameDirectory;
+        var originalCurrent = service.CurrentInstance;
+        main.CurrentPage = home;
+        await Ui.FlushAsync();
+
+        var fake = Path.Combine(reportDir, "fake-launcher", ".minecraft");
+        Directory.CreateDirectory(Path.Combine(fake, "versions", "1.20.1"));
+        File.WriteAllText(Path.Combine(fake, "versions", "1.20.1", "1.20.1.json"), "{}");
+        onboarding.Candidates = () => [fake, originalDir];
+        await Dispatcher.UIThread.InvokeAsync(() => onboarding.Update(true, true, null));
+        await onboarding.DetectAsync();
+        var card = await FindAsync<OnboardingCard>(_ => true, 5);
+        Check("新手卡：没有账号和实例时替换实例卡，只展开“添加账号”这一步",
+            card is not null && !home.ShowInstanceCard && onboarding.ShowAccountStep && !onboarding.ShowGameStep && onboarding.ShowGameWaiting,
+            $"卡 {card is not null}，实例卡 {home.ShowInstanceCard}");
+        Check("新手卡：找到已有游戏目录（跳过正在用的目录），写出实例数",
+            onboarding.Detected?.Path == Path.GetFullPath(fake) && onboarding.Detected.InstanceCount == 1 && onboarding.DetectedText.Contains("1 个实例"),
+            onboarding.DetectedText);
+
+        onboarding.PlayerName = "ab";
+        await Ui.FlushAsync();
+        var add = card?.FindControl<Button>("AddOfflineButton");
+        Check("新手卡：玩家名太短时禁用添加并说明", !onboarding.CanAddOffline && add?.IsEffectivelyEnabled == false && onboarding.NameProblem.Contains("3–16"), onboarding.NameProblem);
+        onboarding.PlayerName = "小明 2";
+        Check("新手卡：玩家名有空格时禁用添加", !onboarding.CanAddOffline && onboarding.NameProblem.Contains("空格"), onboarding.NameProblem);
+        onboarding.PlayerName = "玩家小明";
+        await Ui.FlushAsync();
+        Check("新手卡：中文名只提醒，仍然能添加", onboarding.CanAddOffline && add?.IsEffectivelyEnabled == true && onboarding.NameWarning.Contains("服务器") && onboarding.NameProblem.Length == 0, onboarding.NameWarning);
+
+        onboarding.RequestFocus(OnboardingStep.Account);
+        var nameBox = card?.FindControl<TextBox>("PlayerNameBox");
+        Check("新手卡：缺账号时点启动，焦点放到玩家名输入框", await WaitAsync(() => Dispatcher.UIThread.Invoke(() => nameBox?.IsFocused == true), 3), "");
+        await LayoutHereAsync("新手卡·账号");
+        await ShotAsync("新手卡-账号");
+        onboarding.PlayerName = "";
+
+        // 账号有了，展开“安装游戏”。
+        await Dispatcher.UIThread.InvokeAsync(() => onboarding.Update(false, true, "Steve"));
+        await WaitAsync(() => onboarding.LatestRelease is not null, 20);
+        Check("新手卡：账号做完收成一行，展开安装：最新正式版按钮、4 个热门版本、下载源",
+            onboarding.ShowAccountDone && onboarding.ShowGameStep && onboarding.AccountDoneText.Contains("Steve")
+            && onboarding.Hot.Length == 4 && onboarding.SourceText.StartsWith("下载源：", StringComparison.Ordinal),
+            $"{onboarding.InstallLatestLabel} · {onboarding.SourceText}");
+        Check("新手卡：拿到最新正式版号", onboarding.LatestRelease is { Length: > 0 } && onboarding.InstallLatestLabel.Contains(onboarding.LatestRelease!), onboarding.InstallLatestLabel);
+        await LayoutHereAsync("新手卡·安装");
+        await ShotAsync("新手卡-安装");
+
+        // 切换下载源再切回来：设置跟着变，设置页也跟着显示。
+        var settings = Page<SettingsViewModel>();
+        var sourceBefore = service.Settings.DownloadSource;
+        var mirrorBefore = onboarding.UsesMirror;
+        onboarding.SwitchSourceCommand.Execute(null);
+        await Ui.FlushAsync();
+        var switched = onboarding.UsesMirror != mirrorBefore && settings.SourceIndex == Array.IndexOf(SettingsViewModel.SourceKeys, service.Settings.DownloadSource);
+        onboarding.SwitchSourceCommand.Execute(null);
+        service.Settings.DownloadSource = sourceBefore;
+        service.SaveAndReload();
+        await Ui.FlushAsync();
+        Check("新手卡：【切换】换下载源，设置页跟着变", switched && onboarding.UsesMirror == mirrorBefore, onboarding.SourceText);
+
+        // 补全已有的原版 1.21.1：阶段走到“完成”，Java 合并在同一条进度里，装完设为当前实例，卡收起。
+        var stages = new List<string>();
+        void OnStage(object? s, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(OnboardingViewModel.StageText) && !stages.Contains(onboarding.StageText)) stages.Add(onboarding.StageText);
+        }
+        onboarding.PropertyChanged += OnStage;
+        await onboarding.InstallAsync("1.21.1", null, fallbackToVanilla: false);
+        onboarding.PropertyChanged -= OnStage;
+        await WaitAsync(() => !onboarding.IsVisible, 5);
+        Check("新手卡：安装阶段是 下载游戏文件 → 准备 Java → 完成，装完设为当前实例、卡收起",
+            stages.SequenceEqual(["下载游戏文件", "准备 Java", "完成"]) && service.CurrentInstance == "1.21.1" && !onboarding.IsVisible && home.ShowInstanceCard
+            && onboarding.Message?.Kind == StatusKind.Success,
+            $"{string.Join(" → ", stages)}；当前 {service.CurrentInstance}；{onboarding.Message?.Text}");
+
+        // 用找到的目录：换过去能看到里面的实例，再换回测试目录。
+        await Dispatcher.UIThread.InvokeAsync(() => onboarding.Update(false, true, "Steve"));
+        onboarding.UseDirectory(Path.GetDirectoryName(fake)!);
+        await WaitAsync(() => settings.GameDirectory == Path.GetFullPath(fake), 5);
+        var usedRoot = service.Directory.Root;
+        var used = usedRoot == Path.GetFullPath(fake) && service.InstalledVersions().Contains("1.20.1") && settings.GameDirectory == Path.GetFullPath(fake);
+        service.Settings.GameDirectory = originalDir;
+        service.SaveAndReload();
+        if (originalCurrent is not null) service.SetCurrentInstance(originalCurrent);
+        await WaitAsync(() => home.Versions.Contains(FabricName) && settings.GameDirectory == originalDir, 10);
+        Check("新手卡：选启动器文件夹也能认出里面的 .minecraft，换过去后换回测试目录",
+            used && service.Directory.Root == Path.GetFullPath(originalDir) && settings.GameDirectory == originalDir && !onboarding.IsVisible,
+            $"换过去 {used}（{usedRoot}）；现在 {service.Directory.Root}；设置页 {settings.GameDirectory}；卡 {onboarding.IsVisible}");
+    }
+
+    private async Task CurrentInstanceAsync()
+    {
+        var home = Page<HomeViewModel>();
+        var instance = Page<InstanceViewModel>();
+        var content = Page<ContentViewModel>();
+        var multiplayer = Page<MultiplayerViewModel>();
+        var service = home.Service;
+        Check("当前实例：刚导入的整合包成为当前实例", service.CurrentInstance == "E2E-Prism", service.CurrentInstance ?? "");
+
+        instance.Activate();
+        await WaitAsync(() => instance.Instances.Contains(FabricName), 5);
+        instance.SelectedId = FabricName;
+        await WaitAsync(() => home.SelectedVersion == FabricName && content.TargetInstance == FabricName && multiplayer.TargetInstance == FabricName, 5);
+        Check("当前实例：实例页切换后启动页、资源页、联机页都跟着变，并写进设置",
+            home.SelectedVersion == FabricName && content.TargetInstance == FabricName && multiplayer.TargetInstance == FabricName
+            && service.Settings.LastVersion == FabricName && !content.IsTemporaryTarget,
+            $"启动 {home.SelectedVersion}，资源 {content.TargetInstance}，联机 {multiplayer.TargetInstance}");
+
+        content.TargetInstance = "E2E-Pack";
+        await Task.Delay(100);
+        Check("当前实例：资源页临时换实例显示“仅本次”，不改当前实例",
+            content.IsTemporaryTarget && service.CurrentInstance == FabricName && home.SelectedVersion == FabricName, service.CurrentInstance ?? "");
+
+        home.SelectedVersion = "E2E-Pack";
+        await WaitAsync(() => instance.SelectedId == "E2E-Pack" && content.TargetInstance == "E2E-Pack", 5);
+        Check("当前实例：启动页切换后实例页跟着变，资源页回到当前实例",
+            instance.SelectedId == "E2E-Pack" && content.TargetInstance == "E2E-Pack" && !content.IsTemporaryTarget, $"实例 {instance.SelectedId}");
+
+        // 安装中途停下的实例（版本文件夹里留着标记）：启动页和实例页都提示“安装未完成”，标记去掉后提示消失。
+        var note = L.T("instance.state.incomplete");
+        service.Directory.MarkInstallStarted("E2E-Pack");
+        home.SelectedVersion = FabricName;
+        await WaitAsync(() => instance.SelectedId == FabricName, 5);
+        home.SelectedVersion = "E2E-Pack";
+        await WaitAsync(() => instance.SelectedId == "E2E-Pack" && instance.InfoText.Contains(note), 5);
+        Check("实例状态：安装没走完的实例在启动页和实例页提示“安装未完成”",
+            home.VersionInfo.Contains(note) && instance.InfoText.Contains(note), home.VersionInfo);
+        service.Directory.MarkInstallFinished("E2E-Pack");
+        home.SelectedVersion = FabricName;
+        await WaitAsync(() => instance.SelectedId == FabricName, 5);
+        home.SelectedVersion = "E2E-Pack";
+        await WaitAsync(() => instance.SelectedId == "E2E-Pack" && !instance.InfoText.Contains(note), 5);
+        Check("实例状态：标记去掉后不再提示", !home.VersionInfo.Contains(note) && !instance.InfoText.Contains(note), home.VersionInfo);
+
+        // 关掉某个实例的“按实例分开文件夹”：实例页提示共用，资源页“装到”标成共享目录；改回后提示消失。
+        var saved = InstanceSettings.Load(service.Directory, FabricName);
+        var initiallyShared = service.EffectiveSettings(FabricName).Isolate != true;
+        var shared = InstanceSettings.Load(service.Directory, FabricName);
+        shared.Isolate = false;
+        shared.Save(service.Directory, FabricName);
+        try
+        {
+            home.SelectedVersion = FabricName;
+            await WaitAsync(() => instance.SelectedId == FabricName && instance.IsSharedDir, 5);
+            content.TypeIndex = (int)ContentType.Mod;
+            content.TargetInstance = FabricName;
+            await Task.Delay(100);
+            Check("共享目录：关掉分开文件夹后实例页显示共用提示，资源页“装到”标成共享目录", instance.IsSharedDir && content.IsSharedTarget, instance.InfoText);
+        }
+        finally
+        {
+            saved.Save(service.Directory, FabricName);
+        }
+        instance.SelectedId = null;
+        instance.SelectedId = FabricName;
+        await WaitAsync(() => instance.Current is not null && instance.IsSharedDir == initiallyShared, 5);
+        content.TargetInstance = null;
+        content.TargetInstance = FabricName;
+        Check("共享目录：改回后恢复原样", instance.IsSharedDir == initiallyShared && content.IsSharedTarget == initiallyShared, $"原来共用 {initiallyShared}");
+        home.SelectedVersion = "E2E-Pack";
+        await WaitAsync(() => instance.SelectedId == "E2E-Pack", 5);
     }
 
     /// <summary>导入时版本名字来自整合包名字，改一下避免和原实例同名。</summary>

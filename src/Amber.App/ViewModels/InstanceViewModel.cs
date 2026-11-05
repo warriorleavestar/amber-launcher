@@ -163,8 +163,15 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     public partial string? SelectedId { get; set; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasInstance), nameof(SupportsQuickPlay))]
+    [NotifyPropertyChangedFor(nameof(HasInstance), nameof(SupportsQuickPlay), nameof(IsSharedDir))]
     public partial GameInstance? Current { get; set; }
+
+    /// <summary>版本隔离关闭：模组、资源包、光影都在 .minecraft 下，所有实例共用（改版规格 2.3）。</summary>
+    public bool IsSharedDir => Current is { } c && _service.UsesSharedDir(c.Id);
+
+    /// <summary>共享目录提示上的【去开启】：切到设置 Tab。</summary>
+    [RelayCommand]
+    private void GoToIsolationSetting() => TabIndex = 0;
 
     public bool HasInstance => Current is not null;
 
@@ -180,16 +187,20 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial double Progress { get; set; }
 
-    [ObservableProperty]
-    public partial string Status { get; set; } = "";
-
-    [ObservableProperty]
-    public partial bool DeleteArmed { get; set; }
-
     public InstanceViewModel(LauncherService service)
     {
         _service = service;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
+        // 别处（启动页、后台装完的安装）换了当前实例：这一页正在用、或者正在做事（导出、导入世界、改设置）时不跟着换，
+        // 免得操作落到别的实例上；下次打开这一页再跟上。
+        service.CurrentInstanceChanged += () => Dispatcher.UIThread.Post(() =>
+        {
+            if (_active && !IsCurrent && !IsBusy && _service.CurrentInstance is { } id && Instances.Contains(id)) SelectedId = id;
+        });
+        service.InstanceStateChanged += id => Dispatcher.UIThread.Post(() =>
+        {
+            if (Current?.Id == id) UpdateInfoText();
+        });
         service.ContentChanged += () => Dispatcher.UIThread.Post(() => { _loadedTabs.Clear(); LoadTab(TabIndex); });
     }
 
@@ -204,17 +215,22 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private void RefreshInstances()
     {
         if (!_active) return;
-        var keep = SelectedId;
+        // 列表变了（比如后台装完一个新实例）：正在看、正在做事时留在原来的实例上。
+        var keep = IsCurrent || IsBusy ? SelectedId : null;
         Instances.Clear();
         foreach (var v in _service.InstalledVersions()) Instances.Add(v);
-        SelectedId = keep is not null && Instances.Contains(keep) ? keep
-            : _service.Settings.LastVersion is { } last && Instances.Contains(last) ? last
-            : Instances.FirstOrDefault();
+        SelectedId = keep is not null && Instances.Contains(keep) ? keep : _service.CurrentOr(Instances, Instances.FirstOrDefault());
+    }
+
+    protected override void OnBecameCurrent()
+    {
+        // 回到这一页：跟上别处换的当前实例。
+        if (_active && !IsBusy && _service.CurrentInstance is { } id && Instances.Contains(id) && id != SelectedId) SelectedId = id;
     }
 
     partial void OnSelectedIdChanged(string? value)
     {
-        DeleteArmed = false;
+        _service.SetCurrentInstance(value);
         _loadedTabs.Clear();
         Current = null;
         InfoText = "";
@@ -255,47 +271,32 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
 
-    /// <summary>删除走回收站，误删还能找回来。</summary>
-    private static void Recycle(string path)
+    /// <summary>
+    /// 删除：移进回收目录（TrashService），弹“已删除 X【撤销】”。afterRestore 在撤销恢复后调用（刷新列表）。
+    /// 失败时写状态并返回 false，原文件不动。
+    /// </summary>
+    private bool Trash(string path, Action afterRestore, bool toast = true)
     {
-        if (OperatingSystem.IsWindows())
+        try
         {
-            if (System.IO.Directory.Exists(path))
-                Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
-            else if (File.Exists(path))
-                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+            var entry = TrashService.MoveToTrash(path, _service.Directory.Root);
+            if (toast) Toasts.Deleted(entry, restored =>
+            {
+                afterRestore();
+                SetStatus(StatusMessage.Success("trash.restored", Path.GetFileName(restored)));
+            });
+            SetStatus(StatusMessage.Success("trash.deleted", entry.Name));
+            return true;
         }
-        else
+        catch (TrashException e)
         {
-            MoveToUnixTrash(path);
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, Toasts.Reason(e)));
         }
-    }
-
-    private static void MoveToUnixTrash(string path)
-    {
-        if (!System.IO.Directory.Exists(path) && !File.Exists(path)) return;
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var files = OperatingSystem.IsMacOS()
-            ? Path.Combine(home, ".Trash")
-            : Path.Combine(Environment.GetEnvironmentVariable("XDG_DATA_HOME") ?? Path.Combine(home, ".local", "share"), "Trash", "files");
-        var info = OperatingSystem.IsMacOS() ? null : Path.Combine(Path.GetDirectoryName(files)!, "info");
-        System.IO.Directory.CreateDirectory(files);
-        if (info is not null) System.IO.Directory.CreateDirectory(info);
-
-        var name = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        var target = Path.Combine(files, name);
-        for (var i = 2; File.Exists(target) || System.IO.Directory.Exists(target); i++)
-            target = Path.Combine(files, $"{name}.{i}");
-
-        if (System.IO.Directory.Exists(path)) System.IO.Directory.Move(path, target);
-        else File.Move(path, target);
-
-        if (info is not null)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            var original = new Uri(Path.GetFullPath(path)).AbsolutePath;
-            File.WriteAllText(Path.Combine(info, Path.GetFileName(target) + ".trashinfo"),
-                $"[Trash Info]\nPath={original}\nDeletionDate={DateTime.Now:yyyy-MM-ddTHH:mm:ss}\n");
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, ErrorText.Of(e)));
         }
+        return false;
     }
 
     [RelayCommand]
@@ -315,35 +316,53 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
                 if (p.Stage == InstallStage.Files && p.Files.TotalFiles > 0)
                 {
                     Progress = 100.0 * p.Files.CompletedFiles / p.Files.TotalFiles;
-                    Status = L.F("instance.files.progress", p.Files.CompletedFiles, p.Files.TotalFiles);
+                    SetStatus(StatusMessage.Info("instance.files.progress", p.Files.CompletedFiles, p.Files.TotalFiles));
                 }
             }), ct);
             await Ui.FlushAsync();
-            Status = L.T("instance.files.complete_status");
+            // 补全完了，上次没装完的实例也就装完了。
+            _service.MarkInstallFinished(c.Id);
+            UpdateInfoText();
+            SetStatus(StatusMessage.Success("instance.files.complete_status"));
         });
     }
 
-    /// <summary>删除版本要点两次。</summary>
+    /// <summary>
+    /// 删除实例：弹对话框写明实例名和占用空间，确认后直接删除实例文件夹（不进回收目录，对话框里写明无法撤销，规格 3.9）。
+    /// </summary>
     [RelayCommand]
-    private void DeleteVersion()
+    private async Task DeleteVersionAsync()
     {
         if (Current is not { } c) return;
-        if (!DeleteArmed)
+        var dir = _service.Directory.VersionDir(c.Id);
+        if (Avalonia.Application.Current?.ApplicationLifetime is not Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
+            return;
+        var ok = await Views.ConfirmDialog.AskAsync(owner, L.T("instance.version.delete"),
+            L.F("instance.delete.body", c.Id, L.T("instance.delete.computing")), L.T("common.confirm_delete"),
+            () => Task.Run(() => L.F("instance.delete.body", c.Id, Fmt.Size(TrashService.SizeOf(dir)))));
+        if (!ok) return;
+        // 游戏还在用这个实例的文件：不删（删到一半会留下半个实例）。
+        if (_service.IsRunningIn(_service.WorkDirFor(c.Id)) || _service.IsRunningIn(dir))
         {
-            DeleteArmed = true;
-            Status = L.F("instance.version.confirm_delete", c.Id);
+            SetStatus(StatusMessage.Warning("instance.delete.running", c.Id));
             return;
         }
-        DeleteArmed = false;
         try
         {
-            Recycle(_service.Directory.VersionDir(c.Id));
-            Status = L.F("instance.status.recycled", c.Id);
+            // 整个文件夹改名进回收目录（同卷改名，有文件被占用时整体失败、原样不动），可以撤销。
+            var entry = await Task.Run(() => TrashService.MoveToTrash(dir, _service.Directory.Root));
+            SetStatus(StatusMessage.Success("instance.delete.done", c.Id));
             _service.NotifyInstalledChanged();
+            // 同名实例已经存在（比如删完又装了一个）时不恢复，免得多出一个打不开的“A (1)”；记录留着，删掉或改名新的以后还能撤销。
+            Toasts.Deleted(entry, _ => _service.NotifyInstalledChanged(), keepName: true);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
+        catch (TrashException e)
         {
-            Status = L.F("instance.status.delete_failed", e.Message);
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, Toasts.Reason(e)));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -406,19 +425,19 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (_service.IsRunningIn(c.WorkDir))
         {
             // 同一个目录同时跑两个游戏，两边的 Connector 会一起写缓存。
-            Status = L.T("instance.connector.running");
+            SetStatus(StatusMessage.Info("instance.connector.running"));
             return;
         }
         await RunWorkAsync(async ct =>
         {
             using var running = _service.MarkRunning(c.WorkDir);
-            Status = L.T("home.status.checking_game_files");
+            SetStatus(StatusMessage.Info("home.status.checking_game_files"));
             await _service.Installer.CompleteAsync(c.Id, null, ct);
-            Status = L.T("instance.connector.starting");
+            SetStatus(StatusMessage.Info("instance.connector.starting"));
             var options = await OfflineLaunchOptionsAsync(c, ct);
             var result = await ConnectorWarmup.RunAsync(new GameLauncher(_service.Directory), options,
                 new Progress<string>(p => Status = p), TimeSpan.FromMinutes(15), ct);
-            Status = result.Done ? L.F("instance.connector.done", result.Detail) : L.F("instance.connector.incomplete", result.Detail);
+            SetStatus(result.Done ? StatusMessage.Success("instance.connector.done", result.Detail) : StatusMessage.Warning("instance.connector.incomplete", result.Detail));
         });
         RecheckCompat();
     }
@@ -430,7 +449,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         {
             // 导出时同时保存无痕配置；路径和正式启动一样经过当前系统语言的兼容处理。
             new GameLauncher(_service.Directory).WriteLaunchScript(path, await OfflineLaunchOptionsAsync(c, ct));
-            Status = L.F("instance.export.script_saved", path);
+            SetStatus(StatusMessage.Success("instance.export.script_saved", path));
         });
     }
 
@@ -445,15 +464,15 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (OperationCanceledException) when (_workCts.IsCancellationRequested)
         {
-            Status = L.T("common.cancelled");
+            SetStatus(StatusMessage.Warning("common.cancelled"));
         }
         catch (OperationCanceledException)
         {
-            Status = L.T("instance.status.timeout");
+            SetStatus(StatusMessage.Error("instance.status.timeout"));
         }
         catch (Exception e)
         {
-            Status = L.F("instance.status.failed", e.Message);
+            SetStatus(StatusMessage.Failure("instance.status.failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -541,7 +560,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         s.Save(_service.Directory, c.Id);
         var id = c.Id;
         OnSelectedIdChanged(id);
-        Status = L.F("instance.settings.saved", id);
+        SetStatus(StatusMessage.Success("instance.settings.saved", id));
     }
 
     private static string? NullIfBlank(string text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
@@ -585,7 +604,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private void UpdateInfoText()
     {
         if (Current is { } c)
-            InfoText = L.F("instance.version.info", c.McVersion, c.Loader is null ? L.T("home.version.vanilla") : $"{c.Loader} {c.LoaderVersion}", c.WorkDir);
+            InfoText = _service.WithStateNote(c.Id, L.F("instance.version.info", c.McVersion, c.Loader is null ? L.T("home.version.vanilla") : $"{c.Loader} {c.LoaderVersion}", c.WorkDir));
     }
 
     protected override void OnLanguageChanged()
@@ -621,11 +640,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c) return;
         await RunWorkAsync(async ct =>
         {
-            Status = L.T("instance.connector.searching");
+            SetStatus(StatusMessage.Info("instance.connector.searching"));
             var plan = await ConnectorInstaller.PlanAsync(c, _service.Modrinth, _service.ContentInstaller, null, ct)
                        ?? throw new InvalidOperationException(L.F("instance.connector.not_found", c.McVersion, c.Loader));
             await _service.ContentInstaller.InstallAsync(plan, c.ModsDir, null, ct);
-            Status = L.F("instance.connector.installed", string.Join(L.T("common.list_separator"), plan.Files.Select(f => f.DisplayName)));
+            SetStatus(StatusMessage.Success("instance.connector.installed", string.Join(L.T("common.list_separator"), plan.Files.Select(f => f.DisplayName))));
         });
         await LoadModsAsync();
     }
@@ -636,7 +655,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c || item is null) return;
         await RunWorkAsync(async ct =>
         {
-            Status = L.F("instance.mods.finding_matching", item.Name);
+            SetStatus(StatusMessage.Info("instance.mods.finding_matching", item.Name));
             var file = await ConnectorInstaller.FindMatchingVersionAsync(item.Mod.Path, c, _service.Modrinth, ct);
             if (file is null)
             {
@@ -646,8 +665,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
                 return;
             }
             await _service.ContentInstaller.InstallAsync(new InstallPlan([file], []), c.ModsDir, null, ct);
-            Recycle(item.Mod.Path);
-            Status = L.F("instance.mods.replaced", item.Name, file.FileName);
+            // 换下来的旧文件也进回收目录（不弹撤销），以后能在“最近删除”里找回。
+            if (Trash(item.Mod.Path, () => { }, toast: false))
+                SetStatus(StatusMessage.Success("instance.mods.replaced", item.Name, file.FileName));
         });
         await LoadModsAsync();
     }
@@ -674,19 +694,10 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private void DeleteMod(ModItem? item)
     {
-        if (item is null) return;
-        try
-        {
-            Recycle(item.Mod.Path);
-            Mods.Remove(item);
-            ModSummary = L.P("instance.mods.summary", Mods.Count, Mods.Count, Mods.Count(m => m.Enabled));
-            RecheckCompat();
-            Status = L.F("instance.status.recycled", item.Name);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
-        {
-            Status = L.F("instance.status.delete_failed", e.Message);
-        }
+        if (item is null || !Trash(item.Mod.Path, () => _ = LoadModsAsync())) return;
+        Mods.Remove(item);
+        ModSummary = L.P("instance.mods.summary", Mods.Count, Mods.Count, Mods.Count(m => m.Enabled));
+        RecheckCompat();
     }
 
     [RelayCommand]
@@ -695,11 +706,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c) return;
         await RunWorkAsync(async ct =>
         {
-            Status = L.T("instance.mods.checking_updates");
+            SetStatus(StatusMessage.Info("instance.mods.checking_updates"));
             var mods = Mods.Select(m => m.Mod).ToList();
             var updates = await ModManager.CheckUpdatesAsync(mods, _service.Modrinth, _service.CurseForgeIfConfigured, c.McVersion, c.Loader, ct);
             foreach (var item in Mods) item.Update = updates.FirstOrDefault(u => u.LocalPath == item.Mod.Path);
-            Status = updates.Count == 0 ? L.T("instance.mods.up_to_date") : L.P("instance.mods.updates_available", updates.Count, updates.Count);
+            SetStatus(updates.Count == 0 ? StatusMessage.Success("instance.mods.up_to_date") : new StatusMessage("instance.mods.updates_available", [updates.Count]) { Count = updates.Count });
         });
     }
 
@@ -712,11 +723,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             var done = 0;
             foreach (var item in pending)
             {
-                Status = L.F("instance.mods.updating", item.Name);
+                SetStatus(StatusMessage.Info("instance.mods.updating", item.Name));
                 await ModManager.ApplyUpdateAsync(item.Update!, _service.Downloader, ct);
                 Progress = 100.0 * ++done / pending.Count;
             }
-            Status = pending.Count == 0 ? L.T("instance.mods.check_first") : L.P("instance.mods.updated_count", done, done);
+            SetStatus(pending.Count == 0 ? StatusMessage.Info("instance.mods.check_first") : new StatusMessage("instance.mods.updated_count", [done], StatusKind.Success) { Count = done });
         });
         await LoadModsAsync();
     }
@@ -728,7 +739,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         await RunWorkAsync(async ct =>
         {
             await ModManager.ApplyUpdateAsync(update, _service.Downloader, ct);
-            Status = L.F("instance.mods.updated", item.Name);
+            SetStatus(StatusMessage.Success("instance.mods.updated", item.Name));
         });
         await LoadModsAsync();
     }
@@ -777,7 +788,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     {
         DatapackWorld = null;
         Worlds.Clear();
-        foreach (var w in WorldManager.List(Current!.SavesDir)) Worlds.Add(new WorldItem(w));
+        // 撤销删除世界时实例可能已经被删了、或者选中的是读不了的实例。
+        if (Current is not { } c) return;
+        foreach (var w in WorldManager.List(c.SavesDir)) Worlds.Add(new WorldItem(w));
     }
 
     [RelayCommand]
@@ -794,9 +807,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c || item is null) return;
         await RunWorkAsync(async _ =>
         {
-            Status = L.F("instance.worlds.backing_up", item.Name);
+            SetStatus(StatusMessage.Info("instance.worlds.backing_up", item.Name));
             var target = await Task.Run(() => WorldManager.Backup(item.World, Path.Combine(c.WorkDir, "backups")));
-            Status = L.F("instance.worlds.backed_up", target);
+            SetStatus(StatusMessage.Success("instance.worlds.backed_up", target));
         });
     }
 
@@ -809,18 +822,10 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private void DeleteWorld(WorldItem? item)
     {
-        if (item is null) return;
-        try
-        {
-            Recycle(item.World.Path);
-            if (DatapackWorld == item) DatapackWorld = null;
-            Worlds.Remove(item);
-            Status = L.F("instance.status.recycled", item.Name);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
-        {
-            Status = L.F("instance.status.delete_failed", e.Message);
-        }
+        // 界面上是两步确认（ConfirmButton），到这里已经确认过了。
+        if (item is null || !Trash(item.World.Path, LoadWorlds)) return;
+        if (DatapackWorld == item) DatapackWorld = null;
+        Worlds.Remove(item);
     }
 
     public void ImportWorld(string zipPath)
@@ -830,12 +835,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         {
             System.IO.Directory.CreateDirectory(c.SavesDir);
             var folder = WorldManager.Import(zipPath, c.SavesDir);
-            Status = L.F("instance.worlds.imported", folder);
+            SetStatus(StatusMessage.Success("instance.worlds.imported", folder));
             LoadWorlds();
         }
         catch (Exception e) when (e is IOException or InvalidDataException)
         {
-            Status = L.F("instance.worlds.import_failed", e.Message);
+            SetStatus(StatusMessage.Failure("instance.worlds.import_failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -874,17 +879,8 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private void DeleteDatapack(DatapackItem? item)
     {
-        if (item is null) return;
-        try
-        {
-            Recycle(item.Pack.Path);
-            Datapacks.Remove(item);
-            Status = L.F("instance.status.recycled", item.Name);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
-        {
-            Status = L.F("instance.status.delete_failed", e.Message);
-        }
+        if (item is null || !Trash(item.Pack.Path, LoadDatapacks)) return;
+        Datapacks.Remove(item);
     }
 
     [RelayCommand]
@@ -964,22 +960,21 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private void DeleteScreenshot(ScreenshotItem? item)
     {
-        if (item is null) return;
-        try
-        {
-            Recycle(item.Path);
-            Screenshots.Remove(item);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
-        {
-            Status = L.F("instance.status.delete_failed", e.Message);
-        }
+        if (item is null || !Trash(item.Path, LoadScreenshots)) return;
+        Screenshots.Remove(item);
     }
 
     // ---- 资源包、光影 ----
 
     public ObservableCollection<PackFileItem> ResourcePacks { get; } = [];
     public ObservableCollection<PackFileItem> ShaderPacks { get; } = [];
+
+    private void ReloadPackFiles()
+    {
+        if (Current is not { } c) return;
+        LoadPackFiles(ResourcePacks, c.ResourcePacksDir);
+        LoadPackFiles(ShaderPacks, c.ShaderPacksDir);
+    }
 
     private static void LoadPackFiles(ObservableCollection<PackFileItem> target, string dir)
     {
@@ -1003,17 +998,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private void DeletePack(PackFileItem? item)
     {
-        if (item is null) return;
-        try
-        {
-            Recycle(item.Path);
-            ResourcePacks.Remove(item);
-            ShaderPacks.Remove(item);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
-        {
-            Status = L.F("instance.status.delete_failed", e.Message);
-        }
+        if (item is null || !Trash(item.Path, ReloadPackFiles)) return;
+        ResourcePacks.Remove(item);
+        ShaderPacks.Remove(item);
     }
 
     // ---- 服务器 ----
@@ -1059,8 +1046,19 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private void RemoveServer(ServerItem? item)
     {
         if (Current is not { } c || item is null) return;
-        ServerList.Remove(c.WorkDir, item.Address);
+        var index = Servers.IndexOf(item);
+        var removed = ServerList.Remove(c.WorkDir, item.Address, item.Name, index);
         Servers.Remove(item);
+        SetStatus(StatusMessage.Success("trash.deleted", item.Name));
+        if (removed is null) return;
+        var workDir = c.WorkDir;
+        Toasts.Removed(item.Name, () =>
+        {
+            ServerList.Restore(workDir, removed);
+            // 还在看同一个实例时把这一项放回列表原来的位置。
+            if (Current?.WorkDir == workDir && !Servers.Contains(item)) Servers.Insert(Math.Clamp(index, 0, Servers.Count), item);
+            SetStatus(StatusMessage.Success("trash.restored", item.Name));
+        });
     }
 
     [RelayCommand]
@@ -1110,12 +1108,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         await RunWorkAsync(async ct =>
         {
             var include = ExportOptions.Where(o => o.Include).Select(o => o.Name).ToList();
-            Status = L.T("instance.export.packing");
+            SetStatus(StatusMessage.Info("instance.export.packing"));
             if (ExportFormatIndex == 0)
                 await _service.Modpacks.ExportMrpackAsync(c, path, ExportName, ExportVersion, include, ct);
             else
                 await _service.Modpacks.ExportCurseForgeAsync(c, path, ExportName, ExportVersion, Environment.UserName, include, ct);
-            Status = L.F("instance.export.saved", path, new FileInfo(path).Length / 1024);
+            SetStatus(StatusMessage.Success("instance.export.saved", path, new FileInfo(path).Length / 1024));
         });
     }
 

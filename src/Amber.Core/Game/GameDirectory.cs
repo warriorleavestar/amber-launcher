@@ -85,6 +85,36 @@ public sealed class GameDirectory(string root)
         }
     }
 
+    /// <summary>安装开始时放进版本文件夹、装完才删的标记：还在说明上次安装没走完（取消、失败、断电）。</summary>
+    public const string IncompleteMarker = ".amber-install-incomplete";
+
+    public void MarkInstallStarted(string id)
+    {
+        Directory.CreateDirectory(VersionDir(id));
+        File.WriteAllText(Path.Combine(VersionDir(id), IncompleteMarker), "");
+    }
+
+    public void MarkInstallFinished(string id)
+    {
+        var marker = Path.Combine(VersionDir(id), IncompleteMarker);
+        if (File.Exists(marker)) File.Delete(marker);
+    }
+
+    /// <summary>实例状态：安装没走完、版本文件读不了（含继承的版本），或者正常。</summary>
+    public InstanceState StateOf(string id)
+    {
+        if (File.Exists(Path.Combine(VersionDir(id), IncompleteMarker))) return InstanceState.Incomplete;
+        try
+        {
+            ResolveVersion(id);
+            return InstanceState.Ready;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or NotSupportedException)
+        {
+            return InstanceState.Broken;
+        }
+    }
+
     public VersionJson ReadVersion(string id)
     {
         var path = VersionJsonPath(id);
@@ -160,4 +190,14 @@ public sealed class GameDirectory(string root)
             _ => name,
         };
     }
+}
+
+/// <summary>实例在列表里显示的状态。</summary>
+public enum InstanceState
+{
+    Ready,
+    /// <summary>上次安装被取消或失败了；补全文件可以接着装。</summary>
+    Incomplete,
+    /// <summary>版本文件读不了（损坏或继承的原版不在了）。</summary>
+    Broken,
 }

@@ -129,12 +129,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial double Progress { get; set; }
 
-    private string? _status;
-    public string Status
-    {
-        get => _status ?? L.T("content.search.hint");
-        set => SetProperty(ref _status, value);
-    }
+    protected override StatusMessage? DefaultStatus => StatusMessage.Info("content.search.hint");
 
     public bool IsModpack => CurrentType == ContentType.Modpack;
     public bool IsDatapack => CurrentType == ContentType.Datapack;
@@ -146,20 +141,27 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     {
         _service = service;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
+        service.CurrentInstanceChanged += () => Dispatcher.UIThread.Post(() =>
+        {
+            if (_service.CurrentInstance is { } id && Instances.Contains(id)) TargetInstance = id;
+            OnPropertyChanged(nameof(IsTemporaryTarget));
+        });
         RefreshInstances();
     }
 
     private void RefreshInstances()
     {
-        var keep = TargetInstance;
+        // 资源页“装到”跟着当前实例；手动换成别的只算这一次（不改当前实例），切换当前实例时回到它。
+        var keep = IsTemporaryTarget ? TargetInstance : null;
         Instances.Clear();
         foreach (var v in _service.InstalledVersions()) Instances.Add(v);
-        TargetInstance = keep is not null && Instances.Contains(keep) ? keep : _service.Settings.LastVersion is { } last && Instances.Contains(last) ? last : Instances.FirstOrDefault();
+        TargetInstance = keep is not null && Instances.Contains(keep) ? keep : _service.CurrentOr(Instances, Instances.FirstOrDefault());
     }
 
     partial void OnTypeIndexChanged(int value)
     {
         if (value < 0) return;
+        OnPropertyChanged(nameof(IsSharedTarget));
         if (IsDatapack) RefreshWorlds();
         _ = SearchFromStart();
     }
@@ -169,8 +171,19 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     }
     partial void OnSelectedChanged(ProjectItem? value) => _ = LoadFilesAsync();
     partial void OnShowUnstableChanged(bool value) => _ = LoadFilesAsync();
+    /// <summary>“装到”临时换成了不是当前实例的那个（显示“仅本次”）。</summary>
+    public bool IsTemporaryTarget => TargetInstance is { } t && _service.CurrentInstance is { } c && t != c && Instances.Contains(c);
+
+    /// <summary>
+    /// 版本隔离关闭时模组、资源包、光影装进共享目录（所有实例共用），“装到”的实例只用来筛选兼容的游戏版本和加载器。
+    /// </summary>
+    public bool IsSharedTarget => TargetInstance is { } t && CurrentType is ContentType.Mod or ContentType.ResourcePack or ContentType.Shader
+        && _service.UsesSharedDir(t);
+
     partial void OnTargetInstanceChanged(string? value)
     {
+        OnPropertyChanged(nameof(IsTemporaryTarget));
+        OnPropertyChanged(nameof(IsSharedTarget));
         if (IsDatapack) RefreshWorlds();
         if (Selected is not null) _ = LoadFilesAsync();
     }
@@ -189,6 +202,15 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             // 版本文件坏了就没有世界可选。
         }
         TargetWorld = Worlds.FirstOrDefault(w => w.World.FolderName == keep) ?? Worlds.FirstOrDefault();
+    }
+
+    /// <summary>从别的页面跳来给某个实例找模组（比如安装成功卡上的“添加模组”）。</summary>
+    public void BrowseModsFor(string instanceId)
+    {
+        if (Instances.Contains(instanceId)) TargetInstance = instanceId;
+        Query = "";
+        if (TypeIndex != (int)ContentType.Mod) TypeIndex = (int)ContentType.Mod;
+        else _ = SearchFromStart();
     }
 
     /// <summary>从实例页的“下载数据包”跳过来：切到数据包，并选好版本和世界。</summary>
@@ -235,7 +257,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     {
         _searchCts?.Cancel();
         var cts = _searchCts = new CancellationTokenSource();
-        Status = L.T("content.search.searching");
+        SetStatus(StatusMessage.Info("content.search.searching"));
         Results.Clear();
         Selected = null;
         try
@@ -255,7 +277,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            Status = L.F("content.search.failed", e.Message);
+            SetStatus(StatusMessage.Failure("content.search.failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -326,14 +348,14 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             foreach (var f in files.Where(f => f.IsRelease || ShowUnstable)) Files.Add(new FileItem(f));
             SelectedFile = Files.FirstOrDefault();
             if (IsModpack) NewInstanceName = SafeName(selected.Title);
-            if (Files.Count == 0 && files.Count > 0) Status = L.T("content.files.only_unstable");
+            if (Files.Count == 0 && files.Count > 0) SetStatus(StatusMessage.Warning("content.files.only_unstable"));
             else if (files.Count == 0) Status = loaderNote ?? (instance is null ? L.T("content.files.empty") : L.F("content.files.no_matching", instance.McVersion, instance.Loader));
             else if (loaderNote is not null) Status = loaderNote;
         }
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            Status = L.F("content.files.fetch_failed", e.Message);
+            SetStatus(StatusMessage.Failure("content.files.fetch_failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -360,13 +382,13 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
         if (CurrentInstance() is not { } instance)
         {
-            Status = L.T("content.install.instance_required");
+            SetStatus(StatusMessage.Warning("content.install.instance_required"));
             return;
         }
         var world = TargetWorld;
         if (IsDatapack && world is null)
         {
-            Status = L.T("content.install.world_required");
+            SetStatus(StatusMessage.Warning("content.install.world_required"));
             return;
         }
 
@@ -378,7 +400,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             var plan = new InstallPlan([file], []);
             if (CurrentType == ContentType.Mod)
             {
-                Status = L.T("content.install.resolving");
+                SetStatus(StatusMessage.Info("content.install.resolving"));
                 if (_viaConnector)
                 {
                     var hasConnector = ConnectorInstaller.IsInstalled(new ModManager(instance.ModsDir).List().Where(m => m.Enabled).Select(m => m.Requirements));
@@ -393,7 +415,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             await _service.ContentInstaller.InstallAsync(plan, target, new Progress<DownloadProgress>(p =>
             {
                 Progress = 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles);
-                Status = L.F("content.install.progress", p.CompletedFiles, p.TotalFiles, p.CurrentFile);
+                SetStatus(StatusMessage.Info("content.install.progress", p.CompletedFiles, p.TotalFiles, p.CurrentFile));
             }), _workCts.Token);
 
             await Ui.FlushAsync();
@@ -401,16 +423,18 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             var problems = plan.Problems.Count > 0 ? L.F("content.install.problems", string.Join(L.T("common.list_separator"), plan.Problems)) : "";
             var noLoader = CurrentType == ContentType.Mod && instance.Loader is null ? L.T("content.install.no_loader") : "";
             var where = IsDatapack ? L.F("content.install.world_target", instance.Id, world!.Label) : instance.Id;
-            Status = L.F("content.install.completed", file.DisplayName, extra, where, problems, noLoader);
+            // 带“注意：”的（依赖有问题、实例没装加载器）用警告色，不当成单纯的成功。
+            var kind = problems.Length > 0 || noLoader.Length > 0 ? StatusKind.Warning : StatusKind.Success;
+            SetStatus(new StatusMessage("content.install.completed", [file.DisplayName, extra, where, problems, noLoader], kind));
             _service.NotifyContentChanged();
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
-            Status = L.T("common.cancelled");
+            SetStatus(StatusMessage.Warning("common.cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("common.install_failed", Describe(e));
+            SetStatus(StatusMessage.Failure("common.install_failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -426,17 +450,17 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         var temp = Path.Combine(Path.GetTempPath(), "amber-pack-" + Guid.NewGuid().ToString("N"), ContentInstaller.SafeFileName(file.FileName));
         try
         {
-            Status = L.T("content.modpack.downloading");
+            SetStatus(StatusMessage.Info("content.modpack.downloading"));
             await _service.Downloader.DownloadOneAsync(ContentInstaller.ToItem(file, Path.GetDirectoryName(temp)!), _workCts.Token);
             await ImportCoreAsync(temp, NewInstanceName, _workCts.Token);
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
-            Status = L.T("common.cancelled");
+            SetStatus(StatusMessage.Warning("common.cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("common.install_failed", Describe(e));
+            SetStatus(StatusMessage.Failure("common.install_failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -458,11 +482,11 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
-            Status = L.T("common.cancelled");
+            SetStatus(StatusMessage.Warning("common.cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("instance.worlds.import_failed", Describe(e));
+            SetStatus(StatusMessage.Failure("instance.worlds.import_failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -482,19 +506,19 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }), ct, onSkip: file => { lock (skipped) skipped.Add(file); });
         await Ui.FlushAsync();
         _service.ForceIsolated(id);
-        // 跳过的文件在进度里一闪而过，完成时再汇总说一次。
+        // 跳过的文件在进度里一闪而过，完成时用可随语言切换的状态再汇总一次。
         lock (skipped)
-            Status = skipped.Count == 0
-                ? L.F("content.modpack.installed", id)
-                : L.F("content.modpack.installed_skipped", id, skipped.Count, string.Join(L.T("core.mp.format.listseparator"), skipped.Take(5)) + (skipped.Count > 5 ? "…" : ""));
+            SetStatus(skipped.Count == 0
+                ? StatusMessage.Success("content.modpack.installed", id)
+                : StatusMessage.Warning("content.modpack.installed_skipped", id, skipped.Count, string.Join(L.T("core.mp.format.listseparator"), skipped.Take(5)) + (skipped.Count > 5 ? "…" : "")));
         _service.NotifyInstalledChanged();
+        // 新装的整合包直接成为当前实例（改版规格 2.3）。
+        _service.SetCurrentInstance(id);
     }
 
     [RelayCommand]
     private void Cancel() => _workCts?.Cancel();
 
-    /// <summary>没点取消却收到取消，是网络请求超时。</summary>
-    private static string Describe(Exception e) => e is OperationCanceledException ? L.T("common.request_timeout") : e.Message;
 
     public async Task RunSnapshotDemoAsync()
     {

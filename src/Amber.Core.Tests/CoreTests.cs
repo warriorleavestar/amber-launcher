@@ -89,6 +89,41 @@ public class CoreTests
     }
 
     [Fact]
+    public void StateOf_ReportsIncompleteAndBrokenInstances()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "amber-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var dir = new GameDirectory(root);
+            Directory.CreateDirectory(dir.VersionDir("1.21"));
+            File.WriteAllText(dir.VersionJsonPath("1.21"), """{"id":"1.21","mainClass":"net.minecraft.client.main.Main"}""");
+            Assert.Equal(InstanceState.Ready, dir.StateOf("1.21"));
+
+            dir.MarkInstallStarted("1.21");
+            Assert.Equal(InstanceState.Incomplete, dir.StateOf("1.21"));
+            dir.MarkInstallFinished("1.21");
+            Assert.Equal(InstanceState.Ready, dir.StateOf("1.21"));
+            dir.MarkInstallFinished("1.21"); // 没有标记时也不报错
+
+            // 安装刚开始、版本 JSON 还没写出来：仍算“未完成”，不算损坏。
+            dir.MarkInstallStarted("fabric-1.21");
+            Assert.Equal(InstanceState.Incomplete, dir.StateOf("fabric-1.21"));
+
+            // 继承的原版不在了、JSON 写坏了：损坏。
+            Directory.CreateDirectory(dir.VersionDir("forge-1.20"));
+            File.WriteAllText(dir.VersionJsonPath("forge-1.20"), """{"id":"forge-1.20","inheritsFrom":"1.20"}""");
+            Assert.Equal(InstanceState.Broken, dir.StateOf("forge-1.20"));
+            Directory.CreateDirectory(dir.VersionDir("bad"));
+            File.WriteAllText(dir.VersionJsonPath("bad"), "{not json");
+            Assert.Equal(InstanceState.Broken, dir.StateOf("bad"));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void LogParser_ReadsLog4jXmlAndPlainLines()
     {
         var p = new GameLogParser();

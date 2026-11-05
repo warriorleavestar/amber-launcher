@@ -3,13 +3,14 @@
         xmlns:l="using:Amber.App.Localization"
         xmlns:vm="using:Amber.App.ViewModels"
         xmlns:views="using:Amber.App.Views"
+        xmlns:c="using:Amber.App.Views.Controls"
         x:Class="Amber.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
         Title="{l:T main.title}"
         Icon="/Assets/amber.ico"
-        Width="1080" Height="700" MinWidth="760" MinHeight="440"
+        MinWidth="760" MinHeight="440"
         WindowStartupLocation="CenterScreen"
-        Background="{DynamicResource PageBackground}">
+        Background="{DynamicResource PageBg}">
 
   <Window.DataTemplates>
     <DataTemplate DataType="vm:HomeViewModel"><views:HomePage /></DataTemplate>
@@ -64,7 +65,7 @@
                           HorizontalAlignment="Stretch">
                   <ComboBox.ItemTemplate>
                     <DataTemplate DataType="vm:JavaOption">
-                      <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}" />
                     </DataTemplate>
                   </ComboBox.ItemTemplate>
                 </ComboBox>
@@ -113,8 +114,8 @@
           </StackPanel>
         </ScrollViewer>
         <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="12" Margin="0,4,0,0">
-          <Button Classes="amber" Content="{l:T settings.save}" Command="{Binding SaveCommand}" Padding="28,10" />
-          <TextBlock Text="{Binding Status}" VerticalAlignment="Center" />
+          <Button Classes="primary" Content="{l:T settings.save}" Command="{Binding SaveCommand}" Padding="28,10" />
+          <c:StatusBar Message="{Binding StatusInfo}" VerticalAlignment="Center" />
         </StackPanel>
       </Grid>
     </DataTemplate>
@@ -123,14 +124,14 @@
 
   <Grid ColumnDefinitions="180,*">
     <!-- 侧边栏 -->
-    <Border Background="{DynamicResource SidebarBackground}">
+    <Border Background="{DynamicResource SidebarBg}">
       <!-- 标题、导航、版本三行：导航放不下时自己滚动，版本那行永远在底部看得见 -->
       <Grid RowDefinitions="Auto,*,Auto">
         <StackPanel Margin="20,18,20,12" Spacing="2">
-          <TextBlock Text="Amber" FontSize="26" FontWeight="Bold" Foreground="{DynamicResource AmberAccent}" />
-          <TextBlock Text="{l:T main.subtitle}" FontSize="12" Foreground="#B0A89E" />
+          <TextBlock Text="Amber" FontSize="26" FontWeight="Bold" Foreground="{DynamicResource Accent}" />
+          <TextBlock Text="{l:T main.subtitle}" FontSize="12" Foreground="{DynamicResource SidebarTextMuted}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{l:T main.subtitle}" />
         </StackPanel>
-        <TextBlock Grid.Row="2" Text="{Binding VersionText}" FontSize="11" Foreground="#80786E" Margin="20,6,8,12"
+        <TextBlock Grid.Row="2" Text="{Binding VersionText}" FontSize="{StaticResource FontCaption}" Foreground="{DynamicResource SidebarTextMuted}" Margin="20,6,8,12"
                    TextWrapping="Wrap" />
         <ListBox Grid.Row="1" Classes="nav" ItemsSource="{Binding Pages}" SelectedItem="{Binding CurrentPage}" Background="Transparent" Margin="8,0"
                  ClipToBounds="True">
@@ -143,13 +144,19 @@
           </ListBox.Styles>
           <ListBox.ItemTemplate>
             <DataTemplate DataType="vm:PageViewModel">
+              <Panel>
+              <!-- 选中项左边的指示条：叠在内容下面、贴着项的左边缘（抵掉 12 的内边距），不占位置，图标不动。只在选中时显示。 -->
+              <Border Width="3" Height="16" CornerRadius="2" Background="{DynamicResource Accent}" Margin="-10,0,0,0"
+                      HorizontalAlignment="Left" VerticalAlignment="Center"
+                      IsVisible="{Binding $parent[ListBoxItem].IsSelected}" />
               <StackPanel Orientation="Horizontal" Spacing="12">
-                <PathIcon Data="{Binding IconGeometry}" Width="16" Height="16" Foreground="{DynamicResource AmberAccent}" />
-                <TextBlock Text="{Binding Title}" Foreground="#EDE6DC" FontSize="14" VerticalAlignment="Center" />
-                <Border IsVisible="{Binding HasBadge}" Background="{DynamicResource AmberAccent}" CornerRadius="8" MinWidth="18" Height="18" Padding="5,0" VerticalAlignment="Center">
-                  <TextBlock Text="{Binding Badge}" Foreground="#1C1A18" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                <PathIcon Data="{Binding IconGeometry}" Width="16" Height="16" Foreground="{DynamicResource Accent}" />
+                <TextBlock Text="{Binding Title}" Foreground="{DynamicResource SidebarText}" FontSize="14" VerticalAlignment="Center" />
+                <Border IsVisible="{Binding HasBadge}" Background="{DynamicResource Accent}" CornerRadius="8" MinWidth="18" Height="18" Padding="5,0" VerticalAlignment="Center">
+                  <TextBlock Text="{Binding Badge}" Foreground="{DynamicResource OnAccent}" FontSize="{StaticResource FontCaption}" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
               </StackPanel>
+              </Panel>
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>

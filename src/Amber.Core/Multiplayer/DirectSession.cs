@@ -680,7 +680,7 @@ public sealed class DirectSession : IAsyncDisposable
             {
                 await EnsureElevatedAsync(RunToken(run));
             }
-            catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
+            catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
             {
                 ok = false;
                 Log(L.T("core.mp.matrix.elevationfailed") + e.Message);

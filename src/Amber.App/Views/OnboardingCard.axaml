@@ -1,0 +1,98 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Amber.App.ViewModels"
+             xmlns:c="using:Amber.App.Views.Controls"
+             xmlns:l="using:Amber.App.Localization"
+             x:Class="Amber.App.Views.OnboardingCard"
+             x:DataType="vm:OnboardingViewModel"
+             IsVisible="{Binding IsVisible}">
+  <!-- 新手卡（改版规格 3.1）：只展开当前这一步，做完的收成一行“✓ …” -->
+  <Border Classes="card">
+    <StackPanel Spacing="12">
+      <StackPanel Spacing="2">
+        <TextBlock Classes="h2" Text="{l:T onboarding.title}" Margin="0" />
+        <TextBlock Classes="hint" Text="{l:T onboarding.intro}" TextWrapping="Wrap" />
+      </StackPanel>
+
+      <Border Classes="callout info" IsVisible="{Binding ShowDetected}">
+        <DockPanel>
+          <Button DockPanel.Dock="Right" x:Name="UseDetectedButton" Classes="primary" Content="{l:T onboarding.detect.use}"
+                  Command="{Binding UseDetectedCommand}" Margin="12,0,0,0" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding DetectedText}" TextWrapping="Wrap" VerticalAlignment="Center" />
+        </DockPanel>
+      </Border>
+
+      <!-- ① 账号 -->
+      <TextBlock Text="{Binding AccountDoneText}" IsVisible="{Binding ShowAccountDone}" Foreground="{DynamicResource SuccessText}" TextWrapping="Wrap" />
+      <StackPanel Spacing="6" IsVisible="{Binding ShowAccountStep}">
+        <TextBlock Text="{l:T onboarding.step.account}" FontWeight="SemiBold" />
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" MaxWidth="560" HorizontalAlignment="Left">
+          <TextBox x:Name="PlayerNameBox" Text="{Binding PlayerName}" Watermark="{l:T onboarding.name.placeholder}" MinWidth="220" KeyDown="PlayerName_KeyDown" />
+          <Button Grid.Column="1" x:Name="AddOfflineButton" Classes="primary" Content="{l:T onboarding.name.add}" Command="{Binding AddOfflineCommand}" />
+        </Grid>
+        <TextBlock Text="{Binding NameProblem}" IsVisible="{Binding !!NameProblem.Length}" Foreground="{DynamicResource DangerText}"
+                   FontSize="{StaticResource FontCaption}" TextWrapping="Wrap" />
+        <TextBlock Text="{Binding NameWarning}" IsVisible="{Binding !!NameWarning.Length}" Foreground="{DynamicResource WarningText}"
+                   FontSize="{StaticResource FontCaption}" TextWrapping="Wrap" />
+        <Button Classes="secondary" Content="{l:T onboarding.name.microsoft}" Command="{Binding MicrosoftCommand}" />
+      </StackPanel>
+
+      <!-- ② 游戏 -->
+      <TextBlock Text="{l:T onboarding.step.game_waiting}" IsVisible="{Binding ShowGameWaiting}" Classes="hint" TextWrapping="Wrap" />
+      <TextBlock Text="{l:T onboarding.game.done}" IsVisible="{Binding ShowGameDone}" Foreground="{DynamicResource SuccessText}" TextWrapping="Wrap" />
+      <StackPanel Spacing="8" IsVisible="{Binding ShowGameStep}">
+        <TextBlock Text="{l:T onboarding.step.game}" FontWeight="SemiBold" />
+        <StackPanel Spacing="8" IsVisible="{Binding CanStartInstall}">
+          <WrapPanel ItemSpacing="12" LineSpacing="8">
+            <Button x:Name="InstallLatestButton" Classes="primary" Content="{Binding InstallLatestLabel}" Command="{Binding InstallLatestCommand}" />
+            <CheckBox Content="{l:T onboarding.install.fabric}" IsChecked="{Binding WithFabric}" VerticalAlignment="Center" />
+          </WrapPanel>
+          <WrapPanel ItemSpacing="8" LineSpacing="8">
+            <TextBlock Classes="hint" Text="{l:T onboarding.install.hot}" VerticalAlignment="Center" />
+            <ItemsControl x:Name="HotList" ItemsSource="{Binding Hot}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <WrapPanel ItemSpacing="8" LineSpacing="8" />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:HotVersion">
+                  <Button Classes="secondary" Content="{Binding Label}"
+                          Command="{Binding #HotList.((vm:OnboardingViewModel)DataContext).InstallHotCommand}" CommandParameter="{Binding}" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </WrapPanel>
+          <WrapPanel ItemSpacing="8" LineSpacing="8">
+            <Button Classes="ghost" Content="{l:T onboarding.install.choose}" Command="{Binding ChooseCommand}" />
+            <Button Classes="ghost" Content="{l:T onboarding.install.import}" Click="ImportPack_Click" />
+            <Button Classes="ghost" Content="{l:T onboarding.detect.pick}" Click="PickDirectory_Click" IsVisible="{Binding ShowPickDirectory}" />
+          </WrapPanel>
+        </StackPanel>
+
+        <StackPanel Spacing="6" IsVisible="{Binding IsInstalling}">
+          <TextBlock Text="{Binding StageText}" FontWeight="SemiBold" />
+          <TextBlock Classes="hint" Text="{Binding DetailText}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding DetailText}" />
+          <ProgressBar Value="{Binding Progress}" Maximum="100" IsIndeterminate="{Binding ProgressIndeterminate}" />
+          <Border Classes="callout warning" IsVisible="{Binding ShowSlowHint}">
+            <DockPanel>
+              <Button DockPanel.Dock="Right" Content="{l:T onboarding.source.switch}" Command="{Binding SwitchSourceCommand}" Margin="12,0,0,0" VerticalAlignment="Center" />
+              <TextBlock Text="{l:T onboarding.slow}" TextWrapping="Wrap" VerticalAlignment="Center" />
+            </DockPanel>
+          </Border>
+          <WrapPanel ItemSpacing="12" LineSpacing="6">
+            <TextBlock Classes="hint" Text="{Binding WaitedText}" VerticalAlignment="Center" />
+            <Button Classes="ghost" Content="{l:T common.cancel}" Command="{Binding CancelInstallCommand}" />
+          </WrapPanel>
+        </StackPanel>
+
+        <WrapPanel ItemSpacing="8" LineSpacing="6">
+          <TextBlock Classes="hint" Text="{Binding SourceText}" VerticalAlignment="Center" />
+          <Button x:Name="SwitchSourceButton" Classes="ghost" Content="{l:T onboarding.source.switch}" Command="{Binding SwitchSourceCommand}" />
+        </WrapPanel>
+      </StackPanel>
+
+      <c:StatusBar Message="{Binding Message}" />
+    </StackPanel>
+  </Border>
+</UserControl>

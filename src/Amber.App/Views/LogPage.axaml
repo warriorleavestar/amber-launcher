@@ -4,24 +4,85 @@
              xmlns:vm="using:Amber.App.ViewModels"
              x:Class="Amber.App.Views.LogPage"
              x:DataType="vm:LogViewModel">
-  <Grid RowDefinitions="Auto,Auto,*">
-    <TextBlock Classes="h1" Text="{l:T log.heading}" />
-    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12" Margin="0,0,0,10">
-      <CheckBox Content="{l:T log.filter.problems}" IsChecked="{Binding OnlyProblems}" />
-      <CheckBox Content="{l:T log.follow_latest}" IsChecked="{Binding FollowLatest}" />
-      <Button Content="{l:T log.copy_all}" Command="{Binding CopyCommand}" />
+  <UserControl.Styles>
+    <Style Selector="TextBlock.log-level, SelectableTextBlock.log-message">
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <Style Selector="TextBlock.log-level.muted, SelectableTextBlock.log-message.muted">
+      <Setter Property="Foreground" Value="{DynamicResource TextTertiary}" />
+    </Style>
+    <Style Selector="TextBlock.log-level.warning, SelectableTextBlock.log-message.warning">
+      <Setter Property="Foreground" Value="{DynamicResource WarningText}" />
+    </Style>
+    <Style Selector="TextBlock.log-level.error, SelectableTextBlock.log-message.error">
+      <Setter Property="Foreground" Value="{DynamicResource DangerText}" />
+    </Style>
+    <Style Selector="Button.chip">
+      <Setter Property="CornerRadius" Value="{DynamicResource RadiusPill}" />
+      <Setter Property="Padding" Value="10,4" />
+    </Style>
+    <Style Selector="ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Padding" Value="2" />
+    </Style>
+  </UserControl.Styles>
+  <Grid RowDefinitions="Auto,Auto,Auto,*">
+    <StackPanel>
+      <TextBlock Classes="h1" Text="{l:T log.heading}" Margin="0,0,0,2" />
+      <TextBlock Classes="caption" Text="{Binding RunSummary}" IsVisible="{Binding HasRun}" TextWrapping="Wrap" Margin="0,0,0,10" />
+      <!-- 多开时选看哪一次启动的日志。 -->
+      <ComboBox x:Name="RunPicker" ItemsSource="{Binding Runs}" SelectedItem="{Binding SelectedRun}" IsVisible="{Binding HasSeveralRuns}"
+                MinWidth="240" MaxWidth="480" Margin="0,0,0,10" AutomationProperties.Name="{l:T log.pick_run}">
+        <ComboBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:RunLog">
+            <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
     </StackPanel>
-    <Border Grid.Row="2" Classes="card" Padding="8" Margin="0">
+    <!-- 计数芯片也是按钮：点一次跳到下一个错误 / 警告，到末尾回到第一个。 -->
+    <WrapPanel Grid.Row="1" Margin="0,0,0,4">
+      <Button x:Name="ErrorChip" Classes="ghost chip" Background="{DynamicResource DangerTint}" Margin="0,0,8,8"
+              Command="{Binding NextErrorCommand}" IsEnabled="{Binding HasErrors}"
+              ToolTip.Tip="{l:T log.next_error}" AutomationProperties.HelpText="{l:T log.next_error}">
+        <TextBlock x:Name="ErrorSummary" Text="{Binding ErrorSummary}" Foreground="{DynamicResource DangerText}" TextWrapping="Wrap" />
+      </Button>
+      <Button x:Name="WarningChip" Classes="ghost chip" Background="{DynamicResource WarningTint}" Margin="0,0,8,8"
+              Command="{Binding NextWarningCommand}" IsEnabled="{Binding HasWarnings}"
+              ToolTip.Tip="{l:T log.next_warning}" AutomationProperties.HelpText="{l:T log.next_warning}">
+        <TextBlock x:Name="WarningSummary" Text="{Binding WarningSummary}" Foreground="{DynamicResource WarningText}" TextWrapping="Wrap" />
+      </Button>
+    </WrapPanel>
+    <WrapPanel Grid.Row="2" Margin="0,0,0,4">
+      <CheckBox x:Name="ProblemsFilter" IsChecked="{Binding OnlyProblems}" Margin="0,0,12,8">
+        <TextBlock Text="{l:T log.filter.problems}" TextWrapping="Wrap" />
+      </CheckBox>
+      <CheckBox x:Name="FollowLatest" IsChecked="{Binding FollowLatest}" Margin="0,0,12,8">
+        <TextBlock Text="{l:T log.follow_latest}" TextWrapping="Wrap" />
+      </CheckBox>
+      <Button Classes="primary" Command="{Binding CopyCommand}" Margin="0,0,0,8">
+        <TextBlock Text="{Binding CopyLabel}" TextWrapping="Wrap" />
+      </Button>
+    </WrapPanel>
+    <Border Grid.Row="3" Classes="card" Padding="8" Margin="0">
       <Panel>
-        <TextBlock Classes="hint" Text="{l:T log.empty}" IsVisible="{Binding !Lines.Count}"
+        <TextBlock Classes="hint" Text="{Binding EmptyMessage}" IsVisible="{Binding !Lines.Count}"
+                   Margin="12" TextAlignment="Center"
                    HorizontalAlignment="Center" VerticalAlignment="Center" />
-        <ListBox x:Name="List" ItemsSource="{Binding Lines}" Background="Transparent" FontFamily="Cascadia Mono,Consolas,Microsoft YaHei UI" FontSize="12">
+        <ListBox x:Name="List" ItemsSource="{Binding Lines}" SelectedItem="{Binding SelectedLine}" Background="Transparent"
+                 FontFamily="{DynamicResource MonoFont}" FontSize="{DynamicResource FontCaption}"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+          <ListBox.ItemsPanel>
+            <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+          </ListBox.ItemsPanel>
           <ListBox.ItemTemplate>
             <DataTemplate DataType="vm:LogEntry">
-              <Grid ColumnDefinitions="70,64,*">
-                <TextBlock Text="{Binding Time}" Classes="hint" />
-                <TextBlock Grid.Column="1" Text="{Binding Level}" Classes="hint" />
-                <SelectableTextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" />
+              <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8">
+                <TextBlock Text="{Binding Time}" Foreground="{DynamicResource TextTertiary}" LineHeight="18" />
+                <TextBlock Grid.Column="1" Text="{Binding Level}" Classes="log-level" LineHeight="18"
+                           Classes.error="{Binding IsError}" Classes.warning="{Binding IsWarning}" Classes.muted="{Binding IsMuted}" />
+                <SelectableTextBlock Grid.Column="2" Text="{Binding Message}" Classes="log-message" TextWrapping="Wrap" LineHeight="18"
+                                     Classes.error="{Binding IsError}" Classes.warning="{Binding IsWarning}" Classes.muted="{Binding IsMuted}" />
               </Grid>
             </DataTemplate>
           </ListBox.ItemTemplate>
