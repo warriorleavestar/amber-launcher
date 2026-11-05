@@ -102,7 +102,11 @@ public sealed record ServerStatus(bool Online, string? Motd, string? VersionName
 
 /// <summary>servers.dat：游戏的多人服务器列表。保留游戏写入的其他字段。</summary>
 /// <summary>从 servers.dat 删掉的一项：原来的位置和原始 NBT（用来撤销）。</summary>
-public sealed record RemovedServer(int Index, Dictionary<string, object> Raw);
+public sealed record RemovedServer(int Index, Dictionary<string, object> Raw)
+{
+    /// <summary>已经放回去了（同一条撤销两次不会放两份）。</summary>
+    public bool Restored { get; set; }
+}
 
 public static class ServerList
 {
@@ -132,26 +136,33 @@ public static class ServerList
         Nbt.WriteFile(Path.Combine(workDir, "servers.dat"), root);
     }
 
-    /// <summary>删掉这个地址的服务器，返回删掉的原始条目和位置（撤销时原样放回，图标等字段不丢）；没有这个地址返回 null。</summary>
-    public static RemovedServer? Remove(string workDir, string address)
+    /// <summary>
+    /// 删掉一条服务器，返回删掉的原始条目和位置（撤销时原样放回，图标等字段不丢）；找不到返回 null。
+    /// 只删点的那一条：优先用列表里的位置（名字和地址都对得上时），否则删第一条名字和地址都一样的，
+    /// 没给名字时删第一条地址一样的。同地址的其他条目不动。
+    /// </summary>
+    public static RemovedServer? Remove(string workDir, string address, string? name = null, int? index = null)
     {
         var (root, list) = Load(workDir);
-        var index = list.Items.FindIndex(i => i is Dictionary<string, object> d && (d.GetValueOrDefault("ip") as string) == address);
-        if (index < 0) return null;
-        var removed = new RemovedServer(index, (Dictionary<string, object>)list.Items[index]);
-        list.Items.RemoveAll(i => i is Dictionary<string, object> d && (d.GetValueOrDefault("ip") as string) == address);
+        bool Matches(object item, bool checkName) => item is Dictionary<string, object> d && (d.GetValueOrDefault("ip") as string) == address
+            && (!checkName || (d.GetValueOrDefault("name") as string ?? "") == name);
+        var at = index is { } i && i >= 0 && i < list.Items.Count && Matches(list.Items[i], name is not null) ? i
+            : list.Items.FindIndex(item => Matches(item, name is not null));
+        if (at < 0) return null;
+        var removed = new RemovedServer(at, (Dictionary<string, object>)list.Items[at]);
+        list.Items.RemoveAt(at);
         Nbt.WriteFile(Path.Combine(workDir, "servers.dat"), root);
         return removed;
     }
 
-    /// <summary>撤销 Remove：放回原来的位置（列表变短了就放到末尾）。同地址的已经又加回来了就不重复放。</summary>
+    /// <summary>撤销 Remove：把删掉的那一条原样放回原来的位置（列表变短了就放到末尾）。同一条只放一次。</summary>
     public static void Restore(string workDir, RemovedServer removed)
     {
+        if (removed.Restored) return;
         var (root, list) = Load(workDir);
-        var address = removed.Raw.GetValueOrDefault("ip") as string;
-        if (list.Items.Any(i => i is Dictionary<string, object> d && (d.GetValueOrDefault("ip") as string) == address)) return;
         list.Items.Insert(Math.Min(removed.Index, list.Items.Count), removed.Raw);
         Nbt.WriteFile(Path.Combine(workDir, "servers.dat"), root);
+        removed.Restored = true;
     }
 
     private static (Dictionary<string, object> Root, Nbt.NbtList List) Load(string workDir)

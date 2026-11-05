@@ -98,9 +98,15 @@
       </ScrollViewer>
     </Border>
 
-    <Border Grid.Row="2" Grid.ColumnSpan="2" Classes="card" Margin="0" IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+    <Border Grid.Row="2" Grid.ColumnSpan="2" Classes="card" Margin="0">
+      <Border.IsVisible>
+        <MultiBinding Converter="{x:Static BoolConverters.Or}">
+          <Binding Path="IsShowing" ElementName="PageStatus" />
+          <Binding Path="IsBusy" />
+        </MultiBinding>
+      </Border.IsVisible>
       <StackPanel Spacing="6">
-        <c:StatusBar Message="{Binding StatusInfo}" />
+        <c:StatusBar x:Name="PageStatus" Message="{Binding StatusInfo}" />
         <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsBusy}" />
       </StackPanel>
     </Border>

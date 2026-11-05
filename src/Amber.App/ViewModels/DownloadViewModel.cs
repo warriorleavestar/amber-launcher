@@ -213,7 +213,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("download.status.fetch_failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("download.status.fetch_failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -351,7 +351,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("common.install_failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("common.install_failed", e, ErrorText.Of(e)));
         }
         finally
         {

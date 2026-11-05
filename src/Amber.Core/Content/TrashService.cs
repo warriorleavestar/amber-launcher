@@ -19,6 +19,8 @@ public enum TrashFailure
     OriginalOutsideOwner,
     /// <summary>回收目录里已经没有这一项了。</summary>
     EntryMissing,
+    /// <summary>原来所在的文件夹（比如实例）已经不在了：不恢复，免得凭空建出一个看不见的实例文件夹。</summary>
+    ParentMissing,
 }
 
 /// <summary>回收目录操作失败（文件被占用这类系统错误照常抛 IOException）。</summary>
@@ -127,7 +129,12 @@ public static class TrashService
         var stored = entry.StoredPath;
         var isDir = Directory.Exists(stored);
         if (!isDir && !File.Exists(stored)) throw new TrashException(TrashFailure.EntryMissing, stored);
-        Directory.CreateDirectory(Path.GetDirectoryName(original)!);
+        // 只补建一层（比如被删空的 saves、mods）；再往上也没了，说明它所在的实例已经被删了。
+        var parent = Path.GetDirectoryName(original)!;
+        if (!Directory.Exists(parent) && !string.Equals(parent, owner, StringComparison.OrdinalIgnoreCase)
+            && Path.GetDirectoryName(parent) is { } grand && !Directory.Exists(grand))
+            throw new TrashException(TrashFailure.ParentMissing, parent);
+        Directory.CreateDirectory(parent);
         var target = FreeName(original);
         if (isDir) Directory.Move(stored, target);
         else File.Move(stored, target);

@@ -1055,7 +1055,7 @@
   "trash.failure.in_scanned": "回收目录不能放在游戏会读取的文件夹里",
   "trash.failure.outside_owner": "记录里的原位置不对，没有恢复",
   "trash.failure.entry_missing": "回收目录里已经没有这一项了",
-  "instance.delete.body": "将永久删除实例 {0} 的文件夹（含隔离的存档和模组），共 {1}。这一步无法撤销，也不会放进回收目录。",
+  "instance.delete.body": "将把实例 {0} 的文件夹（含隔离的存档和模组，共 {1}）移进 Amber 的回收目录。删完可以马上撤销；回收目录里的东西过几天会自动清掉。",
   "instance.delete.computing": "正在计算大小…",
   "instance.delete.done": "已删除实例 {0}",
   "common.confirm_remove": "确认移除",
@@ -1111,5 +1111,9 @@
   "home.crash.show": "查看",
   "home.account.online": "正版 · {0}",
   "home.account.offline": "离线 · {0}",
-  "home.account.external": "外置登录 · {0}"
+  "home.account.external": "外置登录 · {0}",
+  "error.in_use_or_denied": "文件被别的程序占用，或者没有权限",
+  "trash.failure.parent_missing": "它原来所在的实例已经不在了，没法放回去",
+  "common.copy_failed": "复制失败",
+  "instance.delete.running": "{0} 正在运行，先退出游戏再删除实例"
 }

@@ -215,7 +215,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("accounts.status.login_failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("accounts.status.login_failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -269,7 +269,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("accounts.status.login_failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("accounts.status.login_failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -290,7 +290,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("accounts.status.profile_selection_failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("accounts.status.profile_selection_failed", e, ErrorText.Of(e)));
         }
         finally
         {

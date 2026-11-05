@@ -366,7 +366,11 @@ public sealed partial class LogViewModel : PageViewModel
 
     partial void OnOnlyProblemsChanged(bool value) => Rebuild();
 
-    protected override void OnLanguageChanged() => Rebuild();
+    protected override void OnLanguageChanged()
+    {
+        Rebuild();
+        OnPropertyChanged(nameof(CopyLabel));
+    }
 
     public void Add(GameLogLine line)
     {
@@ -464,14 +468,21 @@ public sealed partial class LogViewModel : PageViewModel
             }
         }
         catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
-        CopyLabel = L.T(ok ? "common.copied" : "log.copy_failed");
+        SetCopyLabel(ok ? "common.copied" : "log.copy_failed");
         await Task.Delay(1500);
-        CopyLabel = L.T("log.copy_all");
+        SetCopyLabel("log.copy_all");
     }
 
-    /// <summary>“复制全部”按钮的文字：点了之后短暂显示“已复制”或“复制失败”。</summary>
-    [ObservableProperty]
-    public partial string CopyLabel { get; private set; } = L.T("log.copy_all");
+    private string _copyLabelKey = "log.copy_all";
+
+    private void SetCopyLabel(string key)
+    {
+        _copyLabelKey = key;
+        OnPropertyChanged(nameof(CopyLabel));
+    }
+
+    /// <summary>“复制全部”按钮的文字：点了之后短暂显示“已复制”或“复制失败”。存翻译键，换语言跟着换。</summary>
+    public string CopyLabel => L.T(_copyLabelKey);
 
     // ---- 这次运行的实例和开始时间（页头小字） ----
 

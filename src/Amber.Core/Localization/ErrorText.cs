@@ -16,8 +16,20 @@ public static class ErrorText
     private const int LockViolation = unchecked((int)0x80070021);
     private const int DiskFull = unchecked((int)0x80070070);
     private const int HandleDiskFull = unchecked((int)0x80070027);
+    // 拒绝访问：多半是别的程序（游戏、杀毒软件）开着这个文件，或者没有权限。
+    private const int AccessDenied = unchecked((int)0x80070005);
 
     public static string Describe(Exception e) => DescribeKey(e) is { } key ? L.T(key) : Innermost(e).Message;
+
+    /// <summary>
+    /// 放进状态消息参数用：显示时才按当时的语言翻译（Describe 返回的是现成的字符串，换语言后会混着两种语言）。
+    /// </summary>
+    public static object Of(Exception e) => new Deferred(e);
+
+    private sealed class Deferred(Exception e)
+    {
+        public override string ToString() => Describe(e);
+    }
 
     /// <summary>认出来的异常对应的翻译键；认不出返回 null。单独拿出来方便测试。</summary>
     public static string? DescribeKey(Exception e)
@@ -49,6 +61,8 @@ public static class ErrorText
                     return "error.file_in_use";
                 case IOException { HResult: DiskFull or HandleDiskFull }:
                     return "error.disk_full";
+                case IOException { HResult: AccessDenied }:
+                    return "error.in_use_or_denied";
                 case PathTooLongException:
                     return "error.path_too_long";
             }

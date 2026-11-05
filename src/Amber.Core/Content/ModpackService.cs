@@ -259,7 +259,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
     public static List<string> ExportCandidates(string workDir)
     {
         if (!Directory.Exists(workDir)) return [];
-        string[] skip = ["logs", "crash-reports", "natives", "saves", "screenshots", "versions", ".fabric", ".mixin.out", "downloads", ".cache", "debug", "backups", "local", InstanceSettings.FileName];
+        string[] skip = ["logs", "crash-reports", "natives", "saves", "screenshots", "versions", ".fabric", ".mixin.out", "downloads", ".cache", "debug", "backups", "local", InstanceSettings.FileName,
+            // Amber 自己的回收目录、下载校验缓存和“安装未完成”标记不属于整合包。
+            TrashService.TrashFolder, ".amber-hashes", Amber.Core.Game.GameDirectory.IncompleteMarker];
         var result = new List<string>();
         foreach (var path in Directory.EnumerateFileSystemEntries(workDir))
         {

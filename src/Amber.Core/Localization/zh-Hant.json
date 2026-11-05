@@ -1055,7 +1055,7 @@
   "trash.failure.in_scanned": "回收目錄不能放在遊戲會讀取的資料夾內",
   "trash.failure.outside_owner": "記錄中的原位置不正確，未還原",
   "trash.failure.entry_missing": "回收目錄中已經沒有這一項了",
-  "instance.delete.body": "將永久刪除實例 {0} 的資料夾（含隔離的存檔與模組），共 {1}。此操作無法復原，也不會放入回收目錄。",
+  "instance.delete.body": "將把實例 {0} 的資料夾（含隔離的存檔與模組，共 {1}）移進 Amber 的回收目錄。刪除後可以馬上復原；回收目錄中的內容過幾天會自動清除。",
   "instance.delete.computing": "正在計算大小…",
   "instance.delete.done": "已刪除實例 {0}",
   "common.confirm_remove": "確認移除",
@@ -1111,5 +1111,9 @@
   "home.crash.show": "查看",
   "home.account.online": "正版 · {0}",
   "home.account.offline": "離線 · {0}",
-  "home.account.external": "外置登入 · {0}"
+  "home.account.external": "外置登入 · {0}",
+  "error.in_use_or_denied": "檔案被其他程式佔用，或者沒有權限",
+  "trash.failure.parent_missing": "它原本所在的實例已經不在了，無法放回去",
+  "common.copy_failed": "複製失敗",
+  "instance.delete.running": "{0} 正在執行，先結束遊戲再刪除實例"
 }

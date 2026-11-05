@@ -18,6 +18,17 @@ public partial class StatusBar : UserControl
 
     private readonly DispatcherTimer _settle = new() { Interval = SettleAfter };
     private StatusMessage? _dismissed;
+    private bool _isShowing;
+
+    /// <summary>现在有没有显示消息（没消息或者被 ✕ 关掉时为 false）：外面只装着状态条的卡片跟着收起。</summary>
+    public static readonly DirectProperty<StatusBar, bool> IsShowingProperty =
+        AvaloniaProperty.RegisterDirect<StatusBar, bool>(nameof(IsShowing), o => o.IsShowing);
+
+    public bool IsShowing
+    {
+        get => _isShowing;
+        private set => SetAndRaise(IsShowingProperty, ref _isShowing, value);
+    }
 
     public StatusMessage? Message
     {
@@ -42,8 +53,16 @@ public partial class StatusBar : UserControl
         {
             if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard && Message?.Detail is { } detail)
             {
-                await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(clipboard, detail);
-                CopyButton.Content = L.T("common.copied");
+                try
+                {
+                    await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(clipboard, detail);
+                    CopyButton.Content = L.T("common.copied");
+                }
+                catch (Exception e) when (e is System.Runtime.InteropServices.COMException or InvalidOperationException or TimeoutException or UnauthorizedAccessException)
+                {
+                    // 剪贴板被别的程序占着：只在按钮上说一声，不让程序崩掉。
+                    CopyButton.Content = L.T("common.copy_failed");
+                }
                 await Task.Delay(1500);
                 CopyButton.Content = L.T("common.copy");
             }
@@ -88,6 +107,7 @@ public partial class StatusBar : UserControl
         var m = Message;
         var visible = m is not null && !ReferenceEquals(m, _dismissed) && m.Key.Length > 0;
         Bar.IsVisible = visible;
+        IsShowing = visible;
         if (!visible)
         {
             _settle.Stop();

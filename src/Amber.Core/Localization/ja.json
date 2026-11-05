@@ -1055,7 +1055,7 @@
   "trash.failure.in_scanned": "Amber のごみ箱はゲームが読み込むフォルダーの中には置けません",
   "trash.failure.outside_owner": "記録されている元の場所が正しくないため、元に戻しませんでした",
   "trash.failure.entry_missing": "この項目はもう Amber のごみ箱にありません",
-  "instance.delete.body": "インスタンス {0} のフォルダー（分離されたワールドと MOD を含む、合計 {1}）を完全に削除します。元に戻すことはできず、Amber のごみ箱にも入りません。",
+  "instance.delete.body": "インスタンス {0} のフォルダー（分離されたワールドと MOD を含む、合計 {1}）を Amber のごみ箱に移します。削除直後なら元に戻せます。ごみ箱の中身は数日後に自動で消去されます。",
   "instance.delete.computing": "サイズを計算中…",
   "instance.delete.done": "インスタンス {0} を削除しました",
   "common.confirm_remove": "削除する",
@@ -1111,5 +1111,9 @@
   "home.crash.show": "表示",
   "home.account.online": "Microsoft · {0}",
   "home.account.offline": "オフライン · {0}",
-  "home.account.external": "外部認証 · {0}"
+  "home.account.external": "外部認証 · {0}",
+  "error.in_use_or_denied": "ファイルが別のプログラムで使用中か、アクセス権がありません",
+  "trash.failure.parent_missing": "元のインスタンスがもうないため、戻せません",
+  "common.copy_failed": "コピーに失敗しました",
+  "instance.delete.running": "{0} は実行中です。ゲームを終了してからインスタンスを削除してください"
 }

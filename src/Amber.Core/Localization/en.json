@@ -1084,7 +1084,7 @@
   "trash.failure.in_scanned": "The Amber trash folder can't be inside a folder the game reads",
   "trash.failure.outside_owner": "The recorded original location looks wrong, so nothing was restored",
   "trash.failure.entry_missing": "This item is no longer in the Amber trash folder",
-  "instance.delete.body": "This permanently deletes the folder of instance {0}, including its isolated worlds and mods ({1} in total). This can't be undone, and it won't go to the Amber trash folder.",
+  "instance.delete.body": "This moves the folder of instance {0}, including its isolated worlds and mods ({1} in total), to the Amber trash folder. You can undo it right after; the trash folder is cleaned out automatically after a few days.",
   "instance.delete.computing": "calculating size…",
   "instance.delete.done": "Deleted instance {0}",
   "common.confirm_remove": "Confirm remove",
@@ -1140,5 +1140,9 @@
   "home.crash.show": "Show",
   "home.account.online": "Microsoft · {0}",
   "home.account.offline": "Offline · {0}",
-  "home.account.external": "External · {0}"
+  "home.account.external": "External · {0}",
+  "error.in_use_or_denied": "The file is in use by another program, or access is denied",
+  "trash.failure.parent_missing": "The instance it came from no longer exists, so it can't be put back",
+  "common.copy_failed": "Copy failed",
+  "instance.delete.running": "{0} is running. Quit the game before deleting the instance"
 }

@@ -378,8 +378,8 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("多开：游戏运行中再启动出现警告并回到启动页", home.HasPendingLaunch && main.CurrentPage == home && home.PendingLaunchText.Contains(FabricName), home.PendingLaunchText);
         await ShotAsync("多开警告");
         home.LaunchAnywayCommand.Execute(null);
-        var second = await WaitAsync(() => home.RunCount == 2 && home.IsRunning
-            && log.Lines.Any(l => l.Message.Contains("Sound engine started") || l.Message.Contains("OpenAL initialized")), 180);
+        // 第二个客户端自己的输出里出现进入主界面的标志，状态才会变成“运行中 ·”。
+        var second = await WaitAsync(() => home.RunCount == 2 && home.IsRunning && home.Status.Contains("运行中 ·"), 180);
         Check("多开：【仍然启动】后同时开着两个客户端", second, $"{home.RunCount} 个 {home.Status}");
         home.CancelCommand.Execute(null);
         await WaitAsync(() => home.RunCount == 1, 30);

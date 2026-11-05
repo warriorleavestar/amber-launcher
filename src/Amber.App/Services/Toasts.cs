@@ -18,8 +18,15 @@ public static class Toasts
 
     private static WindowNotificationManager? _manager;
 
-    /// <summary>一条撤销记录：Toast 上显示的名字，和撤销时做的事（返回恢复后的名字，失败抛异常）。</summary>
-    private sealed record UndoItem(string Name, Func<string> Undo);
+    /// <summary>
+    /// 一条撤销记录：Toast 上显示的名字，撤销时做的事（返回恢复后的名字，失败抛异常），
+    /// 和恢复成功后刷新界面的事（它出错不算恢复失败）。
+    /// </summary>
+    private sealed record UndoItem(string Name, Func<string> Undo, Action? AfterUndo = null)
+    {
+        /// <summary>正在撤销（按钮和 Ctrl+Z 同时来时只做一次）。</summary>
+        public bool Running { get; set; }
+    }
 
     /// <summary>撤销记录：最近的在最后。</summary>
     private static readonly List<UndoItem> History = [];
@@ -50,13 +57,15 @@ public static class Toasts
         });
 
     /// <summary>文件进回收目录后调用：记下撤销信息并显示 Toast。restored 收到实际恢复到的路径。</summary>
-    public static void Deleted(TrashEntry entry, Action<string> restored) =>
+    public static void Deleted(TrashEntry entry, Action<string> restored)
+    {
+        string? path = null;
         Add(new UndoItem(entry.Name, () =>
         {
-            var path = TrashService.Restore(entry);
-            restored(path);
+            path = TrashService.Restore(entry);
             return Path.GetFileName(path);
-        }));
+        }, () => restored(path!)));
+    }
 
     /// <summary>列表里的一项删掉后调用（不是文件）：undo 把它放回去。</summary>
     public static void Removed(string name, Action undo) =>
@@ -86,6 +95,8 @@ public static class Toasts
             {
                 undo.IsEnabled = false;
                 Undo(item);
+                // 没撤销成功（还在记录里）就让按钮能再点。
+                undo.IsEnabled = IsPending(item);
             };
             _manager.Show(content, NotificationType.Information, UndoDuration);
         });
@@ -101,23 +112,67 @@ public static class Toasts
         return true;
     }
 
+    /// <summary>
+    /// 撤销一条记录。成功后才从记录里拿掉；失败（比如文件被占用）时留着，可以再试。
+    /// 回收目录里已经没有这一项、或者原来的实例不在了，再试也没用，才一起拿掉。
+    /// </summary>
     private static void Undo(UndoItem item)
     {
         lock (History)
         {
-            if (!History.Remove(item)) return;
+            if (!History.Contains(item) || item.Running) return;
+            item.Running = true;
         }
+        string name;
         try
         {
-            Show(L.F("trash.restored", item.Undo()), NotificationType.Success);
+            name = item.Undo();
         }
         catch (TrashException e)
         {
+            Finish(item, remove: e.Reason is TrashFailure.EntryMissing or TrashFailure.ParentMissing or TrashFailure.OriginalOutsideOwner);
             Show(L.F("trash.restore_failed", Describe(e)), NotificationType.Error);
+            return;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
+            Finish(item, remove: false);
             Show(L.F("trash.restore_failed", ErrorText.Describe(e)), NotificationType.Error);
+            return;
+        }
+        Finish(item, remove: true);
+        // 已经恢复了：刷新界面出错不能报成“恢复失败”，也不能让程序崩掉。
+        try { item.AfterUndo?.Invoke(); }
+        catch (Exception e) { System.Diagnostics.Trace.WriteLine("Amber: refresh after undo failed: " + e); }
+        Show(L.F("trash.restored", name), NotificationType.Success);
+    }
+
+    private static bool IsPending(UndoItem item)
+    {
+        lock (History) return History.Contains(item);
+    }
+
+    /// <summary>还能撤销的条数（测试用）。</summary>
+    internal static int PendingCount
+    {
+        get { lock (History) return History.Count; }
+    }
+
+    /// <summary>清空撤销记录（测试用）。</summary>
+    internal static void ClearHistory()
+    {
+        lock (History) History.Clear();
+    }
+
+    /// <summary>加一条撤销记录，带恢复后的刷新（测试用；界面上走 Deleted / Removed）。</summary>
+    internal static void AddForTest(string name, Func<string> undo, Action? afterUndo) => Add(new UndoItem(name, undo, afterUndo));
+
+    private static void Finish(UndoItem item, bool remove)
+    {
+        lock (History)
+        {
+            item.Running = false;
+            if (remove) History.Remove(item);
         }
     }
 
@@ -130,6 +185,7 @@ public static class Toasts
         TrashFailure.TrashInScannedFolder => L.T("trash.failure.in_scanned"),
         TrashFailure.OriginalOutsideOwner => L.T("trash.failure.outside_owner"),
         TrashFailure.EntryMissing => L.T("trash.failure.entry_missing"),
+        TrashFailure.ParentMissing => L.T("trash.failure.parent_missing"),
         _ => e.Message,
     };
 }

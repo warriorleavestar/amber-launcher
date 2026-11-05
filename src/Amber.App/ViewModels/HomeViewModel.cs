@@ -493,7 +493,7 @@ public sealed partial class HomeViewModel : PageViewModel
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("home.status.launch_failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("home.status.launch_failed", e, ErrorText.Of(e)));
             _log.AddRaw("[Amber] " + e);
         }
         finally

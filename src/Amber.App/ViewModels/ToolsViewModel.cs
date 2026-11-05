@@ -84,7 +84,7 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("instance.status.failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("instance.status.failed", e, ErrorText.Of(e)));
         }
         finally
         {

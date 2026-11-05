@@ -331,8 +331,9 @@
       </StackPanel>
     </ScrollViewer>
 
-    <Border Grid.Row="2" Classes="card" Margin="0" IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-      <c:StatusBar Message="{Binding StatusInfo}" />
+    <!-- 消息被 ✕ 关掉后整张卡片一起收起，不留空卡片 -->
+    <Border Grid.Row="2" Classes="card" Margin="0" IsVisible="{Binding #PageStatus.IsShowing}">
+      <c:StatusBar x:Name="PageStatus" Message="{Binding StatusInfo}" />
     </Border>
   </Grid>
 </UserControl>

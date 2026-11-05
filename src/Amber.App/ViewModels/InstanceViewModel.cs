@@ -280,7 +280,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, ErrorText.Of(e)));
         }
         return false;
     }
@@ -327,15 +327,27 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             L.F("instance.delete.body", c.Id, L.T("instance.delete.computing")), L.T("common.confirm_delete"),
             () => Task.Run(() => L.F("instance.delete.body", c.Id, Fmt.Size(TrashService.SizeOf(dir)))));
         if (!ok) return;
+        // 游戏还在用这个实例的文件：不删（删到一半会留下半个实例）。
+        if (_service.IsRunningIn(_service.WorkDirFor(c.Id)) || _service.IsRunningIn(dir))
+        {
+            SetStatus(StatusMessage.Warning("instance.delete.running", c.Id));
+            return;
+        }
         try
         {
-            await Task.Run(() => System.IO.Directory.Delete(dir, recursive: true));
+            // 整个文件夹改名进回收目录（同卷改名，有文件被占用时整体失败、原样不动），可以撤销。
+            var entry = await Task.Run(() => TrashService.MoveToTrash(dir, _service.Directory.Root));
             SetStatus(StatusMessage.Success("instance.delete.done", c.Id));
             _service.NotifyInstalledChanged();
+            Toasts.Deleted(entry, _ => _service.NotifyInstalledChanged());
+        }
+        catch (TrashException e)
+        {
+            SetStatus(StatusMessage.Error("instance.status.delete_failed", Toasts.Describe(e)));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -447,7 +459,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("instance.status.failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("instance.status.failed", e, ErrorText.Of(e)));
         }
         finally
         {
@@ -763,7 +775,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     {
         DatapackWorld = null;
         Worlds.Clear();
-        foreach (var w in WorldManager.List(Current!.SavesDir)) Worlds.Add(new WorldItem(w));
+        // 撤销删除世界时实例可能已经被删了、或者选中的是读不了的实例。
+        if (Current is not { } c) return;
+        foreach (var w in WorldManager.List(c.SavesDir)) Worlds.Add(new WorldItem(w));
     }
 
     [RelayCommand]
@@ -813,7 +827,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e) when (e is IOException or InvalidDataException)
         {
-            SetStatus(StatusMessage.Failure("instance.worlds.import_failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("instance.worlds.import_failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -1020,7 +1034,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     {
         if (Current is not { } c || item is null) return;
         var index = Servers.IndexOf(item);
-        var removed = ServerList.Remove(c.WorkDir, item.Address);
+        var removed = ServerList.Remove(c.WorkDir, item.Address, item.Name, index);
         Servers.Remove(item);
         SetStatus(StatusMessage.Success("trash.deleted", item.Name));
         if (removed is null) return;

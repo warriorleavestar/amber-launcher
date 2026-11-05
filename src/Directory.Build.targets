@@ -1,0 +1,11 @@
+<Project>
+  <!--
+    关掉 Avalonia 的编译统计（Avalonia.BuildServices）：它每次编译都会另起一个 dotnet 进程把统计发出去，
+    项目规则不允许遥测；在没有写权限的环境（沙箱、CI）里那个进程还会因为未处理的异常弹出“应用程序错误”对话框。
+    Avalonia 的包把这个属性设成 ;AvaloniaUI，统计目标只在它非空时运行。放在 .targets 里（不是 .props：.props 在
+    nuget.g.props 之前导入，会被包盖回去），对所有直接或间接引用 Avalonia 的项目（包括测试项目）都生效。
+  -->
+  <PropertyGroup>
+    <UsedAvaloniaProducts></UsedAvaloniaProducts>
+  </PropertyGroup>
+</Project>

@@ -19,6 +19,14 @@ public sealed record StatusMessage(string Key, object?[] Args, StatusKind Kind =
 
     public override string ToString() => Format();
 
+    /// <summary>
+    /// 按引用比较：两条键和参数都一样的消息也是两条（关掉一条错误后同样的错误再出现，界面要能再显示）。
+    /// 记录类型默认按值比较，没参数时 params 传的是同一个空数组，会被当成“没变”。
+    /// </summary>
+    public bool Equals(StatusMessage? other) => ReferenceEquals(this, other);
+
+    public override int GetHashCode() => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
+
     public static StatusMessage Info(string key, params object?[] args) => new(key, args);
     public static StatusMessage Success(string key, params object?[] args) => new(key, args, StatusKind.Success);
     public static StatusMessage Warning(string key, params object?[] args) => new(key, args, StatusKind.Warning);

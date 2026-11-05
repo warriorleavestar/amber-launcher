@@ -277,7 +277,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("content.search.failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("content.search.failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -355,7 +355,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("content.files.fetch_failed", e, ErrorText.Describe(e)));
+            SetStatus(StatusMessage.Failure("content.files.fetch_failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -434,7 +434,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Error("common.install_failed", Describe(e)));
+            SetStatus(StatusMessage.Failure("common.install_failed", e, Describe(e)));
         }
         finally
         {
@@ -460,7 +460,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Error("common.install_failed", Describe(e)));
+            SetStatus(StatusMessage.Failure("common.install_failed", e, Describe(e)));
         }
         finally
         {
@@ -486,7 +486,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Error("instance.worlds.import_failed", Describe(e)));
+            SetStatus(StatusMessage.Failure("instance.worlds.import_failed", e, Describe(e)));
         }
         finally
         {
@@ -515,7 +515,8 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     private void Cancel() => _workCts?.Cancel();
 
     /// <summary>没点取消却收到取消，是网络请求超时。</summary>
-    private static string Describe(Exception e) => e is OperationCanceledException ? L.T("common.request_timeout") : e.Message;
+    /// <summary>失败原因写成玩家看得懂的话（显示时按当时的语言），异常原文放进详情。</summary>
+    private static object Describe(Exception e) => e is OperationCanceledException ? L.T("common.request_timeout") : ErrorText.Of(e);
 
     public async Task RunSnapshotDemoAsync()
     {
