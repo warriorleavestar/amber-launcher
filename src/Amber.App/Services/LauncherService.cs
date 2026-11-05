@@ -89,6 +89,17 @@ public sealed class LauncherService : IDisposable
         NotifyInstalledChanged();
     }
 
+    /// <summary>设置在设置页以外被改了（新手卡换了游戏目录或下载源）：设置页跟着刷新显示。</summary>
+    public event Action? SettingsChangedElsewhere;
+
+    /// <summary>保存设置并按新设置重建下载器、安装器（新手卡用）。</summary>
+    public void SaveAndReload()
+    {
+        Settings.Save();
+        Reload();
+        SettingsChangedElsewhere?.Invoke();
+    }
+
     private string? CurseForgeKey() =>
         string.IsNullOrWhiteSpace(Settings.CurseForgeApiKey) ? Environment.GetEnvironmentVariable("AMBER_CF_KEY") : Settings.CurseForgeApiKey;
 

@@ -154,6 +154,17 @@ public sealed partial class MainViewModel : ObservableObject
         home.NavigateToNewInstance = () => CurrentPage = download;
         home.NavigateToLog = () => CurrentPage = log;
         home.NavigateHere = () => CurrentPage = home;
+        home.Onboarding.MicrosoftLogin = () =>
+        {
+            if (accounts is AccountsViewModel a) a.LoginTab = 1;
+            CurrentPage = accounts;
+        };
+        home.Onboarding.ChooseVersion = () => CurrentPage = download;
+        home.Onboarding.ImportPack = async path =>
+        {
+            CurrentPage = content;
+            await content.ImportLocalPackAsync(path);
+        };
         instance.NavigateHome = () => CurrentPage = home;
         multiplayer.NavigateHome = () => CurrentPage = home;
         download.LaunchInstance = id =>
@@ -193,7 +204,7 @@ public sealed partial class SettingsViewModel : PageViewModel
 
     /// <summary>下拉框的选项列表本身不变，换语言时只换文字（不然选中的序号会被清成 -1、保存时丢设置）。</summary>
     public Amber.App.Localization.OptionItem[] SourceOptions { get; } = Amber.App.Localization.OptionItem.Keys("settings.source.auto", "settings.source.official", "settings.source.mirror");
-    private static readonly string[] SourceKeys = ["auto", "official", "mirror"];
+    internal static readonly string[] SourceKeys = ["auto", "official", "mirror"];
 
     public ObservableCollection<JavaOption> JavaOptions { get; } = [];
 
@@ -232,6 +243,11 @@ public sealed partial class SettingsViewModel : PageViewModel
         var s = service.Settings;
         GameDirectory = s.GameDirectory;
         SourceIndex = Math.Max(0, Array.IndexOf(SourceKeys, s.DownloadSource));
+        service.SettingsChangedElsewhere += () => Dispatcher.UIThread.Post(() =>
+        {
+            GameDirectory = service.Settings.GameDirectory;
+            SourceIndex = Math.Max(0, Array.IndexOf(SourceKeys, service.Settings.DownloadSource));
+        });
         Concurrency = s.DownloadConcurrency.ToString();
         AutoJavaDownload = s.AutoJavaDownload;
         IsolateVersions = s.IsolateVersions;

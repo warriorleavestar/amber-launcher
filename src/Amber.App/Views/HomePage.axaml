@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Amber.App.ViewModels"
              xmlns:c="using:Amber.App.Views.Controls"
+             xmlns:v="using:Amber.App.Views"
              xmlns:l="using:Amber.App.Localization"
              xmlns:diag="using:Amber.Core.Diagnostics"
              x:Class="Amber.App.Views.HomePage"
@@ -21,7 +22,10 @@
           </DockPanel>
         </Border>
 
-        <Border Classes="card">
+        <!-- 新手卡：没有账号或没有实例时替换实例卡（改版规格 3.1） -->
+        <v:OnboardingCard x:Name="OnboardingCard" DataContext="{Binding Onboarding}" />
+
+        <Border Classes="card" IsVisible="{Binding ShowInstanceCard}">
           <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
             <TextBlock Text="{l:T home.version.label}" VerticalAlignment="Center" />
             <ComboBox Grid.Column="1" ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion}"

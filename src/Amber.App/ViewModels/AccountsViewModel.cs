@@ -168,12 +168,15 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         }
         _service.Accounts.AddOffline(name);
         OfflineName = "";
-        SetStatus(StatusMessage.Success("accounts.status.offline_added", name));
+        // 中文之类的名字能用，只提醒一句（规则和新手卡一样）。
+        SetStatus(OfflineNameRules.Check(name).NotAscii
+            ? StatusMessage.Warning("accounts.status.offline_added_not_ascii", name)
+            : StatusMessage.Success("accounts.status.offline_added", name));
         Changed();
     }
 
-    public static bool IsValidOfflineName(string name) =>
-        name.Length is >= 3 and <= 16 && name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_');
+    /// <summary>硬性规则见 OfflineNameRules：3–16 个字符、没有空格；非英文字母数字只提醒。</summary>
+    public static bool IsValidOfflineName(string name) => OfflineNameRules.Check(name).Ok;
 
     [RelayCommand]
     private void SaveClientId()

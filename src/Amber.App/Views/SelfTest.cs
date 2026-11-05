@@ -116,6 +116,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             await DirectRoomAsync();
             await ExportImportAsync();
             await CurrentInstanceAsync();
+            await OnboardingAsync();
             Log("DONE");
         }
         catch (Exception e)
@@ -588,9 +589,10 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
                 var stream = client.GetStream();
                 stream.ReadTimeout = 5000;
                 await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes("hello\n"));
-                reply = await new StreamReader(stream).ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                reply = await new StreamReader(stream).ReadLineAsync(readTimeout.Token);
             }
-            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException)
+            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException or OperationCanceledException)
             {
                 await Task.Delay(2000);
             }
@@ -668,9 +670,10 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
                 await client.ConnectAsync(parts[0], int.Parse(parts[1]));
                 var stream = client.GetStream();
                 await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes("sealed\n"));
-                reply = await new StreamReader(stream).ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                reply = await new StreamReader(stream).ReadLineAsync(readTimeout.Token);
             }
-            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException)
+            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException or OperationCanceledException)
             {
                 await Task.Delay(2000);
             }
@@ -782,9 +785,10 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
                 await client.ConnectAsync(parts[0], int.Parse(parts[1]));
                 var stream = client.GetStream();
                 await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes("direct\n"));
-                reply = await new StreamReader(stream).ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                reply = await new StreamReader(stream).ReadLineAsync(readTimeout.Token);
             }
-            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException)
+            catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or TimeoutException or OperationCanceledException)
             {
                 await Task.Delay(1500);
             }
@@ -992,6 +996,106 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
     }
 
     /// <summary>全局当前实例：实例页切换后启动页、资源页、联机页跟着变，写进设置；资源页临时换一个只算这一次。</summary>
+    /// <summary>
+    /// 新手卡（改版规格 3.1）：本机已经有账号和实例，所以把卡强制显示出来检查。
+    /// 找目录只在报告目录里造的假 HMCL 目录里找；换目录后换回原来的测试目录；安装只补全测试目录里已有的原版 1.21.1。
+    /// 不添加账号（不改账号文件）。
+    /// </summary>
+    private async Task OnboardingAsync()
+    {
+        var home = Page<HomeViewModel>();
+        var service = home.Service;
+        var onboarding = home.Onboarding;
+        var originalDir = service.Settings.GameDirectory;
+        var originalCurrent = service.CurrentInstance;
+        main.CurrentPage = home;
+        await Ui.FlushAsync();
+
+        var fake = Path.Combine(reportDir, "fake-launcher", ".minecraft");
+        Directory.CreateDirectory(Path.Combine(fake, "versions", "1.20.1"));
+        File.WriteAllText(Path.Combine(fake, "versions", "1.20.1", "1.20.1.json"), "{}");
+        onboarding.Candidates = () => [fake, originalDir];
+        await Dispatcher.UIThread.InvokeAsync(() => onboarding.Update(true, true, null));
+        await onboarding.DetectAsync();
+        var card = await FindAsync<OnboardingCard>(_ => true, 5);
+        Check("新手卡：没有账号和实例时替换实例卡，只展开“添加账号”这一步",
+            card is not null && !home.ShowInstanceCard && onboarding.ShowAccountStep && !onboarding.ShowGameStep && onboarding.ShowGameWaiting,
+            $"卡 {card is not null}，实例卡 {home.ShowInstanceCard}");
+        Check("新手卡：找到已有游戏目录（跳过正在用的目录），写出实例数",
+            onboarding.Detected?.Path == Path.GetFullPath(fake) && onboarding.Detected.InstanceCount == 1 && onboarding.DetectedText.Contains("1 个实例"),
+            onboarding.DetectedText);
+
+        onboarding.PlayerName = "ab";
+        await Ui.FlushAsync();
+        var add = card?.FindControl<Button>("AddOfflineButton");
+        Check("新手卡：玩家名太短时禁用添加并说明", !onboarding.CanAddOffline && add?.IsEffectivelyEnabled == false && onboarding.NameProblem.Contains("3–16"), onboarding.NameProblem);
+        onboarding.PlayerName = "小明 2";
+        Check("新手卡：玩家名有空格时禁用添加", !onboarding.CanAddOffline && onboarding.NameProblem.Contains("空格"), onboarding.NameProblem);
+        onboarding.PlayerName = "玩家小明";
+        await Ui.FlushAsync();
+        Check("新手卡：中文名只提醒，仍然能添加", onboarding.CanAddOffline && add?.IsEffectivelyEnabled == true && onboarding.NameWarning.Contains("服务器") && onboarding.NameProblem.Length == 0, onboarding.NameWarning);
+
+        onboarding.RequestFocus(OnboardingStep.Account);
+        var nameBox = card?.FindControl<TextBox>("PlayerNameBox");
+        Check("新手卡：缺账号时点启动，焦点放到玩家名输入框", await WaitAsync(() => Dispatcher.UIThread.Invoke(() => nameBox?.IsFocused == true), 3), "");
+        await LayoutHereAsync("新手卡·账号");
+        await ShotAsync("新手卡-账号");
+        onboarding.PlayerName = "";
+
+        // 账号有了，展开“安装游戏”。
+        await Dispatcher.UIThread.InvokeAsync(() => onboarding.Update(false, true, "Steve"));
+        await WaitAsync(() => onboarding.LatestRelease is not null, 20);
+        Check("新手卡：账号做完收成一行，展开安装：最新正式版按钮、4 个热门版本、下载源",
+            onboarding.ShowAccountDone && onboarding.ShowGameStep && onboarding.AccountDoneText.Contains("Steve")
+            && onboarding.Hot.Length == 4 && onboarding.SourceText.StartsWith("下载源：", StringComparison.Ordinal),
+            $"{onboarding.InstallLatestLabel} · {onboarding.SourceText}");
+        Check("新手卡：拿到最新正式版号", onboarding.LatestRelease is { Length: > 0 } && onboarding.InstallLatestLabel.Contains(onboarding.LatestRelease!), onboarding.InstallLatestLabel);
+        await LayoutHereAsync("新手卡·安装");
+        await ShotAsync("新手卡-安装");
+
+        // 切换下载源再切回来：设置跟着变，设置页也跟着显示。
+        var settings = Page<SettingsViewModel>();
+        var sourceBefore = service.Settings.DownloadSource;
+        var mirrorBefore = onboarding.UsesMirror;
+        onboarding.SwitchSourceCommand.Execute(null);
+        await Ui.FlushAsync();
+        var switched = onboarding.UsesMirror != mirrorBefore && settings.SourceIndex == Array.IndexOf(SettingsViewModel.SourceKeys, service.Settings.DownloadSource);
+        onboarding.SwitchSourceCommand.Execute(null);
+        service.Settings.DownloadSource = sourceBefore;
+        service.SaveAndReload();
+        await Ui.FlushAsync();
+        Check("新手卡：【切换】换下载源，设置页跟着变", switched && onboarding.UsesMirror == mirrorBefore, onboarding.SourceText);
+
+        // 补全已有的原版 1.21.1：阶段走到“完成”，Java 合并在同一条进度里，装完设为当前实例，卡收起。
+        var stages = new List<string>();
+        void OnStage(object? s, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(OnboardingViewModel.StageText) && !stages.Contains(onboarding.StageText)) stages.Add(onboarding.StageText);
+        }
+        onboarding.PropertyChanged += OnStage;
+        await onboarding.InstallAsync("1.21.1", null, fallbackToVanilla: false);
+        onboarding.PropertyChanged -= OnStage;
+        await WaitAsync(() => !onboarding.IsVisible, 5);
+        Check("新手卡：安装阶段是 下载游戏文件 → 准备 Java → 完成，装完设为当前实例、卡收起",
+            stages.SequenceEqual(["下载游戏文件", "准备 Java", "完成"]) && service.CurrentInstance == "1.21.1" && !onboarding.IsVisible && home.ShowInstanceCard
+            && onboarding.Message?.Kind == StatusKind.Success,
+            $"{string.Join(" → ", stages)}；当前 {service.CurrentInstance}；{onboarding.Message?.Text}");
+
+        // 用找到的目录：换过去能看到里面的实例，再换回测试目录。
+        await Dispatcher.UIThread.InvokeAsync(() => onboarding.Update(false, true, "Steve"));
+        onboarding.UseDirectory(Path.GetDirectoryName(fake)!);
+        await WaitAsync(() => settings.GameDirectory == Path.GetFullPath(fake), 5);
+        var usedRoot = service.Directory.Root;
+        var used = usedRoot == Path.GetFullPath(fake) && service.InstalledVersions().Contains("1.20.1") && settings.GameDirectory == Path.GetFullPath(fake);
+        service.Settings.GameDirectory = originalDir;
+        service.SaveAndReload();
+        if (originalCurrent is not null) service.SetCurrentInstance(originalCurrent);
+        await WaitAsync(() => home.Versions.Contains(FabricName) && settings.GameDirectory == originalDir, 10);
+        Check("新手卡：选启动器文件夹也能认出里面的 .minecraft，换过去后换回测试目录",
+            used && service.Directory.Root == Path.GetFullPath(originalDir) && settings.GameDirectory == originalDir && !onboarding.IsVisible,
+            $"换过去 {used}（{usedRoot}）；现在 {service.Directory.Root}；设置页 {settings.GameDirectory}；卡 {onboarding.IsVisible}");
+    }
+
     private async Task CurrentInstanceAsync()
     {
         var home = Page<HomeViewModel>();

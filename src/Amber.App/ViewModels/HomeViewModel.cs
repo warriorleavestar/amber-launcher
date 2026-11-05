@@ -191,12 +191,23 @@ public sealed partial class HomeViewModel : PageViewModel
 
     public bool HasCrash => Crash is not null;
 
+    /// <summary>新手卡不在时才显示实例卡。</summary>
+    public bool ShowInstanceCard => !Onboarding.IsVisible;
+
     public int TotalMemoryMb { get; } = (int)MemoryPlanner.TotalPhysicalMb();
+
+    /// <summary>没有账号或没有实例时替换实例卡的新手卡（改版规格 3.1）。</summary>
+    public OnboardingViewModel Onboarding { get; }
 
     public HomeViewModel(LauncherService service, LogViewModel log)
     {
         _service = service;
         _log = log;
+        Onboarding = new OnboardingViewModel(service);
+        Onboarding.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(OnboardingViewModel.IsVisible)) OnPropertyChanged(nameof(ShowInstanceCard));
+        };
         AutoMemory = service.Settings.AutoMemory;
         MaxMemoryMb = service.Settings.MaxMemoryMb;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshVersions);
@@ -289,6 +300,7 @@ public sealed partial class HomeViewModel : PageViewModel
         ShowProgress = run is not null && (run.Game is null || !run.InGame || run.Exiting);
         ProgressIndeterminate = run is not null && (run.Game is not null || Progress <= 0);
         PrimaryLabel = L.T(PrimaryKey(run));
+        Onboarding.Update(Accounts.Count == 0, Versions.Count == 0, SelectedAccount?.Name);
         if (IsRunning) _clock.Start();
         else _clock.Stop();
     }
@@ -322,15 +334,21 @@ public sealed partial class HomeViewModel : PageViewModel
             else if (!run.Exiting) ExitGame(run);
             return;
         }
+        // 新手卡在的时候不换页：焦点放到卡里对应的那一步。
         if (SelectedAccount is null)
         {
-            SetStatus(StatusMessage.Warning("home.status.account_required"));
-            NavigateToAccounts?.Invoke();
+            if (Onboarding.NeedsAccount) Onboarding.RequestFocus(OnboardingStep.Account);
+            else
+            {
+                SetStatus(StatusMessage.Warning("home.status.account_required"));
+                NavigateToAccounts?.Invoke();
+            }
             return;
         }
         if (SelectedVersion is not { } id)
         {
-            NavigateToNewInstance?.Invoke();
+            if (Onboarding.NeedsGame) Onboarding.RequestFocus(OnboardingStep.Game);
+            else NavigateToNewInstance?.Invoke();
             return;
         }
         await RunAsync(new LaunchRequest(id));
