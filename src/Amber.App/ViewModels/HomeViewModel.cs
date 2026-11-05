@@ -274,7 +274,7 @@ public sealed partial class HomeViewModel : PageViewModel
             Progress = 100;
             _log.Clear();
             _recentOutput.Clear();
-            _lastRunNoTrace = _service.Settings.NoTrace;
+            _lastRunNoTrace = options.NoTrace; // 按真正交给 launcher.Launch 的参数，不按启动后可能又改过的设置
             _log.AddRaw(L.F("home.log.launch", id, javaPath, memory));
             foreach (var note in _proxyNotes) _log.AddRaw(note);
             var parser = new GameLogParser();

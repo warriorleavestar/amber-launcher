@@ -252,9 +252,16 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("启动游戏到主界面", reached, home.Status);
         Check("启动前命令运行过", File.Exists(Path.Combine(reportDir, "prelaunch.txt")) && File.ReadAllText(Path.Combine(reportDir, "prelaunch.txt")).Contains(FabricName));
         Check("实例内存生效", log.Lines.Any(l => l.Message.Contains("最大内存 3072 MB")));
-        var filtered = Directory.EnumerateFiles(GameRoot(), "*.amber-notrace.xml", SearchOption.AllDirectories).ToList();
+        // 过滤后的配置放在 Amber 自己的数据目录里，游戏目录里一个都不能有；游戏退出后删掉。
+        var noTraceRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Amber", "notrace");
+        var filtered = Directory.Exists(noTraceRoot)
+            ? Directory.EnumerateFiles(noTraceRoot, "*.amber-notrace.xml", SearchOption.AllDirectories).Where(f => File.GetLastWriteTime(f) >= launchStart).ToList()
+            : [];
+        var inGameDir = Directory.EnumerateFiles(GameRoot(), "*.amber-notrace.xml", SearchOption.AllDirectories).Where(f => File.GetLastWriteTime(f) >= launchStart).ToList();
         Check("无痕模式：启动时提示并用过滤后的日志配置", log.Lines.Any(l => l.Message.Contains(Amber.Core.Localization.L.T("core.launch.notrace.on")))
-                                                && filtered.Count > 0 && File.ReadAllText(filtered[0]).Contains("RegexFilter"), string.Join(", ", filtered.Select(Path.GetFileName)));
+                                                && filtered.Count > 0 && File.ReadAllText(filtered[0]).Contains("RegexFilter")
+                                                && File.ReadAllText(filtered[0]).Contains("net.minecraft.server.MinecraftServer"), string.Join(", ", filtered.Select(Path.GetFileName)));
+        Check("无痕模式：生成的日志配置不写进游戏目录", inGameDir.Count == 0, string.Join(", ", inGameDir.Select(f => Path.GetRelativePath(GameRoot(), f))));
         var latest = Directory.EnumerateFiles(GameRoot(), "latest.log", SearchOption.AllDirectories)
             .Where(f => File.GetLastWriteTime(f) >= launchStart).ToList();
         Check("无痕模式：游戏照常写 latest.log", latest.Count > 0 && new FileInfo(latest[0]).Length > 0, string.Join(", ", latest.Select(f => Path.GetRelativePath(GameRoot(), f))));
@@ -265,6 +272,8 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         home.CancelCommand.Execute(null);
         await launching;
         Check("结束游戏后状态正确（不报崩溃）", home.Status.Contains("已结束") && !home.HasCrash, home.Status);
+        var cleaned = await WaitAsync(() => filtered.All(f => !File.Exists(f)), 15);
+        Check("无痕模式：游戏退出后删掉生成的日志配置", filtered.Count > 0 && cleaned, string.Join(", ", filtered.Where(File.Exists).Select(Path.GetFileName)));
         // 后面的崩溃分析要看完整日志，把无痕模式关回去。
         Dispatcher.UIThread.Invoke(() => { settings.NoTrace = false; settings.SaveCommand.Execute(null); });
     }

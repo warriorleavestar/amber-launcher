@@ -17,19 +17,42 @@ namespace Amber.Core.Launch;
 public static partial class ChatLogFilter
 {
     /// <summary>
-    /// 聊天行（宁可多滤也不漏）：
+    /// 写文件的 appender 上的过滤（所有日志都过一遍，所以只认不会和普通日志撞上的格式）：
     /// - 客户端收到的聊天都带“[CHAT]”（1.19 起前面还有“[System] ”）；
-    /// - 本机开的单人或局域网世界，内置服务器记的玩家聊天“&lt;名字&gt; 内容”（显示名可以有空格、队伍前缀），
-    ///   /say 的“[名字] 内容”，/me 的“* 名字 内容”；
-    /// - 1.19 起前面可能有“[Not Secure] ”“[Modified] ”。
+    /// - 内置服务器记的玩家聊天“&lt;名字&gt; 内容”（显示名可以有空格、队伍前缀），1.19 起前面可能有“[Not Secure] ”“[Modified] ”。
     /// </summary>
-    public const string ChatRegex = @"(?s)(.*\[CHAT\].*|((\[Not Secure\]|\[Modified\]) )*(<[^<>]{1,64}> |\[[^\[\]]{1,64}\] |\* \S{1,64} ).*)";
+    public const string ChatRegex = @"(?s)(.*\[CHAT\].*|" + Signed + @"<[^<>]{1,64}> .*)";
+
+    /// <summary>
+    /// 只加在内置服务器的 logger（<see cref="ServerLogger"/>）上的过滤：除了上面的，还有 /say 的“[名字] 内容”（名字里可以再套一层方括号，
+    /// 比如“[[Red] Steve] hi”）和 /me 的“* 名字 内容”。这两种格式模组日志里很常见（“[OptiFine] …”“[Indigo] …”），所以不放在全局过滤里。
+    /// </summary>
+    public const string ServerChatRegex = @"(?s)(.*\[CHAT\].*|" + Signed + @"(<[^<>]{1,64}> |\[(?:[^\[\]]|\[[^\[\]]{1,32}\]){1,64}\] |\* \S{1,64} ).*)";
+
+    private const string Signed = @"((\[Not Secure\]|\[Modified\]) )*";
+
+    /// <summary>
+    /// 内置服务器写聊天、/say、/me 用的 logger：MinecraftServer 这个类名在各个版本里都不混淆（Forge、Fabric 下也一样），
+    /// 1.17 以后按调用的类取名，还是它。
+    /// </summary>
+    public const string ServerLogger = "net.minecraft.server.MinecraftServer";
 
     private static readonly HashSet<string> FileAppenders = ["RollingRandomAccessFile", "RollingFile", "RandomAccessFile", "File"];
 
     /// <summary>log4j2 的 RegexFilter 用 Java 的 matches()（整条消息匹配），这里同样整条匹配。</summary>
     [GeneratedRegex(@"\A(?:" + ChatRegex + @")\z")]
     private static partial Regex WholeMessage();
+
+    [GeneratedRegex(@"\A(?:" + ServerChatRegex + @")\z")]
+    private static partial Regex WholeServerMessage();
+
+    /// <summary>控制台文本行里线程名或 logger 指向内置服务器：“[Server thread/INFO]”或“[minecraft/MinecraftServer]”。</summary>
+    [GeneratedRegex(@"^\[[^\]]*\] (?:\[Server thread/[^\]]*\]|\[[^\]]*\] \[[^\]]*MinecraftServer\])")]
+    private static partial Regex ServerPrefix();
+
+    /// <summary>原版 XML 事件的 logger 和线程。</summary>
+    [GeneratedRegex(@"<log4j:Event\b[^>]*?\b(?:logger=""net\.minecraft\.server\.MinecraftServer""|thread=""Server thread"")")]
+    private static partial Regex ServerEvent();
 
     /// <summary>控制台一行的前缀“[12:00:00] [Render thread/INFO]: ”（有些版本还带“[来源]”）。</summary>
     [GeneratedRegex(@"^\[[^\]]*\] \[[^\]]*\](?: \[[^\]]*\])?: ")]
@@ -38,18 +61,19 @@ public static partial class ChatLogFilter
     [GeneratedRegex(@"<!\[CDATA\[(.*?)(\]\]>|$)", RegexOptions.Singleline)]
     private static partial Regex Cdata();
 
-    /// <summary>这条日志消息是不是聊天（和游戏日志里的过滤规则一样）。</summary>
-    public static bool IsChat(string message) => WholeMessage().IsMatch(message);
+    /// <summary>这条日志消息是不是聊天（和游戏日志里的过滤规则一样）。fromServer：是不是内置服务器的 logger 记的。</summary>
+    public static bool IsChat(string message, bool fromServer = false) => (fromServer ? WholeServerMessage() : WholeMessage()).IsMatch(message);
 
     /// <summary>
     /// 游戏控制台的一行原始输出是不是聊天：原版的 XML 事件取 CDATA 里的消息，普通文本去掉时间和线程前缀再比。
-    /// 带“[CHAT]”的一律算。
+    /// 带“[CHAT]”的一律算；“[名字] ”“* 名字 ”只在内置服务器线程或 logger 的行里算。Amber 自己的“[Amber] ”行不算。
     /// </summary>
     public static bool IsChatLine(string line)
     {
+        if (line.StartsWith("[Amber] ", StringComparison.Ordinal)) return false;
         if (line.Contains("[CHAT]", StringComparison.Ordinal)) return true;
-        if (Cdata().Match(line) is { Success: true } cdata) return IsChat(cdata.Groups[1].Value);
-        return IsChat(ConsolePrefix().Replace(line, "", 1));
+        if (Cdata().Match(line) is { Success: true } cdata) return IsChat(cdata.Groups[1].Value, ServerEvent().IsMatch(line));
+        return IsChat(ConsolePrefix().Replace(line, "", 1), ServerPrefix().IsMatch(line));
     }
 
     /// <summary>去掉聊天行（无痕模式下导出错误报告用）。</summary>
@@ -99,46 +123,85 @@ public static partial class ChatLogFilter
         return version.Id;
     }
 
-    /// <summary>在原配置旁边生成过滤掉聊天的配置（每次重写），返回它的路径。写不了时抛异常：宁可不启动，也不偷偷记下聊天。</summary>
-    public static string Prepare(string originalPath)
+    /// <summary>
+    /// 在 targetDir 里生成过滤掉聊天的配置（每次重写），返回它的路径。targetDir 是 Amber 自己的临时目录，不放进游戏目录。
+    /// 写不了时抛异常：宁可不启动，也不偷偷记下聊天。
+    /// </summary>
+    public static string Prepare(string originalPath, string targetDir)
     {
         var doc = XDocument.Load(originalPath, LoadOptions.PreserveWhitespace);
         var added = Transform(doc);
         if (added == 0) throw new InvalidDataException(L.T("core.launch.notrace.no_file_appender"));
-        var target = Path.Combine(Path.GetDirectoryName(originalPath)!, Path.GetFileNameWithoutExtension(originalPath) + ".amber-notrace.xml");
+        Directory.CreateDirectory(targetDir);
+        var target = Path.Combine(targetDir, Path.GetFileNameWithoutExtension(originalPath) + ".amber-notrace.xml");
         var temp = target + ".tmp";
         doc.Save(temp);
         File.Move(temp, target, true);
         return target;
     }
 
-    /// <summary>给每个写文件的 appender 加聊天过滤，返回加了几个。</summary>
+    /// <summary>
+    /// 给每个写文件的 appender 加聊天过滤，返回加了几个；再给内置服务器的 logger 加上认 /say、/me 的过滤
+    /// （logger 上的过滤对它的所有输出都生效，控制台里也就看不到这几行）。
+    /// </summary>
     public static int Transform(XDocument doc)
     {
         var count = 0;
         foreach (var appender in doc.Descendants().Where(e => FileAppenders.Contains(e.Name.LocalName)).ToList())
         {
-            var ns = appender.Name.Namespace;
-            var filter = new XElement(ns + "RegexFilter",
-                new XAttribute("regex", ChatRegex), new XAttribute("onMatch", "DENY"), new XAttribute("onMismatch", "NEUTRAL"));
-            // log4j2 的 appender 只认一个过滤器元素：已有 Filters 就放进去，已有单个过滤器就和它一起包进 Filters。
-            var filters = appender.Elements().FirstOrDefault(e => e.Name.LocalName == "Filters");
-            var single = appender.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith("Filter", StringComparison.Ordinal));
-            if (filters is not null)
-            {
-                filters.AddFirst(filter);
-            }
-            else if (single is not null)
-            {
-                single.Remove();
-                appender.AddFirst(new XElement(ns + "Filters", filter, single));
-            }
-            else
-            {
-                appender.AddFirst(filter);
-            }
+            AddFilter(appender, ChatRegex);
             count++;
         }
+        if (count > 0) AddServerLoggerFilter(doc);
         return count;
+    }
+
+    private static void AddFilter(XElement owner, string regex)
+    {
+        var ns = owner.Name.Namespace;
+        var filter = new XElement(ns + "RegexFilter",
+            new XAttribute("regex", regex), new XAttribute("onMatch", "DENY"), new XAttribute("onMismatch", "NEUTRAL"));
+        // log4j2 的 appender 和 logger 都只认一个过滤器元素：已有 Filters 就放进去，已有单个过滤器就和它一起包进 Filters。
+        var filters = owner.Elements().FirstOrDefault(e => e.Name.LocalName == "Filters");
+        var single = owner.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith("Filter", StringComparison.Ordinal));
+        if (filters is not null)
+        {
+            filters.AddFirst(filter);
+        }
+        else if (single is not null)
+        {
+            single.Remove();
+            owner.AddFirst(new XElement(ns + "Filters", filter, single));
+        }
+        else
+        {
+            owner.AddFirst(filter);
+        }
+    }
+
+    /// <summary>
+    /// 配置里已有这个 logger 就给它加过滤；没有就新建一个，级别照抄离它最近的上级（没写就是 Root 的），
+    /// additivity 保持默认（true），输出照旧交给上级的 appender。
+    /// </summary>
+    private static void AddServerLoggerFilter(XDocument doc)
+    {
+        if (doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "Loggers") is not { } loggers) return;
+        var ns = loggers.Name.Namespace;
+        var all = loggers.Elements().Where(e => e.Name.LocalName is "Logger" or "AsyncLogger").ToList();
+        if (all.FirstOrDefault(e => (string?)e.Attribute("name") == ServerLogger) is { } existing)
+        {
+            AddFilter(existing, ServerChatRegex);
+            return;
+        }
+        var level = all
+            .Where(e => (string?)e.Attribute("name") is { } n && ServerLogger.StartsWith(n + ".", StringComparison.Ordinal) && e.Attribute("level") is not null)
+            .OrderByDescending(e => ((string)e.Attribute("name")!).Length)
+            .Select(e => (string?)e.Attribute("level"))
+            .FirstOrDefault()
+            ?? (string?)loggers.Elements().FirstOrDefault(e => e.Name.LocalName is "Root" or "AsyncRoot")?.Attribute("level")
+            ?? "info";
+        var logger = new XElement(ns + "Logger", new XAttribute("name", ServerLogger), new XAttribute("level", level));
+        AddFilter(logger, ServerChatRegex);
+        loggers.AddFirst(logger);
     }
 }

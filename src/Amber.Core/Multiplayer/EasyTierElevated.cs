@@ -37,7 +37,8 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
         _guard = guard;
     }
 
-    public bool HasExited => _guard.HasExited;
+    /// <summary>守护脚本退出了，或者没能在期限内连上（这时它也不会再做任何事）：调用方都当作已经停了。</summary>
+    public bool HasExited => _guard.HasExited || _guard.ConnectFailed;
 
     public IReadOnlyList<string> RecentOutput => _guard.RecentOutput;
 
@@ -68,10 +69,14 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
 
     /// <summary>
     /// 旧版本（写文件传参数）留下的 run-lan 目录：参数、重启文件和日志里都可能有房间密钥，启动时清掉，只删这几种文件。
-    /// 每个都先覆盖再删（尽量不在磁盘上留下原文）。不跟着联接或符号链接走：目录本身、上一级、子目录和文件是重解析点的都跳过。
+    /// 每个都先覆盖再删（尽量不在磁盘上留下原文）。不跟着联接或符号链接走：目录本身、上一级、子目录和文件是重解析点的都跳过；
+    /// 有不止一个硬链接的文件也跳过（覆盖它会改到别处的同一份内容）。一个文件出错只跳过这个文件。
     /// </summary>
     internal static class LegacyFiles
     {
+        /// <summary>覆盖时每次写的块大小：大文件不用一次分配整块内存。</summary>
+        internal const int ChunkSize = 64 * 1024;
+
         private static readonly string[] Names = ["args.json", "guard.ps1", "stop", "stop.restart", "stop.restart.tmp", "exited", "easytier.log", "easytier.log.err", "easytier.log.guard"];
 
         private static bool IsReparsePoint(string path) => (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
@@ -93,11 +98,11 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
                         try
                         {
                             if (IsReparsePoint(path)) continue;
-                            Overwrite(path);
+                            if (!Overwrite(path)) continue;
                             File.Delete(path);
                             removed++;
                         }
-                        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                        catch (Exception) { /* 这个文件跳过，接着处理别的 */ }
                     }
                     if (dir != workDir && !Directory.EnumerateFileSystemEntries(dir).Any())
                     {
@@ -109,13 +114,38 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
             return removed;
         }
 
-        private static void Overwrite(string path)
+        /// <summary>用零覆盖整个文件；文件有不止一个硬链接时什么也不做，返回 false。</summary>
+        private static bool Overwrite(string path)
         {
-            var length = new FileInfo(path).Length;
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.None);
-            stream.Write(new byte[length]);
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            if (LinkCount(stream) != 1) return false;
+            var zeros = new byte[ChunkSize];
+            var left = stream.Length;
+            while (left > 0)
+            {
+                var n = (int)Math.Min(left, ChunkSize);
+                stream.Write(zeros, 0, n);
+                left -= n;
+            }
             stream.Flush(true);
+            return true;
         }
+
+        /// <summary>文件的硬链接数；取不到时返回 0（当作不安全，跳过）。</summary>
+        internal static uint LinkCount(FileStream stream) =>
+            GetFileInformationByHandle(stream.SafeFileHandle, out var info) ? info.NumberOfLinks : 0;
+
+        [StructLayout(LayoutKind.Sequential, Pack = 4)] // FILETIME 是两个 DWORD，按 4 字节对齐
+        private struct FileInformation
+        {
+            public uint FileAttributes;
+            public long CreationTime, LastAccessTime, LastWriteTime;
+            public uint VolumeSerialNumber, FileSizeHigh, FileSizeLow, NumberOfLinks, FileIndexHigh, FileIndexLow;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle file, out FileInformation info);
     }
 }
 
@@ -144,13 +174,15 @@ internal sealed class ElevatedGuard : IDisposable
     private StreamWriter? _cmdWriter;
     private int _sent;
     private int _acked;
-    private bool _disposed;
+    private volatile bool _disposed;
+    private readonly TimeSpan _connectTimeout;
 
     /// <summary>传给守护脚本的命令行（测试用：确认里面没有密钥）。</summary>
     internal string CommandLine { get; }
 
-    private ElevatedGuard(Process process, string commandLine, NamedPipeServerStream[] pipes)
+    private ElevatedGuard(Process process, string commandLine, NamedPipeServerStream[] pipes, TimeSpan connectTimeout)
     {
+        _connectTimeout = connectTimeout;
         _process = process;
         CommandLine = commandLine;
         _pipes = pipes;
@@ -167,6 +199,9 @@ internal sealed class ElevatedGuard : IDisposable
 
     /// <summary>守护脚本已经退出（它退出前会结束 easytier-core）。</summary>
     public bool HasExited => _process.HasExited;
+
+    /// <summary>Amber 等守护脚本连管道超时了。之后晚到的守护脚本一连上就被关掉管道，读到结尾自己退出。</summary>
+    public bool ConnectFailed => _connect.IsFaulted || _connect.IsCanceled;
 
     public bool StartPending => !HasExited && Volatile.Read(ref _acked) < Volatile.Read(ref _sent);
 
@@ -191,7 +226,8 @@ internal sealed class ElevatedGuard : IDisposable
     /// 启动守护脚本（elevate 时弹 UAC，这一步会等用户确认）。用户拒绝时抛 <see cref="OperationCanceledException"/>。
     /// env 是给 easytier-core 的环境变量（房间密钥），和参数一样只经管道传。serverPidForTest：测试用，让守护脚本以为管道该由别的进程建。
     /// </summary>
-    public static ElevatedGuard Start(string corePath, IReadOnlyList<string> args, IReadOnlyDictionary<string, string> env, bool elevate, int? serverPidForTest = null)
+    public static ElevatedGuard Start(string corePath, IReadOnlyList<string> args, IReadOnlyDictionary<string, string> env, bool elevate, int? serverPidForTest = null,
+        TimeSpan? connectTimeoutForTest = null)
     {
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         string Name(string kind) => $"amber-et-{id}-{kind}";
@@ -229,7 +265,7 @@ internal sealed class ElevatedGuard : IDisposable
             {
                 throw new OperationCanceledException(L.T("core.mp.component.elevationdeclined"));
             }
-            var guard = new ElevatedGuard(process, commandLine, pipes) { PipeId = id };
+            var guard = new ElevatedGuard(process, commandLine, pipes, connectTimeoutForTest ?? ConnectTimeout) { PipeId = id };
             guard.Start(args, env);
             return guard;
         }
@@ -242,11 +278,12 @@ internal sealed class ElevatedGuard : IDisposable
 
     /// <summary>
     /// 等四根管道都连上，并核对连上来的是刚启动的守护脚本：别的程序抢先连上时断开它、不发任何东西，接着等守护脚本。
-    /// 失败（超时）时管道也先留着，等守护脚本退出再关：关早了别的账号就能建同名管道冒充 Amber。
+    /// 超时后管道也不马上关（关早了别的账号就能建同名管道冒充 Amber）：接着等，守护脚本晚到了一连上就关掉那根管道，
+    /// 它读到结尾就退出，不会启动 easytier-core。
     /// </summary>
     private async Task ConnectAsync()
     {
-        using var timeout = new CancellationTokenSource(ConnectTimeout);
+        using var timeout = new CancellationTokenSource(_connectTimeout);
         try
         {
             foreach (var pipe in _pipes)
@@ -264,26 +301,45 @@ internal sealed class ElevatedGuard : IDisposable
         catch (Exception e)
         {
             Keep(L.F("core.mp.component.guardfailed", e.Message));
-            _ = DisposePipesAfterExitAsync();
+            _ = RejectLateGuardAsync();
             throw;
         }
     }
 
-    private async Task DisposePipesAfterExitAsync()
+    /// <summary>超时之后：守护脚本连上哪根管道就关哪根（已经连上的马上关），别的程序连上就断开接着等；守护脚本退出或 5 分钟后全部关掉。</summary>
+    private async Task RejectLateGuardAsync()
     {
-        try { await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(5)); }
-        catch (Exception e) when (e is TimeoutException or InvalidOperationException) { }
-        foreach (var p in _pipes) p.Dispose();
+        using var stop = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        _ = _process.WaitForExitAsync(stop.Token).ContinueWith(_ => { try { stop.Cancel(); } catch (ObjectDisposedException) { } }, TaskScheduler.Default);
+        try
+        {
+            foreach (var pipe in _pipes)
+            {
+                while (true)
+                {
+                    if (!pipe.IsConnected) await pipe.WaitForConnectionAsync(stop.Token);
+                    if (GetNamedPipeClientProcessId(pipe.SafePipeHandle, out var client) && client == (uint)_process.Id) break;
+                    pipe.Disconnect();
+                }
+                pipe.Dispose();
+            }
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException or InvalidOperationException) { }
+        finally
+        {
+            foreach (var p in _pipes) p.Dispose();
+        }
     }
 
-    /// <summary>命令按顺序发：连上之后才真正写进管道。</summary>
-    private void Enqueue(Action<StreamWriter> write)
+    /// <summary>命令按顺序发：连上之后才真正写进管道。已经 Dispose 的话排着的启动命令不发（只发停止），免得先带着密钥把 easytier-core 启动起来。</summary>
+    private void Enqueue(Action<StreamWriter> write, bool isStart = false)
     {
         lock (_gate)
         {
             _chain = _chain.ContinueWith(_ =>
             {
                 if (!_connect.IsCompletedSuccessfully || _cmdWriter is not { } writer) return;
+                if (isStart && _disposed) return;
                 try { write(writer); }
                 catch (Exception e) when (e is IOException or ObjectDisposedException) { }
             }, TaskScheduler.Default);
@@ -295,7 +351,7 @@ internal sealed class ElevatedGuard : IDisposable
     {
         var n = Interlocked.Increment(ref _sent);
         var message = JsonSerializer.Serialize(new GuardCommand("start", n, WindowsCommandLine.Join(args), new Dictionary<string, string>(env)), AmberJsonContext.Default.GuardCommand);
-        Enqueue(w => w.WriteLine(message));
+        Enqueue(w => w.WriteLine(message), isStart: true);
     }
 
     /// <summary>
@@ -364,7 +420,8 @@ internal sealed class ElevatedGuard : IDisposable
         $Core = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String('__CORE64__'))
         $AmberPid = [uint32]__AMBERPID__
         $UserSid = '__SID__'
-        $deadline = [DateTime]::UtcNow.AddSeconds(__TIMEOUT__)
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $limitMs = __TIMEOUT__ * 1000
         $enc = New-Object System.Text.UTF8Encoding($false)
         # GetNamedPipeServerProcessId via an in-memory P/Invoke (Add-Type would write temp files).
         $asm = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object System.Reflection.AssemblyName('AmberGuardNative')), [System.Reflection.Emit.AssemblyBuilderAccess]::Run)
@@ -375,7 +432,7 @@ internal sealed class ElevatedGuard : IDisposable
         # Check the pipe was created by Amber (server PID, owner is the user or Administrators) before reading anything; exit otherwise.
         function Connect-Pipe([string]$kind, $direction) {
             $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', "amber-et-__ID__-$kind", $direction, [System.IO.Pipes.PipeOptions]::None, [System.Security.Principal.TokenImpersonationLevel]::Identification)
-            $left = [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds
+            $left = [int]($limitMs - $clock.ElapsedMilliseconds)
             if ($left -le 0) { throw 'connect timeout' }
             $pipe.Connect($left)
             $server = [uint32]0
@@ -404,7 +461,8 @@ internal sealed class ElevatedGuard : IDisposable
         function Start-Core([string]$arguments, $env) {
             $psi = New-Object System.Diagnostics.ProcessStartInfo($Core)
             $psi.Arguments = $arguments
-            if ($env) { foreach ($prop in $env.PSObject.Properties) { $psi.EnvironmentVariables[$prop.Name] = [string]$prop.Value } }
+            # Only the allow-listed key reaches easytier-core.
+            if ($env) { foreach ($prop in $env.PSObject.Properties) { if ($prop.Name -ceq 'ET_NETWORK_SECRET') { $psi.EnvironmentVariables[$prop.Name] = [string]$prop.Value } } }
             $psi.UseShellExecute = $false
             $psi.CreateNoWindow = $true
             $psi.RedirectStandardOutput = $true

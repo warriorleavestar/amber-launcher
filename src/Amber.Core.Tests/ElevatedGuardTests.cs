@@ -123,6 +123,45 @@ public class ElevatedGuardTests
         guard.Dispose();
     }
 
+    /// <summary>Amber 等超时了（PowerShell 启动太慢）：报告失败；晚到的守护脚本一连上就被关掉管道，很快退出，不启动 easytier-core。</summary>
+    [Fact]
+    public async Task LateGuardAfterTimeoutIsReportedAndShutOut()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var guard = ElevatedGuard.Start(Core, FakeCoreArgs("late"), Env, elevate: false, connectTimeoutForTest: TimeSpan.FromMilliseconds(1));
+        Assert.True(await WaitAsync(() => guard.ConnectFailed, 5));
+        // 守护脚本自己的期限是 20 秒；被关掉管道的话远早于这个时间退出。
+        Assert.True(await WaitAsync(() => guard.HasExited, 12), "守护脚本没有被关在外面");
+        Assert.DoesNotContain(guard.RecentOutput, l => l.Contains("tag=late"));
+        guard.Dispose();
+    }
+
+    /// <summary>刚启动就 Dispose（比如端口被占用）：排着的启动命令不发，只发停止，easytier-core 一次都不启动。</summary>
+    [Fact]
+    public async Task EarlyDisposeNeverStartsCore()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var guard = ElevatedGuard.Start(Core, FakeCoreArgs("early"), Env, elevate: false);
+        guard.Dispose();
+        Assert.True(guard.WaitForExit(TimeSpan.FromSeconds(30)));
+        await Task.Delay(200);
+        Assert.DoesNotContain(guard.RecentOutput, l => l.Contains("tag=early") || l.StartsWith("pid=", StringComparison.Ordinal));
+    }
+
+    /// <summary>守护脚本只把 ET_NETWORK_SECRET 放进 easytier-core 的环境变量，别的键不认。</summary>
+    [Fact]
+    public async Task OnlyAllowListedEnvironmentReachesCore()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var env = new Dictionary<string, string>(Env) { ["PATHEXT"] = "evil", ["AMBER_EXTRA"] = "evil" };
+        string[] args = ["-NoProfile", "-NonInteractive", "-Command", "Write-Output ('pid=' + $PID); Write-Output ('tag=env extra=' + $env:AMBER_EXTRA + ' pathext=' + $env:PATHEXT + ' secret=' + $env:ET_NETWORK_SECRET); Start-Sleep 60"];
+        using var guard = ElevatedGuard.Start(Core, args, env, elevate: false);
+        Assert.True(await WaitAsync(() => guard.RecentOutput.Any(l => l.Contains("tag=env"))), string.Join(" | ", guard.RecentOutput));
+        var line = guard.RecentOutput.First(l => l.Contains("tag=env"));
+        Assert.Contains("secret=" + Secret, line);
+        Assert.DoesNotContain("evil", line);
+    }
+
     /// <summary>守护脚本连管道的期限比 Amber 等的短：Amber 先等到它放弃退出。</summary>
     [Fact]
     public void GuardGivesUpBeforeAmber() =>
@@ -218,6 +257,35 @@ public class ElevatedGuardTests
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
     }
+
+    /// <summary>大文件分块覆盖；有别的硬链接的文件不碰（覆盖会改到另一处的同一份内容）。</summary>
+    [Fact]
+    public void LegacyFilesChunkedAndSkipHardLinks()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "amber-legacy-link-" + Guid.NewGuid().ToString("N")[..8]);
+        var run = Path.Combine(dir, "a1b2c3d4");
+        Directory.CreateDirectory(run);
+        var big = Path.Combine(run, "easytier.log");
+        File.WriteAllBytes(big, Enumerable.Repeat((byte)'x', EasyTierElevatedSession.LegacyFiles.ChunkSize * 3 + 17).ToArray());
+        var outside = Path.Combine(dir, "elsewhere.txt");
+        File.WriteAllText(outside, Secret);
+        var linked = Path.Combine(run, "args.json");
+        Assert.True(CreateHardLink(linked, outside, IntPtr.Zero));
+        try
+        {
+            Assert.Equal(1, EasyTierElevatedSession.LegacyFiles.Remove(dir));
+            Assert.False(File.Exists(big));
+            Assert.True(File.Exists(linked));
+            Assert.Equal(Secret, File.ReadAllText(outside));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateHardLink(string newFile, string existingFile, IntPtr security);
 
     /// <summary>run-lan 里的联接（junction）指到别处：不跟过去，那边的同名文件留着。</summary>
     [Fact]

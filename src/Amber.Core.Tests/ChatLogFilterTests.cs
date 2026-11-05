@@ -34,6 +34,26 @@ public class ChatLogFilterTests
         Assert.Equal("NEUTRAL", (string?)filter.Attribute("onMismatch"));
         Assert.Equal(ChatLogFilter.ChatRegex, (string?)filter.Attribute("regex"));
         Assert.Empty(doc.Descendants("Console").Single().Elements("RegexFilter"));
+        // 内置服务器的 logger 另加一个认 /say、/me 的过滤，级别照抄 Root。
+        var server = doc.Descendants("Logger").Single(e => (string?)e.Attribute("name") == ChatLogFilter.ServerLogger);
+        Assert.Equal("info", (string?)server.Attribute("level"));
+        Assert.Null(server.Attribute("additivity"));
+        Assert.Equal(ChatLogFilter.ServerChatRegex, (string?)server.Elements("RegexFilter").Single().Attribute("regex"));
+    }
+
+    [Fact]
+    public void ServerLoggerInheritsNearestLevelOrReusesExisting()
+    {
+        var doc = XDocument.Parse("""<Configuration><Appenders><File name="f"/></Appenders><Loggers><Logger name="net" level="warn"/><Logger name="net.minecraft" level="${sys:forge.logging.mojang.level:-info}"/><Root level="all"/></Loggers></Configuration>""");
+        ChatLogFilter.Transform(doc);
+        var server = doc.Descendants("Logger").Single(e => (string?)e.Attribute("name") == ChatLogFilter.ServerLogger);
+        Assert.Equal("${sys:forge.logging.mojang.level:-info}", (string?)server.Attribute("level"));
+
+        var existing = XDocument.Parse("""<Configuration><Appenders><File name="f"/></Appenders><Loggers><Logger name="net.minecraft.server.MinecraftServer" level="debug"><MarkerFilter marker="X" onMatch="DENY" onMismatch="NEUTRAL"/></Logger><Root level="info"/></Loggers></Configuration>""");
+        ChatLogFilter.Transform(existing);
+        var logger = existing.Descendants("Logger").Single();
+        Assert.Equal("debug", (string?)logger.Attribute("level"));
+        Assert.Equal(["RegexFilter", "MarkerFilter"], logger.Element("Filters")!.Elements().Select(e => e.Name.LocalName));
     }
 
     [Fact]
@@ -58,7 +78,7 @@ public class ChatLogFilterTests
     }
 
     [Fact]
-    public void PrepareWritesSiblingFileAndRefusesConsoleOnly()
+    public void PrepareWritesIntoTargetDirAndRefusesConsoleOnly()
     {
         var dir = Path.Combine(Path.GetTempPath(), "amber-notrace-test-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
@@ -66,15 +86,17 @@ public class ChatLogFilterTests
         {
             var original = Path.Combine(dir, "client-1.12.xml");
             File.WriteAllText(original, Vanilla);
-            var prepared = ChatLogFilter.Prepare(original);
-            Assert.Equal(Path.Combine(dir, "client-1.12.amber-notrace.xml"), prepared);
+            var target = Path.Combine(dir, "out");
+            var prepared = ChatLogFilter.Prepare(original, target);
+            Assert.Equal(Path.Combine(target, "client-1.12.amber-notrace.xml"), prepared);
             Assert.Contains("RegexFilter", File.ReadAllText(prepared));
             Assert.DoesNotContain("RegexFilter", File.ReadAllText(original));
-            Assert.Equal(prepared, ChatLogFilter.Prepare(original)); // 再来一次直接覆盖
+            Assert.Equal(["client-1.12.xml"], Directory.GetFiles(dir).Select(Path.GetFileName)); // 原配置旁边不多出文件
+            Assert.Equal(prepared, ChatLogFilter.Prepare(original, target)); // 再来一次直接覆盖
 
             var consoleOnly = Path.Combine(dir, "console.xml");
             File.WriteAllText(consoleOnly, """<Configuration><Appenders><Console name="c"/></Appenders></Configuration>""");
-            Assert.Throws<InvalidDataException>(() => ChatLogFilter.Prepare(consoleOnly));
+            Assert.Throws<InvalidDataException>(() => ChatLogFilter.Prepare(consoleOnly, target));
         }
         finally
         {
@@ -91,9 +113,6 @@ public class ChatLogFilterTests
     [InlineData("[Not Secure] [Modified] <Steve> hi", true)]
     [InlineData("<[Red] Team Steve> hi", true)]
     [InlineData("<Steve the Builder> hi", true)]
-    [InlineData("[Server] restarting soon", true)]
-    [InlineData("[Not Secure] [Steve] said via /say", true)]
-    [InlineData("* Steve waves", true)]
     [InlineData("[CHAT] line one\nline two", true)]
     [InlineData("<Steve> line one\nline two", true)]
     [InlineData("Loading 42 recipes", false)]
@@ -107,6 +126,47 @@ public class ChatLogFilterTests
         var regex = new Regex(@"\A(?:" + ChatLogFilter.ChatRegex + @")\z");
         Assert.Equal(chat, regex.IsMatch(message));
         Assert.Equal(chat, ChatLogFilter.IsChat(message));
+        // 内置服务器 logger 上的规则包含全局的规则。
+        if (chat) Assert.True(ChatLogFilter.IsChat(message, fromServer: true));
+    }
+
+    /// <summary>
+    /// 模组和 Amber 自己常用“[名字] ”开头记日志（包括警告和错误）：全局过滤不能吞掉它们；
+    /// /say、/me 只在内置服务器的 logger 上认（名字里可以再套一层方括号）。
+    /// </summary>
+    [Theory]
+    [InlineData("[OptiFine] OptiFine_1.20.1_HD_U_I6")]
+    [InlineData("[OptiFine] *** Reloading textures ***")]
+    [InlineData("[Indigo] Different rendering plugin detected; not applying Indigo.")]
+    [InlineData("[Amber] java.io.IOException: broken pipe")]
+    [InlineData("[LibGui] Loaded config")]
+    [InlineData("[forge] Found status: UP_TO_DATE Current: 47.2.0 Target: null")]
+    [InlineData("* Launching target 'forgeclient' with arguments")]
+    public void BracketedModLinesAreKept(string message)
+    {
+        var regex = new Regex(@"\A(?:" + ChatLogFilter.ChatRegex + @")\z");
+        Assert.False(regex.IsMatch(message));
+        Assert.False(ChatLogFilter.IsChat(message));
+        Assert.False(ChatLogFilter.IsChatLine("[12:00:00] [Render thread/WARN]: " + message));
+        Assert.False(ChatLogFilter.IsChatLine("[12:00:00] [Render thread/ERROR] [net.optifine.Config/]: " + message));
+        Assert.False(ChatLogFilter.IsChatLine($"""<log4j:Event logger="ewi" timestamp="1" level="WARN" thread="Render thread"><log4j:Message><![CDATA[{message}]]></log4j:Message></log4j:Event>"""));
+    }
+
+    [Theory]
+    [InlineData("[Server] restarting soon", true)]
+    [InlineData("[Not Secure] [Steve] said via /say", true)]
+    [InlineData("[[Red] Steve] hi", true)]
+    [InlineData("[Not Secure] [[Red] Team Steve] hi", true)]
+    [InlineData("* Steve waves", true)]
+    [InlineData("[[[Too] deep] Steve] hi", false)]
+    [InlineData("Steve joined the game", false)]
+    [InlineData("Saving chunks for level 'ServerLevel[World]'/minecraft:overworld", false)]
+    public void ServerLoggerAlsoCatchesSayAndMe(string message, bool chat)
+    {
+        var regex = new Regex(@"\A(?:" + ChatLogFilter.ServerChatRegex + @")\z");
+        Assert.Equal(chat, regex.IsMatch(message));
+        Assert.Equal(chat, ChatLogFilter.IsChat(message, fromServer: true));
+        if (message.StartsWith('[') || message.StartsWith('*')) Assert.False(ChatLogFilter.IsChat(message));
     }
 
     /// <summary>错误报告里的游戏输出：原版控制台是 XML 事件（消息在 CDATA 里），其他是带时间和线程前缀的文本。</summary>
@@ -117,6 +177,11 @@ public class ChatLogFilterTests
     [InlineData("[12:00:00] [Server thread/INFO]: <Steve> hi", true)]
     [InlineData("[12:00:00] [Server thread/INFO] [minecraft/MinecraftServer]: [Not Secure] <Steve> hi", true)]
     [InlineData("[12:00:00] [Server thread/INFO]: * Steve waves", true)]
+    [InlineData("[12:00:00] [Server thread/INFO]: [[Red] Steve] hi", true)]
+    [InlineData("[12:00:00] [Server thread/INFO] [minecraft/MinecraftServer]: [Steve] hi", true)]
+    [InlineData("""<log4j:Event logger="net.minecraft.server.MinecraftServer" timestamp="1" level="INFO" thread="Server thread"><log4j:Message><![CDATA[[Steve] hi]]></log4j:Message></log4j:Event>""", true)]
+    [InlineData("[12:00:00] [Render thread/INFO]: [Steve] hi", false)]
+    [InlineData("[Amber] <Steve> is not chat here", false)]
     [InlineData("[12:00:00] [Render thread/INFO]: Loading 42 recipes", false)]
     [InlineData("[12:00:00] [Render thread/INFO]: [System] [CHAT] hi", true)]
     public void ConsoleLinesAreRecognized(string line, bool chat) => Assert.Equal(chat, ChatLogFilter.IsChatLine(line));
@@ -150,7 +215,7 @@ public class ChatLogFilterTests
 
             Assert.Equal(target, ChatLogFilter.ExtractFromClasspath([other, core, loader], target));
             Assert.Contains("RollingRandomAccessFile", File.ReadAllText(target));
-            Assert.Contains("RegexFilter", File.ReadAllText(ChatLogFilter.Prepare(target)));
+            Assert.Contains("RegexFilter", File.ReadAllText(ChatLogFilter.Prepare(target, Path.Combine(dir, "logging"))));
 
             Assert.Null(ChatLogFilter.ExtractFromClasspath([core, Path.Combine(dir, "missing.jar")], Path.Combine(dir, "y.xml")));
             Assert.True(ChatLogFilter.UsesLog4j([core]));

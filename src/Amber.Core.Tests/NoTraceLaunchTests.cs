@@ -13,9 +13,12 @@ public sealed class NoTraceLaunchTests : IDisposable
 
     public NoTraceLaunchTests() => Directory.CreateDirectory(_game);
 
+    private readonly string _temp = Path.Combine(Path.GetTempPath(), "amber-notrace-root-" + Guid.NewGuid().ToString("N")[..8]);
+
     public void Dispose()
     {
         try { Directory.Delete(_game, true); } catch (IOException) { }
+        try { Directory.Delete(_temp, true); } catch (IOException) { }
     }
 
     private const string Log4j2 = """<Configuration><Appenders><RollingRandomAccessFile name="File" fileName="logs/latest.log"/></Appenders></Configuration>""";
@@ -38,13 +41,44 @@ public sealed class NoTraceLaunchTests : IDisposable
             $$$"""{"id":"{{{id}}}","type":"release","mainClass":"x","libraries":[{{{libs}}}],"logging":{},"arguments":{"game":[],"jvm":[]}}""");
     }
 
-    private List<string> Build(string id, List<string> notices) => new GameLauncher(new GameDirectory(_game)).BuildArguments(new LaunchOptions
+    private GameLauncher Launcher() => new(new GameDirectory(_game)) { NoTraceRoot = _temp };
+
+    private List<string> Build(string id, List<string> notices) => Build(id, notices, out _);
+
+    private List<string> Build(string id, List<string> notices, out string? noTraceDir) => Launcher().BuildArguments(new LaunchOptions
     {
         VersionId = id,
         JavaPath = "java",
         Session = new GameSession("Tester", Guid.NewGuid(), "0", "legacy"),
         NoTrace = true,
-    }, notices.Add);
+    }, notices.Add, out noTraceDir);
+
+    private static List<string> GameDirFiles(string root, string pattern) =>
+        Directory.EnumerateFiles(root, pattern, SearchOption.AllDirectories).ToList();
+
+    /// <summary>原版的日志配置：过滤后的配置写到 Amber 自己的临时目录，游戏目录（可能是真的 .minecraft）里不多出文件；用完能删。</summary>
+    [Fact]
+    public void VanillaConfigGoesToAmberTempDir()
+    {
+        var logDir = Directory.CreateDirectory(Path.Combine(_game, "assets", "log_configs")).FullName;
+        File.WriteAllText(Path.Combine(logDir, "client-1.12.xml"), Log4j2);
+        var dir = Directory.CreateDirectory(Path.Combine(_game, "versions", "v")).FullName;
+        File.WriteAllText(Path.Combine(dir, "v.json"),
+            """{"id":"v","type":"release","mainClass":"x","libraries":[],"logging":{"client":{"argument":"-Dlog4j.configurationFile=${path}","file":{"id":"client-1.12.xml","sha1":"0","size":1,"url":"https://example.invalid/x"},"type":"log4j2-xml"}},"arguments":{"game":[],"jvm":[]}}""");
+        var args = Build("v", [], out var noTraceDir);
+        var arg = Assert.Single(args, a => a.StartsWith("-Dlog4j.configurationFile=", StringComparison.Ordinal));
+        var path = arg["-Dlog4j.configurationFile=".Length..];
+        Assert.StartsWith(_temp, path, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(noTraceDir);
+        Assert.Contains("RegexFilter", File.ReadAllText(path));
+        Assert.Empty(GameDirFiles(_game, "*.amber-notrace.xml"));
+
+        Launcher().DeleteNoTraceDir(noTraceDir);
+        Assert.False(Directory.Exists(noTraceDir));
+        // 只删 NoTraceRoot 下面的目录。
+        Launcher().DeleteNoTraceDir(logDir);
+        Assert.True(File.Exists(Path.Combine(logDir, "client-1.12.xml")));
+    }
 
     [Fact]
     public void ForgeUsesLoaderConfig()
@@ -55,8 +89,10 @@ public sealed class NoTraceLaunchTests : IDisposable
         var notices = new List<string>();
         var args = Build("forge-x", notices);
         var arg = Assert.Single(args, a => a.StartsWith("-Dlog4j.configurationFile=", StringComparison.Ordinal));
+        Assert.StartsWith(_temp, arg["-Dlog4j.configurationFile=".Length..], StringComparison.OrdinalIgnoreCase);
         Assert.Contains("RegexFilter", File.ReadAllText(arg["-Dlog4j.configurationFile=".Length..]));
         Assert.Equal([L.T("core.launch.notrace.on")], notices);
+        Assert.Empty(GameDirFiles(_game, "*log4j2*.xml").Where(f => !f.EndsWith(".jar", StringComparison.Ordinal)));
     }
 
     [Fact]
