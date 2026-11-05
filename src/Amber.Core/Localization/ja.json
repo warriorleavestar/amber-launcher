@@ -1055,5 +1055,6 @@
   "multiplayer.matrix.accept": "同意する",
   "multiplayer.matrix.decline": "同意しない",
   "multiplayer.matrix.request_status": "ホストが全条件テストを求めています。直接接続のカードで確認してください",
-  "core.game.directory.unsafepath": "バージョンファイル内の安全でないパスを拒否しました：{0}"
+  "core.game.directory.unsafepath": "バージョンファイル内の安全でないパスを拒否しました：{0}",
+  "core.mp.punch.controlerror": "処理できない制御パケットを破棄しました（{0}）"
 }

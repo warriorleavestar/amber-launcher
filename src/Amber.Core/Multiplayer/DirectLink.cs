@@ -436,39 +436,50 @@ public sealed class DirectBridge : IAsyncDisposable
             }
             if (!Verify(packet)) continue;
             var payload = packet[1..^TagLength].ToArray();
-            switch (type)
+            // 对方发来的内容不可信：处理一个包时出任何错（坏 JSON、字段类型不对、事件处理抛异常）都只丢掉这个包、记一笔，
+            // 不能让共用的接收循环停掉。
+            try
             {
-                case Probe:
-                    // 对方是同一侧（房主收到房主的探测）就不理，防止自己连自己。
-                    if (payload.Length >= 1 && payload[0] == (_isHost ? 1 : 0)) break;
-                    await SendRawAsync(Seal(ProbeAck, payload), from, _cts.Token);
-                    Accept(from);
-                    break;
-                case ProbeAck:
-                    Accept(from);
-                    break;
-                case Ping when _peers.TryGetValue(from, out var p1):
-                    p1.LastSeen = DateTime.UtcNow;
-                    await SendRawAsync(Seal(Pong, payload), from, _cts.Token);
-                    break;
-                case Pong when _peers.TryGetValue(from, out var p2) && payload.Length >= 4:
-                    p2.LastSeen = DateTime.UtcNow;
-                    var seq = BinaryPrimitives.ReadUInt32BigEndian(payload);
-                    if (p2.PendingPings.TryRemove(seq, out var sentAt))
-                    {
-                        Interlocked.Increment(ref p2.PongsReceived);
-                        var rtt = _clock.Elapsed.TotalMilliseconds - sentAt / 1000.0;
-                        p2.RttMs = p2.RttMs is { } old ? old * 0.7 + rtt * 0.3 : rtt;
-                    }
-                    break;
-                case Control when _peers.TryGetValue(from, out var p3):
-                    try
-                    {
-                        if (JsonNode.Parse(payload) is JsonObject json) ControlReceived?.Invoke(p3, json);
-                    }
-                    catch (JsonException) { }
-                    break;
+                await HandleAuthenticatedAsync(from, type, payload);
             }
+            catch (Exception e) when (e is not OperationCanceledException || !_cts.IsCancellationRequested)
+            {
+                if (e is ObjectDisposedException && _cts.IsCancellationRequested) return;
+                _log(L.F("core.mp.punch.controlerror", e.GetType().Name));
+            }
+        }
+    }
+
+    private async Task HandleAuthenticatedAsync(IPEndPoint from, byte type, byte[] payload)
+    {
+        switch (type)
+        {
+            case Probe:
+                // 对方是同一侧（房主收到房主的探测）就不理，防止自己连自己。
+                if (payload.Length >= 1 && payload[0] == (_isHost ? 1 : 0)) break;
+                await SendRawAsync(Seal(ProbeAck, payload), from, _cts.Token);
+                Accept(from);
+                break;
+            case ProbeAck:
+                Accept(from);
+                break;
+            case Ping when _peers.TryGetValue(from, out var p1):
+                p1.LastSeen = DateTime.UtcNow;
+                await SendRawAsync(Seal(Pong, payload), from, _cts.Token);
+                break;
+            case Pong when _peers.TryGetValue(from, out var p2) && payload.Length >= 4:
+                p2.LastSeen = DateTime.UtcNow;
+                var seq = BinaryPrimitives.ReadUInt32BigEndian(payload);
+                if (p2.PendingPings.TryRemove(seq, out var sentAt))
+                {
+                    Interlocked.Increment(ref p2.PongsReceived);
+                    var rtt = _clock.Elapsed.TotalMilliseconds - sentAt / 1000.0;
+                    p2.RttMs = p2.RttMs is { } old ? old * 0.7 + rtt * 0.3 : rtt;
+                }
+                break;
+            case Control when _peers.TryGetValue(from, out var p3):
+                if (JsonNode.Parse(payload) is JsonObject json) ControlReceived?.Invoke(p3, json);
+                break;
         }
     }
 

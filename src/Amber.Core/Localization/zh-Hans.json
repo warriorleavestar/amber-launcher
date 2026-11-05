@@ -1055,5 +1055,6 @@
   "multiplayer.matrix.accept": "同意测试",
   "multiplayer.matrix.decline": "不同意",
   "multiplayer.matrix.request_status": "房主请求全条件测试，请在直连卡片里确认",
-  "core.game.directory.unsafepath": "版本文件里的路径不安全，已拒绝：{0}"
+  "core.game.directory.unsafepath": "版本文件里的路径不安全，已拒绝：{0}",
+  "core.mp.punch.controlerror": "丢掉一个处理不了的控制包（{0}）"
 }

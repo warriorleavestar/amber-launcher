@@ -1083,5 +1083,6 @@
   "multiplayer.matrix.accept": "Agree",
   "multiplayer.matrix.decline": "Decline",
   "multiplayer.matrix.request_status": "The host asked for an all-condition test. Confirm it in the direct connection card",
-  "core.game.directory.unsafepath": "Rejected an unsafe path in the version file: {0}"
+  "core.game.directory.unsafepath": "Rejected an unsafe path in the version file: {0}",
+  "core.mp.punch.controlerror": "Dropped a control packet that couldn't be handled ({0})"
 }

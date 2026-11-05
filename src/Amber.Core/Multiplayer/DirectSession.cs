@@ -246,7 +246,7 @@ public sealed class DirectSession : IAsyncDisposable
 
     private void OnControl(DirectPeer peer, JsonObject message)
     {
-        switch (message["op"]?.GetValue<string>())
+        switch (Str(message, "op"))
         {
             case "hello" when IsHost:
                 if (LocalCode is { } local && TryParseHello(message, local.Session, out var nat, out var candidates))

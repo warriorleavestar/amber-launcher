@@ -84,6 +84,33 @@ public sealed class DirectHelloTests
         Assert.True(ContainsReversible(Encoding.UTF8.GetBytes(new JsonObject { ["op"] = "hello", ["code"] = GuestCode().Encode() }.ToJsonString()), Room.Secret));
     }
 
+    /// <summary>R9：控制消息处理抛异常（op 是数字、坏 JSON、处理程序出错）只丢掉那一个包，接收循环继续收。</summary>
+    [Fact]
+    public async Task BadControlPacketDoesNotStopReceiveLoop()
+    {
+        var logs = new List<string>();
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, l => { lock (logs) logs.Add(l); });
+        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+        var got = new List<string>();
+        var second = new TaskCompletionSource();
+        host.ControlReceived += (_, json) =>
+        {
+            // 和 DirectSession 以前的写法一样：op 不是字符串时 GetValue 抛 InvalidOperationException。
+            var op = json["op"]!.GetValue<string>();
+            lock (got) got.Add(op);
+            if (op == "after") second.TrySetResult();
+        };
+        var hostWait = host.WaitForPeerAsync(TimeSpan.FromSeconds(10));
+        var peer = await guest.PunchAsync([new Candidate(PathKind.Lan, new IPEndPoint(IPAddress.Loopback, host.SocketEndPoint.Port))], NatKind.Cone, TimeSpan.FromSeconds(10));
+        Assert.NotNull(peer);
+        await hostWait;
+        await guest.SendControlAsync(peer!, new JsonObject { ["op"] = 5 });
+        await guest.SendControlAsync(peer!, new JsonObject { ["op"] = "after" });
+        await second.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(["after"], got);
+        lock (logs) Assert.Contains(logs, l => l.Contains(nameof(InvalidOperationException)));
+    }
+
     /// <summary>原文、十六进制、Base64 / Base64url（任意对齐）里有没有 secret。</summary>
     private static bool ContainsReversible(byte[] data, string secret)
     {
