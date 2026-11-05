@@ -8,6 +8,9 @@ internal static class Program
     public static void Main(string[] args)
     {
         StartupTrace.Mark("main");
+        // 开发用：伪本地化，检查长译文和漏翻的文字。
+        if (args.Contains("--pseudo-loc") || Environment.GetEnvironmentVariable("AMBER_PSEUDO_LOC") == "1")
+            Amber.Core.Localization.L.Pseudo = true;
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 
