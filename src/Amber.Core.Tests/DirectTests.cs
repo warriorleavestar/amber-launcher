@@ -211,6 +211,40 @@ public class TestMatrixTests
     }
 
     [Fact]
+    public async Task CallerCancellationWaitsForStepCleanup()
+    {
+        using var stop = new CancellationTokenSource();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleaning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleaned = false;
+        var runner = new FakeRunner(async (step, ct) =>
+        {
+            started.SetResult();
+            try { await Task.Delay(Timeout.Infinite, ct); }
+            finally
+            {
+                cleaning.SetResult();
+                await release.Task;
+                cleaned = true;
+            }
+            return new MatrixResult(step, true);
+        });
+        var run = TestMatrix.RunAsync([new(1, RouteKind.Direct, PathKind.Lan, false, false)],
+            runner, TimeSpan.FromSeconds(30), ct: stop.Token);
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            stop.Cancel();
+            await cleaning.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(run.IsCompleted);
+        }
+        finally { release.TrySetResult(); }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(cleaned);
+    }
+
+    [Fact]
     public async Task RunnerTimeoutsErrorsAndSkips()
     {
         var steps = new List<MatrixStep>
