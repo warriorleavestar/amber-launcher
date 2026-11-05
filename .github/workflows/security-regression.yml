@@ -1,0 +1,57 @@
+name: security-regression
+
+on:
+  pull_request:
+    paths: ['src/**', '.github/workflows/security-regression.yml']
+  push:
+    branches: [main]
+    paths: ['src/**', '.github/workflows/security-regression.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  security-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
+        with:
+          dotnet-version: '10.0.x'
+
+      # 双监听测试使用第二个回环地址；仅补齐本次 runner 缺失的别名。
+      - name: Prepare secondary loopback fixture
+        if: runner.os == 'macOS'
+        run: |
+          if [[ "$(ifconfig lo0)" != *"inet 127.0.0.2 "* ]]; then
+            sudo ifconfig lo0 alias 127.0.0.2 netmask 255.255.255.255 up
+            echo "AMBER_ADDED_TEST_LOOPBACK=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Security boundary regression tests
+        run: >-
+          dotnet test Amber.Core.Tests -c Release
+          --filter "FullyQualifiedName~ProcessBoundarySecurityTests|FullyQualifiedName~InputParsingSecurityTests|FullyQualifiedName~WorldImportTests|FullyQualifiedName~ServerStatusTests|FullyQualifiedName~SpeedTestServerTests|FullyQualifiedName~SpeedTestSecurityTests|FullyQualifiedName~NbtBudgetTests|FullyQualifiedName~TestMatrixTests"
+          --logger "trx;LogFileName=security.trx" --results-directory ../out/security-tests
+
+      - name: Upload security test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: security-tests-${{ matrix.os }}
+          path: out/security-tests
+          if-no-files-found: warn
+
+      - name: Remove secondary loopback fixture
+        if: always() && runner.os == 'macOS' && env.AMBER_ADDED_TEST_LOOPBACK == 'true'
+        run: sudo ifconfig lo0 -alias 127.0.0.2

@@ -147,7 +147,7 @@ public static class Toasts
             Show(L.F("trash.restore_failed", Describe(e)), NotificationType.Error);
             return;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
         {
             Show(L.F("trash.restore_failed", ErrorText.Describe(e)), NotificationType.Error);
             return;

@@ -57,9 +57,8 @@ public static class DatapackManager
         off.Items.RemoveAll(i => i as string == id);
         (enabled ? on : off).Items.Add(id);
 
-        // 和游戏自己存档一样，先把旧文件留成 level.dat_old。
-        File.Copy(levelDat, levelDat + "_old", true);
-        Nbt.WriteFile(levelDat, root, gzip: true);
+        // 输出通过 NBT 预算检查后，再把旧文件留成 level.dat_old。
+        Nbt.WriteFile(levelDat, root, gzip: true, Nbt.DefaultReadLimits, backupPath: levelDat + "_old");
     }
 
     /// <summary>复制数据包到世界里。文件夹形式的要有 pack.mcmeta，文件要是 zip。</summary>

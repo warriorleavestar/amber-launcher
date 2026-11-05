@@ -157,6 +157,7 @@ public sealed class SpeedTestServer : IAsyncDisposable
     private readonly List<TcpListener> _listeners = [];
     private readonly List<Task> _acceptLoops = [];
     private readonly HashSet<Task> _sessions = [];
+    private readonly HashSet<Socket> _clients = [];
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _slots;
     private readonly Limits _limits;
@@ -204,34 +205,36 @@ public sealed class SpeedTestServer : IAsyncDisposable
 
     private async Task AcceptLoopAsync(TcpListener listener)
     {
+        var listenSocket = listener.Server;
         while (!_cts.IsCancellationRequested)
         {
-            TcpClient client;
+            Socket? client = null;
             try
             {
-                client = await listener.AcceptTcpClientAsync(_cts.Token);
+                // 接受前就持有套接字，框架在取消/关闭交界抛异常时也能显式释放。
+                client = new Socket(listenSocket.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+                await listenSocket.AcceptAsync(client, _cts.Token);
+                lock (_gate)
+                {
+                    // 所有监听地址共用预算；满额时立即关闭，不堆积等待任务。
+                    if (_disposed || !_slots.Wait(0)) continue;
+                    _clients.Add(client);
+                    var task = HandleClientAsync(client);
+                    client = null; // 成功登记后，连接任务与 Dispose 负责关闭。
+                    _sessions.Add(task);
+                    _ = task.ContinueWith(completed => { lock (_gate) _sessions.Remove(completed); },
+                        CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                }
             }
             catch (Exception e) when (e is OperationCanceledException or SocketException or ObjectDisposedException)
             {
                 return;
             }
-            lock (_gate)
-            {
-                // 所有监听地址共用预算；满额时立即关闭，不堆积等待任务。
-                if (_disposed || !_slots.Wait(0))
-                {
-                    client.Dispose();
-                    continue;
-                }
-                var task = HandleClientAsync(client);
-                _sessions.Add(task);
-                _ = task.ContinueWith(completed => { lock (_gate) _sessions.Remove(completed); },
-                    CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-            }
+            finally { client?.Dispose(); }
         }
     }
 
-    private async Task HandleClientAsync(TcpClient client)
+    private async Task HandleClientAsync(Socket client)
     {
         try
         {
@@ -239,7 +242,7 @@ public sealed class SpeedTestServer : IAsyncDisposable
             using (var total = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token))
             {
                 total.CancelAfter(_limits.Total);
-                var stream = client.GetStream();
+                using var stream = new NetworkStream(client, ownsSocket: false);
                 var header = new byte[8];
                 using (var handshake = Deadline(total.Token, _limits.Handshake))
                     await stream.ReadExactlyAsync(header, handshake.Token);
@@ -259,7 +262,11 @@ public sealed class SpeedTestServer : IAsyncDisposable
             }
         }
         catch (Exception e) when (e is IOException or OperationCanceledException or SocketException or ObjectDisposedException) { }
-        finally { _slots.Release(); }
+        finally
+        {
+            lock (_gate) _clients.Remove(client);
+            _slots.Release();
+        }
     }
 
     private static CancellationTokenSource Deadline(CancellationToken ct, TimeSpan timeout)
@@ -277,6 +284,7 @@ public sealed class SpeedTestServer : IAsyncDisposable
             _disposed = true;
             _cts.Cancel();
             foreach (var listener in _listeners) listener.Stop();
+            foreach (var client in _clients.ToArray()) client.Dispose();
             _disposeTask = CompleteDisposeAsync(_acceptLoops.Concat(_sessions).ToArray());
             return new ValueTask(_disposeTask);
         }

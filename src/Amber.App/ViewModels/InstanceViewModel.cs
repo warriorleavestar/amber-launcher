@@ -76,6 +76,8 @@ public sealed record WorldItem(WorldInfo World) : LocalizedRecord
 
 public sealed partial class DatapackItem(LocalDatapack pack, string worldPath, Action<string> report) : LocalizedObservable
 {
+    private bool _savedEnabled = pack.Enabled;
+
     public LocalDatapack Pack { get; } = pack;
     public string Name => Pack.FileName;
     public string Meta => (Pack.IsFolder ? L.T("common.folder") : L.T("common.archive")) + (string.IsNullOrWhiteSpace(Pack.Description) ? "" : " · " + Pack.Description.ReplaceLineEndings(" "));
@@ -85,15 +87,18 @@ public sealed partial class DatapackItem(LocalDatapack pack, string worldPath, A
 
     partial void OnEnabledChanged(bool value)
     {
+        if (value == _savedEnabled) return;
         try
         {
             DatapackManager.SetEnabled(worldPath, Pack.FileName, value);
+            _savedEnabled = value;
             report(L.F("instance.datapacks.toggled", value ? L.T("common.enabled") : L.T("common.disabled"), Pack.FileName));
         }
         catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
         {
             report(L.F("instance.status.change_failed", e.Message));
-            Dispatcher.UIThread.Post(() => Enabled = !value);
+            // 恢复勾选只更新界面，不再次写入刚刚被拒绝的 NBT。
+            Dispatcher.UIThread.Post(() => Enabled = _savedEnabled);
         }
     }
 }
@@ -153,6 +158,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private readonly LauncherService _service;
     private readonly HashSet<int> _loadedTabs = [];
     private CancellationTokenSource? _workCts;
+    private CancellationTokenSource? _serverQueriesCts;
 
     public override string Title => L.T("instance.title");
     public override string Icon => "M4 4h16v5H4zM4 11h16v4H4zM4 17h16v3H4z";
@@ -190,6 +196,13 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     public InstanceViewModel(LauncherService service)
     {
         _service = service;
+        // PageViewModel 只有进入回调；离开时通过已有属性通知撤销服务器查询。
+        PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(IsCurrent) || IsCurrent) return;
+            CancelServerQueries();
+            _loadedTabs.Remove(6);
+        };
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
         // 别处（启动页、后台装完的安装）换了当前实例：这一页正在用、或者正在做事（导出、导入世界、改设置）时不跟着换，
         // 免得操作落到别的实例上；下次打开这一页再跟上。
@@ -226,6 +239,13 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     {
         // 回到这一页：跟上别处换的当前实例。
         if (_active && !IsBusy && _service.CurrentInstance is { } id && Instances.Contains(id) && id != SelectedId) SelectedId = id;
+        if (TabIndex == 6) LoadTab(6);
+    }
+
+    partial void OnCurrentChanged(GameInstance? value)
+    {
+        CancelServerQueries();
+        _loadedTabs.Remove(6);
     }
 
     partial void OnSelectedIdChanged(string? value)
@@ -247,7 +267,15 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
     }
 
-    partial void OnTabIndexChanged(int value) => LoadTab(value);
+    partial void OnTabIndexChanged(int value)
+    {
+        if (value != 6)
+        {
+            CancelServerQueries();
+            _loadedTabs.Remove(6);
+        }
+        LoadTab(value);
+    }
 
     private void LoadTab(int tab)
     {
@@ -1012,21 +1040,49 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     private void LoadServers()
     {
+        CancelServerQueries();
+        if (Current is not { } current || !IsCurrent || TabIndex != 6)
+        {
+            _loadedTabs.Remove(6);
+            return;
+        }
         Servers.Clear();
-        foreach (var s in ServerList.Read(Current!.WorkDir))
+        _serverQueriesCts = new CancellationTokenSource();
+        var ct = _serverQueriesCts.Token;
+        foreach (var s in ServerList.Read(current.WorkDir))
         {
             var item = new ServerItem(s);
             Servers.Add(item);
-            _ = PingAsync(item);
+            _ = PingAsync(item, ct);
         }
     }
 
-    private static async Task PingAsync(ServerItem item)
+    private void CancelServerQueries()
     {
-        var status = await ServerList.PingAsync(item.Address);
-        item.StatusText = status.Online
-            ? L.F("instance.servers.online", status.Players, status.MaxPlayers, status.VersionName, status.PingMs is { } ms ? $" · {ms} ms" : "")
-            : L.F("instance.servers.offline", status.Error);
+        var previous = _serverQueriesCts;
+        _serverQueriesCts = null;
+        previous?.Cancel();
+        previous?.Dispose();
+    }
+
+    private static async Task PingAsync(ServerItem item, CancellationToken ct)
+    {
+        try
+        {
+            var status = await ServerList.PingAsync(item.Address, ct: ct).ConfigureAwait(false);
+            Dispatcher.UIThread.Post(() =>
+            {
+                // 结果排到界面线程之前，也可能已经刷新、切实例或离开页面。
+                if (ct.IsCancellationRequested) return;
+                item.StatusText = status.Online
+                    ? L.F("instance.servers.online", status.Players, status.MaxPlayers, status.VersionName, status.PingMs is { } ms ? $" · {ms} ms" : "")
+                    : L.F("instance.servers.offline", status.Error);
+            });
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            // Core 在取消时也可能重抛正在进行的套接字/读取错误；旧批次不再更新状态。
+        }
     }
 
     [RelayCommand]
@@ -1035,30 +1091,44 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c || string.IsNullOrWhiteSpace(NewServerAddress)) return;
         var address = NewServerAddress.Trim();
         var name = string.IsNullOrWhiteSpace(NewServerName) ? address : NewServerName.Trim();
-        System.IO.Directory.CreateDirectory(c.WorkDir);
-        ServerList.Add(c.WorkDir, new ServerEntry(name, address));
-        NewServerName = "";
-        NewServerAddress = "";
-        LoadServers();
+        try
+        {
+            System.IO.Directory.CreateDirectory(c.WorkDir);
+            ServerList.Add(c.WorkDir, new ServerEntry(name, address));
+            NewServerName = "";
+            NewServerAddress = "";
+            LoadServers();
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            SetStatus(StatusMessage.Failure("instance.status.change_failed", e, ErrorText.Of(e)));
+        }
     }
 
     [RelayCommand]
     private void RemoveServer(ServerItem? item)
     {
         if (Current is not { } c || item is null) return;
-        var index = Servers.IndexOf(item);
-        var removed = ServerList.Remove(c.WorkDir, item.Address, item.Name, index);
-        Servers.Remove(item);
-        SetStatus(StatusMessage.Success("trash.deleted", item.Name));
-        if (removed is null) return;
-        var workDir = c.WorkDir;
-        Toasts.Removed(item.Name, () =>
+        try
         {
-            ServerList.Restore(workDir, removed);
-            // 还在看同一个实例时把这一项放回列表原来的位置。
-            if (Current?.WorkDir == workDir && !Servers.Contains(item)) Servers.Insert(Math.Clamp(index, 0, Servers.Count), item);
-            SetStatus(StatusMessage.Success("trash.restored", item.Name));
-        });
+            var index = Servers.IndexOf(item);
+            var removed = ServerList.Remove(c.WorkDir, item.Address, item.Name, index);
+            Servers.Remove(item);
+            SetStatus(StatusMessage.Success("trash.deleted", item.Name));
+            if (removed is null) return;
+            var workDir = c.WorkDir;
+            Toasts.Removed(item.Name, () =>
+            {
+                ServerList.Restore(workDir, removed);
+                // 还在看同一个实例时把这一项放回列表原来的位置。
+                if (Current?.WorkDir == workDir && !Servers.Contains(item)) Servers.Insert(Math.Clamp(index, 0, Servers.Count), item);
+                SetStatus(StatusMessage.Success("trash.restored", item.Name));
+            });
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, ErrorText.Of(e)));
+        }
     }
 
     [RelayCommand]

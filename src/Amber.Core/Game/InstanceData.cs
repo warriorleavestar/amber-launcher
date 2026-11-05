@@ -1,4 +1,5 @@
 using Amber.Core.Localization;
+using Amber.Core.Content;
 using System.IO.Compression;
 using System.Net.Sockets;
 using System.Text;
@@ -81,9 +82,10 @@ public static class WorldManager
         if (level.Entry is null) throw new InvalidDataException(L.T("core.game.world.missinglevel"));
         var prefix = level.Name[..^"level.dat".Length];
         var baseName = prefix.TrimEnd('/').Split('/').LastOrDefault(s => s.Length > 0) ?? Path.GetFileNameWithoutExtension(zipPath);
-        GameDirectory.CheckId(baseName);
+        CheckWorldComponent(baseName);
         var folder = baseName;
-        for (var i = 2; Directory.Exists(GameDirectory.Contained(savesDir, folder)) || File.Exists(GameDirectory.Contained(savesDir, folder)); i++)
+        for (var i = 2; Directory.Exists(GameDirectory.Contained(savesDir, folder)) || File.Exists(GameDirectory.Contained(savesDir, folder))
+            || new DirectoryInfo(GameDirectory.Contained(savesDir, folder)).LinkTarget is not null; i++)
             folder = $"{baseName} ({i})";
 
         var target = GameDirectory.Contained(savesDir, folder);
@@ -102,8 +104,16 @@ public static class WorldManager
         var normalized = name.Replace('\\', '/');
         if (normalized.Length == 0 || normalized.StartsWith('/') || normalized.Contains(':'))
             throw new InvalidDataException(L.F("core.game.world.unsafepath", name));
-        foreach (var part in normalized.TrimEnd('/').Split('/')) GameDirectory.CheckId(part);
+        foreach (var part in normalized.TrimEnd('/').Split('/')) CheckWorldComponent(part);
         return normalized;
+    }
+
+    private static void CheckWorldComponent(string name)
+    {
+        GameDirectory.CheckId(name);
+        // 世界可跨平台移动，不能让 Windows 把归档名解释成设备或改写为另一个路径。
+        if (name.Any(c => c < 32) || name.IndexOfAny(['"', '<', '>', '|', '?', '*']) >= 0 || ModpackService.IsDeviceName(name))
+            throw new InvalidDataException(L.F("core.game.world.unsafepath", name));
     }
 }
 
@@ -122,6 +132,7 @@ public sealed record RemovedServer(int Index, Dictionary<string, object> Raw)
 public static class ServerList
 {
     internal const int MaxStatusPacketBytes = 1024 * 1024;
+    private static readonly SemaphoreSlim PingSlots = new(4, 4);
     public static List<ServerEntry> Read(string workDir)
     {
         var path = Path.Combine(workDir, "servers.dat");
@@ -213,13 +224,17 @@ public static class ServerList
             : (address, 25565);
     }
 
-    /// <summary>服务器列表 Ping（1.7+ 协议的状态查询）。超时或失败返回离线状态，不抛异常。</summary>
+    /// <summary>服务器列表 Ping（1.7+ 协议的状态查询）。取得查询名额后才开始网络超时；排队可由 ct 取消。</summary>
     public static async Task<ServerStatus> PingAsync(string address, TimeSpan? timeout = null, CancellationToken ct = default)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        linked.CancelAfter(timeout ?? TimeSpan.FromSeconds(5));
+        var acquired = false;
         try
         {
+            // 所有 Core 调用者共享连接/帧预算，排队不会提前消耗正常服务器的响应时间。
+            await PingSlots.WaitAsync(ct);
+            acquired = true;
+            linked.CancelAfter(timeout ?? TimeSpan.FromSeconds(5));
             var (host, port) = ParseAddress(address);
             using var tcp = new TcpClient();
             await tcp.ConnectAsync(host, port, linked.Token);
@@ -259,6 +274,10 @@ public static class ServerList
         {
             if (ct.IsCancellationRequested) throw;
             return new ServerStatus(false, null, null, null, null, null, e is OperationCanceledException ? L.T("core.mp.server.timeout") : e.Message);
+        }
+        finally
+        {
+            if (acquired) PingSlots.Release();
         }
     }
 

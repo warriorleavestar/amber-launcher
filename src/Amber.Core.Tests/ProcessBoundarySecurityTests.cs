@@ -53,6 +53,23 @@ public sealed class ProcessBoundarySecurityTests : IDisposable
     }
 
     [Fact]
+    public void NativeJunction_MissingTargetLeavesLinkAvailableForRetry()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var target = Path.Combine(_root, "later & %TEMP% 中文");
+        var link = Path.Combine(_root, "retry-link");
+        Assert.Throws<DirectoryNotFoundException>(() => WindowsJunction.Create(link, target));
+        Assert.False(Directory.Exists(link));
+
+        Directory.CreateDirectory(target);
+        File.WriteAllText(Path.Combine(target, "keep.txt"), "original");
+        WindowsJunction.Create(link, target);
+        try { Assert.Equal("original", File.ReadAllText(Path.Combine(link, "keep.txt"))); }
+        finally { Directory.Delete(link); }
+        Assert.Equal("original", File.ReadAllText(Path.Combine(target, "keep.txt")));
+    }
+
+    [Fact]
     public void NativeJunction_AcceptsExtendedLocalPathsAndDriveRootTargets()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -192,6 +209,30 @@ public sealed class ProcessBoundarySecurityTests : IDisposable
         var script = Path.Combine(_root, "run.bat");
         Assert.Throws<ArgumentException>(() => Toolbox.WriteLaunchScript(script, executable, work, [argument], ""));
         Assert.False(File.Exists(script));
+
+        File.WriteAllText(script, "keep existing script");
+        Assert.Throws<ArgumentException>(() => Toolbox.WriteLaunchScript(script, executable, work, [argument], ""));
+        Assert.Equal("keep existing script", File.ReadAllText(script));
+    }
+
+    [Fact]
+    public async Task ExportedWindowsScript_MissingWorkingDirectoryDoesNotLaunchChild()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var marker = Path.Combine(_root, "unexpected-child.txt");
+        var script = Path.Combine(_root, "missing-work.bat");
+        var powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+        Toolbox.WriteLaunchScript(script, powershell, Path.Combine(_root, "missing"),
+            ["-NoProfile", "-NonInteractive", "-Command", "[IO.File]::WriteAllText($env:AMBER_TEST_MARKER, 'unexpected')"], "");
+        var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+        {
+            UseShellExecute = false,
+            WorkingDirectory = _root,
+            Arguments = "/d /v:on /s /c \"\"" + script + "\"\"",
+        };
+        start.Environment["AMBER_TEST_MARKER"] = marker;
+        Assert.Equal(1, await RunAsync(start, allowedFailure: 1));
+        Assert.False(File.Exists(marker));
     }
 
     [Theory]
@@ -232,7 +273,7 @@ public sealed class ProcessBoundarySecurityTests : IDisposable
         Assert.Equal(normalized, update!.Url);
     }
 
-    private static async Task<int> RunAsync(ProcessStartInfo start)
+    private static async Task<int> RunAsync(ProcessStartInfo start, int? allowedFailure = null)
     {
         start.RedirectStandardOutput = true;
         start.RedirectStandardError = true;
@@ -249,7 +290,7 @@ public sealed class ProcessBoundarySecurityTests : IDisposable
         }
         var errors = await stderr;
         var output = await stdout;
-        Assert.True(process.ExitCode is 0 or 23 || (process.ExitCode == 1 && start.FileName == "/bin/sh"),
+        Assert.True(process.ExitCode is 0 or 23 || process.ExitCode == allowedFailure || (process.ExitCode == 1 && start.FileName == "/bin/sh"),
             $"进程退出代码 {process.ExitCode}: {errors}\n{output}");
         return process.ExitCode;
     }
