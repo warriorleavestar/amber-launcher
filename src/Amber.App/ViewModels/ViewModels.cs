@@ -220,6 +220,7 @@ public sealed partial class SettingsViewModel : PageViewModel
     [ObservableProperty] public partial string Concurrency { get; set; }
     [ObservableProperty] public partial JavaOption? SelectedJava { get; set; }
     [ObservableProperty] public partial bool AutoJavaDownload { get; set; }
+    [ObservableProperty] public partial bool NoTrace { get; set; }
     [ObservableProperty] public partial bool IsolateVersions { get; set; }
     [ObservableProperty] public partial string WindowWidth { get; set; }
     [ObservableProperty] public partial string WindowHeight { get; set; }
@@ -257,6 +258,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         });
         Concurrency = s.DownloadConcurrency.ToString();
         AutoJavaDownload = s.AutoJavaDownload;
+        NoTrace = s.NoTrace;
         IsolateVersions = s.IsolateVersions;
         WindowWidth = s.WindowWidth?.ToString() ?? "";
         WindowHeight = s.WindowHeight?.ToString() ?? "";
@@ -327,6 +329,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         Concurrency = s.DownloadConcurrency.ToString();
         s.JavaPath = SelectedJava?.Path;
         s.AutoJavaDownload = AutoJavaDownload;
+        s.NoTrace = NoTrace;
         s.IsolateVersions = IsolateVersions;
         s.WindowWidth = int.TryParse(WindowWidth, out var w) && w > 0 ? w : null;
         s.WindowHeight = int.TryParse(WindowHeight, out var h) && h > 0 ? h : null;

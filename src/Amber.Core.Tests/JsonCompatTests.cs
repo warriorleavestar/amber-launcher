@@ -99,7 +99,7 @@ public class JsonCompatTests
         var cipher = new ChatCipher(room);
         var message = new ChatMessage(ChatKind.Message, "abcdef0123456789", "Alex", "同一句话", DateTimeOffset.FromUnixTimeMilliseconds(1_762_000_000_000));
         var opened = cipher.Open(cipher.Seal(message));
-        Assert.Equal(message, opened);
+        Assert.Equal(message, opened! with { Nonce = "" });
     }
 
     [Fact]

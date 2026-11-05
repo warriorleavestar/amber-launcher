@@ -35,6 +35,26 @@ public sealed partial class MultiplayerViewModel
     [ObservableProperty] public partial bool MatrixRunning { get; set; }
     [ObservableProperty] public partial bool MatrixFullLan { get; set; }
 
+    /// <summary>加入方：房主请求全条件测试，等用户确认。</summary>
+    [ObservableProperty] public partial bool TestRequestPending { get; set; }
+
+    /// <summary>加入方：正在跑房主发起的测试（显示“测试中”横幅和“停止测试”）。</summary>
+    [ObservableProperty] public partial bool GuestTestRunning { get; set; }
+
+    [ObservableProperty] public partial string GuestTestBanner { get; set; } = "";
+
+    /// <summary>测试把出口设成了房主：测试前的出口设置，结束时还原。</summary>
+    private string? _exitBeforeTest;
+    private string? _guestTestRun;
+    [ObservableProperty] public partial bool TestRequestWantsFullLan { get; set; }
+    [ObservableProperty] public partial bool TestAllowFullLan { get; set; }
+    [ObservableProperty] public partial bool TestAllowExit { get; set; }
+
+    partial void OnTestAllowFullLanChanged(bool value)
+    {
+        if (!value) TestAllowExit = false;
+    }
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDirectHost))]
     public partial bool IsDirect { get; set; }
@@ -176,6 +196,23 @@ public sealed partial class MultiplayerViewModel
             return;
         }
         var direct = new DirectSession(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier"), invite.Room, false, MakeDirectOptions(), _diag);
+        // 先订阅再加入：打通后房主可能马上发来测试请求。只认当前这个会话的事件（结束或换了会话就不管）。
+        direct.TestRequested += request => Dispatcher.UIThread.Post(() =>
+        {
+            // 事件排到界面线程时请求可能已经作废或撤回：只显示还在等确认的那个。
+            if (_direct != direct || direct.TestConsent.Pending?.Run != request.Run) return;
+            ShowTestRequest(request);
+        });
+        direct.GuestStepStarted += (run, step) => Dispatcher.UIThread.Post(() =>
+        {
+            if (_direct != direct || _guestTestRun != run || direct.TestConsent.ActiveRun != run) return;
+            OnGuestStep(step);
+        });
+        direct.TestEnded += run => Dispatcher.UIThread.Post(() =>
+        {
+            if (_direct != direct || _guestTestRun != run) return;
+            ResetGuestTest();
+        });
         try
         {
             SetStatus(StatusMessage.Info("multiplayer.direct.gathering_guest"));
@@ -198,6 +235,8 @@ public sealed partial class MultiplayerViewModel
             ChatStatus = L.T("multiplayer.chat.awaiting_host");
             Status = direct.UsingFallbackNode ? L.T("multiplayer.direct.fallback") : L.T("multiplayer.direct.connected");
             direct.GuestChatProbe = ChatProbeAsync;
+            // 万一请求在界面订阅前就到了（或者事件被错过）：按会话里记着的待确认请求补上。
+            if (direct.TestConsent.Pending is { } pending && !TestRequestPending) ShowTestRequest(pending);
         }
         catch (Exception e) when (e is DirectFailedException or OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
@@ -205,8 +244,67 @@ public sealed partial class MultiplayerViewModel
             _direct = null;
             IsDirect = false;
             Mode = "";
+            // 打洞期间可能已经收到测试请求：一起收起。
+            ResetGuestTest();
             SetStatus(StatusMessage.Failure("multiplayer.direct.connect_failed", e, ErrorText.Of(e)));
         }
+    }
+
+    private void ShowTestRequest(TestRequest request)
+    {
+        ResetGuestTest();
+        _guestTestRun = request.Run;
+        TestRequestWantsFullLan = request.WantsFullLan;
+        TestAllowFullLan = false;
+        TestAllowExit = false;
+        TestRequestPending = true;
+        SetStatus(StatusMessage.Info("multiplayer.matrix.request_status"));
+    }
+
+    /// <summary>加入方：测试的一步开始了。完整局域网/出口时显示提示；出口那几步把出口横幅也显示出来（经房主上网）。</summary>
+    private void OnGuestStep(MatrixStep step)
+    {
+        GuestTestRunning = true;
+        GuestTestBanner = step.Exit ? L.T("multiplayer.matrix.banner_exit")
+            : step.FullLan ? L.T("multiplayer.matrix.banner_full_lan")
+            : L.T("multiplayer.matrix.banner_running");
+        if (step.Exit)
+        {
+            _exitBeforeTest ??= ExitNodeIp;
+            ExitNodeIp = EasyTierArgs.HostIp;
+        }
+        else if (_exitBeforeTest is { } before)
+        {
+            ExitNodeIp = before;
+            _exitBeforeTest = null;
+        }
+    }
+
+    /// <summary>测试结束、会话结束：收起确认卡片和测试横幅，还原出口显示。</summary>
+    private void ResetGuestTest()
+    {
+        _guestTestRun = null;
+        TestRequestPending = false;
+        GuestTestRunning = false;
+        GuestTestBanner = "";
+        if (_exitBeforeTest is { } before)
+        {
+            ExitNodeIp = before;
+            _exitBeforeTest = null;
+        }
+    }
+
+    /// <summary>加入方：停止房主发起的测试，恢复原来的联机设置。</summary>
+    [RelayCommand]
+    private async Task StopGuestTestAsync()
+    {
+        if (_direct is not { IsHost: false } direct) return;
+        var run = _guestTestRun;
+        await direct.StopGuestTestAsync();
+        // 同一次结束事件可能已先收起横幅；只有换会话或显示了另一轮时才忽略这次停止结果。
+        if (_direct != direct || _guestTestRun is not null && _guestTestRun != run) return;
+        ResetGuestTest();
+        SetStatus(StatusMessage.Warning("multiplayer.matrix.cancelled"));
     }
 
     private void AttachDirect(DirectSession direct, RoomCode room)
@@ -222,6 +320,7 @@ public sealed partial class MultiplayerViewModel
         var starts = direct.EasyTierStarts;
         direct.StateChanged += () => Dispatcher.UIThread.Post(() =>
         {
+            if (_direct != direct) return;
             // 直连会话自己启动或重启了 EasyTier（打不通改用节点、已提权的原地重启）：从这次开始重新计时。
             if (direct.EasyTierStarts != starts)
             {
@@ -230,12 +329,19 @@ public sealed partial class MultiplayerViewModel
             }
             _session = direct.EasyTier;
             OnPropertyChanged(nameof(CanUseExit));
+            if (direct.GuestIsLegacy && !_legacyGuestWarned)
+            {
+                _legacyGuestWarned = true;
+                SetStatus(StatusMessage.Warning("multiplayer.direct.legacy_guest"));
+            }
         });
         if (FullLanMode && direct.EasyTier?.Options is { } o) MyVirtualIp = EasyTierArgs.Build(o)[EasyTierArgs.Build(o).IndexOf("--ipv4") + 1];
         _timer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => _ = RefreshPeersAsync());
         _timer.Start();
         OnPropertyChanged(nameof(CanUseExit));
     }
+
+    private bool _legacyGuestWarned;
 
     /// <summary>退出 Amber 时一起关掉。</summary>
     private sealed class DirectHandle(DirectSession direct) : IDisposable
@@ -280,7 +386,7 @@ public sealed partial class MultiplayerViewModel
         var results = new List<MatrixResult>();
         try
         {
-            Status = MatrixFullLan ? L.T("multiplayer.matrix.requesting_admin") : L.T("multiplayer.matrix.running");
+            SetStatus(StatusMessage.Info("multiplayer.matrix.waiting_guest"));
             var progress = new Progress<MatrixResult>(r =>
             {
                 results.Add(r);
@@ -310,6 +416,34 @@ public sealed partial class MultiplayerViewModel
     [RelayCommand]
     private void CancelMatrix() => _matrixCts?.Cancel();
 
+    /// <summary>加入方：同意房主的全条件测试（只同意勾上的部分）。</summary>
+    [RelayCommand]
+    private Task AcceptTestRequestAsync() => AnswerTestRequestAsync(true);
+
+    [RelayCommand]
+    private Task DeclineTestRequestAsync() => AnswerTestRequestAsync(false);
+
+    private async Task AnswerTestRequestAsync(bool accept)
+    {
+        if (_direct is not { IsHost: false } direct || !TestRequestPending) return;
+        var run = _guestTestRun;
+        TestRequestPending = false;
+        var accepted = await direct.AnswerTestRequestAsync(accept, TestRequestWantsFullLan && TestAllowFullLan, TestRequestWantsFullLan && TestAllowFullLan && TestAllowExit);
+        if (_direct != direct || _guestTestRun != run) return;
+        if (accepted && direct.TestConsent.ActiveRun == run)
+        {
+            // 同意后马上显示横幅和“停止测试”（不等第一步到）。
+            GuestTestRunning = true;
+            GuestTestBanner = L.T("multiplayer.matrix.banner_running");
+            SetStatus(StatusMessage.Info("multiplayer.matrix.running"));
+        }
+        else
+        {
+            ResetGuestTest();
+            SetStatus(StatusMessage.Warning(accept ? "multiplayer.matrix.request_gone" : "multiplayer.matrix.cancelled"));
+        }
+    }
+
     [RelayCommand]
     private async Task CopyDirectCodeAsync()
     {
@@ -335,6 +469,9 @@ public sealed partial class MultiplayerViewModel
     private async Task StopDirectAsync()
     {
         _matrixCts?.Cancel();
+        // 会话结束：确认卡片、测试横幅跟着收起（之后旧会话的事件不再理会）。
+        ResetGuestTest();
+        _legacyGuestWarned = false;
         if (_direct is { } direct)
         {
             _direct = null;

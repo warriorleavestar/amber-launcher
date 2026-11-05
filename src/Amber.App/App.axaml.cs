@@ -48,6 +48,8 @@ public sealed class App : Application
                 try { service.PurgeTrash(); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             });
+            // 清掉以前留下的无痕模式临时配置（Amber 没等到游戏退出就关了、崩溃了之类）。
+            _ = Task.Run(() => Amber.Core.Launch.GameLauncher.SweepNoTrace());
         }
         base.OnFrameworkInitializationCompleted();
     }

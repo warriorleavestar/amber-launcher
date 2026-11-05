@@ -86,7 +86,7 @@ public static class LegacyForge
                 var done = 0;
                 foreach (var lib in libs)
                 {
-                    await FetchVerifiedAsync(ctx.Downloader, lib, Path.Combine(cache, lib.Name), ct);
+                    await FetchVerifiedAsync(ctx.Downloader, lib, Game.GameDirectory.Contained(cache, Game.GameDirectory.CheckId(lib.Name)), ct);
                     progress?.Report(new(L.F("core.install.legacyforge.libraryprogress", ++done, libs.Count), 100.0 * done / libs.Count));
                 }
             }
@@ -229,7 +229,7 @@ public static class LegacyForge
         {
             try
             {
-                await downloader.DownloadOneAsync(new DownloadItem(url, path, lib.Sha1), ct);
+                await downloader.DownloadOneAsync(new DownloadItem(url, path, lib.Sha1, Within: Path.GetDirectoryName(path)), ct);
                 if (await Sha1Async(path, ct) == lib.Sha1) return;
                 errors.Add(L.F("core.install.legacyforge.invalidcontent", url));
             }
@@ -256,9 +256,11 @@ public static class LegacyForge
         Directory.CreateDirectory(libDir);
         foreach (var lib in libs)
         {
-            var target = Path.Combine(libDir, lib.Name);
+            // amberLegacyLibs 写在版本文件里（任何版本文件都能写，继承时也会被合并过来）：名字只能是单个文件名，拼出来的路径必须在各自目录里。
+            var name = Game.GameDirectory.CheckId(lib.Name);
+            var target = Game.GameDirectory.Contained(libDir, name);
             if (File.Exists(target) && Sha1Sync(target) == lib.Sha1) continue;
-            var source = Path.Combine(FmlCacheDir(root), lib.Name);
+            var source = Game.GameDirectory.Contained(FmlCacheDir(root), name);
             if (!File.Exists(source))
             {
                 log?.Invoke(L.F("core.install.legacyforge.missinglibrary", lib.Name));

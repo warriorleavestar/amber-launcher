@@ -219,7 +219,7 @@ public sealed class LauncherService : IDisposable
 
     /// <summary>按这个版本的有效设置（版本设置盖在全局设置上）生成启动参数。</summary>
     public LaunchOptions BaseLaunchOptions(string id, string javaPath, GameSession session, IReadOnlyList<string> sessionJvmArgs) =>
-        EffectiveSettings(id).ToLaunchOptions(Directory, id, javaPath, session, sessionJvmArgs);
+        EffectiveSettings(id).ToLaunchOptions(Directory, id, javaPath, session, sessionJvmArgs) with { NoTrace = Settings.NoTrace };
 
     public GameInstance GetInstance(string id) => GameInstance.Detect(Directory, id, WorkDirFor(id));
 

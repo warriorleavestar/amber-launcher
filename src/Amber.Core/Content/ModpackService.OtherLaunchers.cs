@@ -1,4 +1,4 @@
-using Amber.Core.Localization;
+﻿using Amber.Core.Localization;
 using System.IO.Compression;
 using System.Text.Json.Nodes;
 using Amber.Core.Install;
@@ -173,10 +173,11 @@ public sealed partial class ModpackService
         return result;
     }
 
-    private async Task ImportOtherLauncherFilesAsync(ZipArchive zip, ModpackInfo info, string id, string workDir, IProgress<LoaderProgress>? progress, CancellationToken ct)
+    private async Task ImportOtherLauncherFilesAsync(ZipArchive zip, ModpackInfo info, string id, PackTarget pack, IProgress<LoaderProgress>? progress, CancellationToken ct)
     {
+        var workDir = pack.WorkDir;
         progress?.Report(new(L.T("core.content.modpack.extractgamefiles")));
-        ExtractPrefix(zip, info.Overrides!, workDir, skip: info.Format == Hmcl ? ["pack.json"] : []);
+        ExtractPrefix(zip, info.Overrides!, pack, skip: info.Format == Hmcl ? ["pack.json"] : []);
 
         switch (info.Format)
         {
@@ -185,13 +186,12 @@ public sealed partial class ModpackService
                 break;
             case Mcbbs:
                 var meta = ReadJson(zip.GetEntry("mcbbs.packmeta")!);
-                ApplyMcbbsSettings(meta, id);
                 await AddOptiFineModAsync(info, OptiFineAddon(meta["addons"] as JsonArray, info.McVersion), workDir, progress, ct);
                 await DownloadMcbbsCurseFilesAsync(meta, workDir, progress, ct);
                 break;
             case Hmcl:
                 var addon = OptiFineAddon(ReadJson(zip.GetEntry("modpack.json")!)["addons"] as JsonArray, info.McVersion);
-                if (addon is null && zip.GetEntry("minecraft/pack.json") is { } pack) addon = OptiFineLibrary(ReadJson(pack));
+                if (addon is null && zip.GetEntry("minecraft/pack.json") is { } packJson) addon = OptiFineLibrary(ReadJson(packJson));
                 await AddOptiFineModAsync(info, addon, workDir, progress, ct);
                 break;
         }
@@ -205,8 +205,10 @@ public sealed partial class ModpackService
         if (Directory.Exists(mods) && Directory.EnumerateFiles(mods, "*OptiFine*.jar").Any()) return;
         progress?.Report(new(L.T("core.install.optifine.download")));
         Directory.CreateDirectory(mods);
+        // 版本号来自整合包：拼成文件名前先确认是单个文件名，并且在 mods 里。
+        var name = Game.GameDirectory.CheckId($"OptiFine_{info.McVersion}_{optifine}.jar");
         await new OptiFineInstaller(ctx).DownloadJarAsync(new LoaderVersion(LoaderKind.OptiFine, info.McVersion, optifine),
-            Path.Combine(mods, $"OptiFine_{info.McVersion}_{optifine}.jar"), ct);
+            Game.GameDirectory.Contained(mods, name), ct);
     }
 
     private static string? OptiFineAddon(JsonArray? addons, string mc) =>
@@ -222,30 +224,29 @@ public sealed partial class ModpackService
         return underscore > 0 ? v[(underscore + 1)..] : v;
     }
 
-    /// <summary>把 MultiMC / Prism 实例自己的内存、Java 参数和窗口大小带过来（只在实例里勾了覆盖时）。</summary>
+    /// <summary>
+    /// 把 MultiMC / Prism 实例自己的内存和窗口大小带过来（只在实例里勾了覆盖时）。
+    /// JVM 参数不带：它能让 Java 加载任意代理或在出错时执行命令，只能由用户在本机设置里填。
+    /// </summary>
     private void ApplyMultiMcSettings(Dictionary<string, string> cfg, string id)
     {
         var settings = InstanceSettings.Load(ctx.Dir, id);
+        ApplyMultiMcCfg(cfg, settings);
+        settings.Save(ctx.Dir, id);
+    }
+
+    internal static void ApplyMultiMcCfg(Dictionary<string, string> cfg, InstanceSettings settings)
+    {
         if (cfg.GetValueOrDefault("OverrideMemory") == "true" && int.TryParse(cfg.GetValueOrDefault("MaxMemAlloc"), out var mb) && mb > 0)
         {
             settings.AutoMemory = false;
             settings.MaxMemoryMb = mb;
         }
-        if (cfg.GetValueOrDefault("OverrideJavaArgs") == "true" && cfg.GetValueOrDefault("JvmArgs") is { Length: > 0 } jvm) settings.JvmArgs = jvm;
         if (cfg.GetValueOrDefault("OverrideWindow") == "true")
         {
             if (int.TryParse(cfg.GetValueOrDefault("MinecraftWinWidth"), out var w) && w > 0) settings.WindowWidth = w;
             if (int.TryParse(cfg.GetValueOrDefault("MinecraftWinHeight"), out var h) && h > 0) settings.WindowHeight = h;
         }
-        settings.Save(ctx.Dir, id);
-    }
-
-    private void ApplyMcbbsSettings(JsonObject meta, string id)
-    {
-        if (meta["launchInfo"]?["javaArgument"] is not JsonArray args || args.Count == 0) return;
-        var settings = InstanceSettings.Load(ctx.Dir, id);
-        settings.JvmArgs = string.Join(' ', args.Select(a => a?.GetValue<string>()).OfType<string>());
-        settings.Save(ctx.Dir, id);
     }
 
     /// <summary>MCBBS 整合包里 type 为 curse 的文件要从 CurseForge 下载；其他文件都在 overrides 里。</summary>

@@ -28,6 +28,9 @@ public sealed partial class AccountItem(Account account) : LocalizedObservable
     public partial bool IsCurrent { get; set; }
 
     public bool HasNoAvatar => Head is null;
+
+    /// <summary>旧版本存下的 http 外置账号：现在不能再用，提示用 https 重新添加。</summary>
+    public bool InsecureServer { get; } = ExternalAuth.HasInsecureServer(account);
 }
 
 public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo

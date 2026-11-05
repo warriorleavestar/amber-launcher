@@ -47,7 +47,6 @@ public sealed partial class HomeViewModel : PageViewModel
         return (options with { JoinServer = $"127.0.0.1:{relay.Port}" }, relay);
     }
 
-    private const int KeptOutputLines = 400;
 
     /// <summary>进程起来后这么久还没在日志里看到进入游戏的标志，就当作“可能已进入游戏”（老版本、Forge 的日志写法不一样）。</summary>
     private static readonly TimeSpan EnterGameFallback = TimeSpan.FromMinutes(3);
@@ -61,7 +60,7 @@ public sealed partial class HomeViewModel : PageViewModel
     internal LauncherService Service => _service;
     private readonly LogViewModel _log;
     private List<string> _lastRunFiles = [];
-    private Queue<string> _lastRunOutput = new();
+    private string[] _lastRunOutput = [];
     private bool _refreshingAccounts;
     private CrashInput? _crashInput;
     /// <summary>每次显示新的崩溃结果（或清掉）加一：换语言的重新分析只在期间没有新结果时才替换。</summary>
@@ -80,7 +79,8 @@ public sealed partial class HomeViewModel : PageViewModel
         /// <summary>是兜底时间到了才算进入的（没看到标志）。</summary>
         public bool InGameGuessed { get; set; }
         public bool Exiting { get; set; }
-        public Queue<string> Output { get; } = new();
+        /// <summary>这一局自己的原始输出、无痕设置和多行事件状态，多开时不能共用。</summary>
+        public RunOutput Output { get; } = new();
         /// <summary>这次启动自己的日志（多开时各存各的）。</summary>
         public RunLog? Log { get; set; }
         public string WorkDir { get; set; } = "";
@@ -478,6 +478,7 @@ public sealed partial class HomeViewModel : PageViewModel
             }
 
             SetOwnedStatus(StatusMessage.Info("home.status.launching"));
+            run.Output.Begin(options);
             _log.AddRaw(run.Log, L.F("home.log.launch", id, javaPath, memory));
             foreach (var note in _proxyNotes) _log.AddRaw(run.Log, note);
             var parser = new GameLogParser();
@@ -487,8 +488,7 @@ public sealed partial class HomeViewModel : PageViewModel
             {
                 lock (parser)
                 {
-                    run.Output.Enqueue(line);
-                    if (run.Output.Count > KeptOutputLines) run.Output.Dequeue();
+                    run.Output.Add(line);
                     if (parser.Feed(line) is { } entry) _log.Add(run.Log, entry);
                 }
                 if (!run.InGame && IsEnterGameLine(line)) Dispatcher.UIThread.Post(() => EnterGame(run, guessed: false));
@@ -518,17 +518,10 @@ public sealed partial class HomeViewModel : PageViewModel
             {
                 crashed = true;
                 SetStatus(StatusMessage.Error("home.status.crashed", code));
-                string[] output;
-                lock (parser) output = run.Output.ToArray();
-                var input = new CrashInput(workDir, run.Started, output, SafePid(game), run.SharedWorkDir);
+                CrashInput input;
+                lock (parser) input = CrashInputFor(run, SafePid(game));
                 var analysis = await Task.Run(() => input.Analyze());
-                // 崩溃分析的标题和建议是按当时的语言写的：记下输入，换语言时重新分析一遍。
-                _crashInput = input;
-                _crashLog = run.Log;
-                _lastRunFiles = [.. analysis.SourceFiles];
-                _lastRunOutput = new Queue<string>(output);
-                _log.AddRaw(run.Log, L.F("home.log.crash_analysis", analysis.Summary));
-                Crash = analysis;
+                RememberCrash(run, input, analysis);
                 // 玩家在别的页面：弹个 Toast，带“查看”。
                 if (!IsCurrent) Toasts.WithAction(L.F("home.crash.toast", id), L.T("home.crash.show"), () => NavigateHere?.Invoke());
                 GameCrashed?.Invoke(id);
@@ -708,16 +701,40 @@ public sealed partial class HomeViewModel : PageViewModel
     internal void TickForTest() => Tick();
     internal void SetOwnedStatusForTest(StatusMessage message) => SetOwnedStatus(message);
 
+    internal static void BeginRunOutputForTest(object run, LaunchOptions options) => ((GameRun)run).Output.Begin(options);
+    internal static void AddRunOutputForTest(object run, string line) => ((GameRun)run).Output.Add(line);
+    internal static string[] RunOutputForTest(object run) => ((GameRun)run).Output.Lines;
+    internal void RememberCrashForTest(object run)
+    {
+        var gameRun = (GameRun)run;
+        var input = CrashInputFor(gameRun, null);
+        RememberCrash(gameRun, input, input.Analyze());
+    }
+
     private static int? SafePid(Process game)
     {
         try { return game.Id; }
         catch (InvalidOperationException) { return null; }
     }
 
-    /// <summary>崩溃分析的输入（换语言时用同样的输入再分析一遍）。</summary>
-    private sealed record CrashInput(string WorkDir, DateTime Started, string[] Output, int? Pid, bool SharedWorkDir)
+    private static CrashInput CrashInputFor(GameRun run, int? pid) =>
+        new(run.WorkDir, run.Started, run.Output.Lines, run.Output.ForExport().ToArray(), pid, run.SharedWorkDir);
+
+    /// <summary>崩溃分析保留原始输入；导出单独保存这一局已经过滤好的快照，后续启动和设置变化都不能替换它。</summary>
+    private sealed record CrashInput(string WorkDir, DateTime Started, string[] Output, string[] ExportOutput, int? Pid, bool SharedWorkDir)
     {
         public CrashAnalysis Analyze() => CrashAnalyzer.AnalyzeRun(WorkDir, Started, Output, Pid, SharedWorkDir);
+    }
+
+    private void RememberCrash(GameRun run, CrashInput input, CrashAnalysis analysis)
+    {
+        // 崩溃结果和“查看日志”继续绑定这一局；换语言时仍用原来的输入重新分析。
+        _crashInput = input;
+        _crashLog = run.Log;
+        _lastRunFiles = [.. analysis.SourceFiles];
+        _lastRunOutput = input.ExportOutput;
+        _log.AddRaw(run.Log, L.F("home.log.crash_analysis", analysis.Summary));
+        Crash = analysis;
     }
 
     /// <summary>崩溃卡上的“查看日志”：打开日志页，只看警告和错误。</summary>
@@ -755,6 +772,7 @@ public sealed partial class HomeViewModel : PageViewModel
         }
     }
 
+    /// <summary>导出崩溃卡对应的那一局：无痕过滤已在保存快照时完成，多开和后续启动不会串日志。</summary>
     public void ExportCrashBundle(string zipPath)
     {
         CrashAnalyzer.ExportBundle(zipPath, _lastRunFiles, _lastRunOutput);

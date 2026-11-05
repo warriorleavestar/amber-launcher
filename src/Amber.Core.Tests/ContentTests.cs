@@ -46,12 +46,22 @@ public class ContentTests : IDisposable
     [InlineData("../evil.txt")]
     [InlineData("mods/../../evil.txt")]
     [InlineData("C:\\Windows\\evil.txt")]
+    [InlineData("..\\evil.txt")]
+    [InlineData("mods\\..\\..\\evil.txt")]
+    [InlineData("\\\\server\\share\\evil.txt")]
+    [InlineData("mods/a.jar:hidden")]
+    [InlineData("")]
+    [InlineData(" ")]
     public void SafeJoin_RejectsEscapes(string relative) =>
         Assert.Throws<InvalidDataException>(() => ModpackService.SafeJoin(_root, relative));
 
     [Fact]
     public void SafeJoin_AllowsNested() =>
         Assert.StartsWith(_root, ModpackService.SafeJoin(_root, "mods/a.jar"));
+
+    [Fact]
+    public void SafeJoin_NormalizesZipSeparatorsOnEveryPlatform() =>
+        Assert.Equal(Path.Combine(_root, "config", "a.txt"), ModpackService.SafeJoin(_root, "mods\\..\\config/a.txt"));
 
     [Fact]
     public void SafeFileName_StripsDirectories()

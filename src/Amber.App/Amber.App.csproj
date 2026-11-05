@@ -7,8 +7,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Amber</AssemblyName>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>Assets\amber.ico</ApplicationIcon>
+    <!-- 这两个资源只属于 Windows apphost；macOS/Linux 发布时不要交给 Win32 资源编译器。 -->
+    <ApplicationManifest Condition="$([MSBuild]::IsOSPlatform('Windows'))">app.manifest</ApplicationManifest>
+    <ApplicationIcon Condition="$([MSBuild]::IsOSPlatform('Windows'))">Assets\amber.ico</ApplicationIcon>
     <TieredPGO>false</TieredPGO>
     <!-- Avalonia 的编译统计在 src/Directory.Build.targets 里统一关掉。 -->
   </PropertyGroup>

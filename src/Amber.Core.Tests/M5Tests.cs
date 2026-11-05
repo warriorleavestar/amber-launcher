@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -306,5 +307,65 @@ public class M5Tests : IDisposable
         var text = File.ReadAllText(path);
         Assert.DoesNotContain("SECRET123", text);
         Assert.Contains("REPLACE_WITH_TOKEN", text);
+    }
+
+    [Fact]
+    public void LaunchScript_OfflinePlaceholderDoesNotChangeArguments()
+    {
+        var path = Path.Combine(_root, "offline.bat");
+        Toolbox.WriteLaunchScript(path, "java", _root, ["-Xmx4096m", "-Dlog4j.configurationFile=run0.amber/config.xml", "--accessToken", "0"], "0");
+        var text = File.ReadAllText(path);
+        Assert.Contains("-Xmx4096m", text);
+        Assert.Contains("run0.amber/config.xml", text);
+        Assert.DoesNotContain("REPLACE_WITH_TOKEN", text);
+    }
+
+    /// <summary>真的交给 cmd（且调用者开着延迟展开），验证目标进程收到原始参数，而不是只检查脚本文字。</summary>
+    [Fact]
+    public async Task LaunchScript_WindowsPreservesMetacharactersAndEmbeddedQuotes()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var work = Directory.CreateDirectory(Path.Combine(_root, "game & (100%) !PATH!")).FullName;
+        var receiver = Path.Combine(_root, "receive.ps1");
+        var result = Path.Combine(_root, "arguments.json");
+        File.WriteAllText(receiver, "[IO.File]::WriteAllText($env:AMBER_TEST_ARGS_OUTPUT, (ConvertTo-Json -InputObject @($args) -Compress))");
+        var expected = new[]
+        {
+            "plain", "space here", "", "line\tspace",
+            "-Dlog4j.configurationFile=" + Path.Combine(work, "run0 & (100%) !PATH!.bat.amber", "client.xml"),
+            "%PATH%", "!PATH!", "x^y", "x|y", "a>b", "a<b",
+            "-Dquoted=\"value & other\"", "C:\\last\\", "a\\\"b", "\"&echo escaped",
+        };
+        var script = Path.Combine(_root, "run.bat");
+        var powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+        Toolbox.WriteLaunchScript(script, powershell, work,
+            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", receiver, .. expected], "0");
+        var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+        {
+            Arguments = $"/d /v:on /c \"\"{script}\"\"", UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        start.Environment["AMBER_TEST_ARGS_OUTPUT"] = result;
+        using var process = Process.Start(start)!;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        try { await process.WaitForExitAsync(timeout.Token); }
+        finally { if (!process.HasExited) process.Kill(true); }
+        Assert.True(process.ExitCode == 0, await stdout + await stderr);
+        Assert.Equal(expected, System.Text.Json.JsonSerializer.Deserialize<string[]>(File.ReadAllText(result)));
+    }
+
+    [Fact]
+    public void LaunchScript_OnUnixQuotesPathsAndIsExecutable()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var path = Path.Combine(_root, "run.sh");
+        Toolbox.WriteLaunchScript(path, "/opt/Java's/bin/java", "/tmp/game dir", ["-Dname=Steve's world"], "");
+        var text = File.ReadAllText(path);
+        Assert.StartsWith("#!/bin/sh\n", text);
+        Assert.Contains("'/opt/Java'\"'\"'s/bin/java'", text);
+        Assert.Contains("'-Dname=Steve'\"'\"'s world'", text);
+        Assert.True(File.GetUnixFileMode(path).HasFlag(UnixFileMode.UserExecute));
     }
 }
