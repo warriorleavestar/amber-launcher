@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:l="using:Amber.App.Localization"
              xmlns:vm="using:Amber.App.ViewModels"
+             xmlns:c="using:Amber.App.Views.Controls"
              x:Class="Amber.App.Views.InstancePage"
              x:DataType="vm:InstanceViewModel">
   <Grid RowDefinitions="Auto,Auto,*,Auto">
@@ -16,7 +17,7 @@
         <Button Content="{l:T common.open_folder}" Command="{Binding OpenFolderCommand}" />
         <Button Content="{l:T instance.files.complete}" Command="{Binding CompleteFilesCommand}" />
         <Button Content="{l:T instance.export.script}" Click="ExportScript_Click" />
-        <Button Content="{Binding DeleteArmed, Converter={x:Static vm:Converters.DeleteLabel}}" Command="{Binding DeleteVersionCommand}" />
+        <Button Classes="danger" Content="{l:T instance.version.delete}" Command="{Binding DeleteVersionCommand}" />
       </WrapPanel>
       <TextBlock Classes="hint" FontSize="12" Text="{Binding InfoText}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding InfoText}" />
     </StackPanel>
@@ -115,14 +116,14 @@
                       <TextBlock Text="{Binding Meta}" Classes="caption" ToolTip.Tip="{Binding Meta}" TextTrimming="CharacterEllipsis" />
                       <TextBlock Text="{Binding UpdateText}" IsVisible="{Binding HasUpdate}" FontSize="{StaticResource FontCaption}" Foreground="{DynamicResource AccentText}" ToolTip.Tip="{Binding UpdateText}" TextTrimming="CharacterEllipsis" />
                       <TextBlock Text="{Binding CompatText}" IsVisible="{Binding CompatText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" FontSize="{StaticResource FontCaption}" TextWrapping="Wrap"
-                                 Foreground="{Binding HasCompatProblem, Converter={x:Static vm:Converters.ProblemBrush}}" />
+                                 Classes="compat" Classes.problem="{Binding HasCompatProblem}" />
                     </StackPanel>
                     <!-- 按钮最多占这么宽，多了就换行（窄窗口下名字那一列还有地方）。 -->
                     <WrapPanel Grid.Column="3" ItemSpacing="6" LineSpacing="4" VerticalAlignment="Center" MaxWidth="240">
                       <Button Content="{l:T common.update}" IsVisible="{Binding HasUpdate}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).UpdateModCommand}" CommandParameter="{Binding}" />
                       <Button Content="{l:T instance.mods.find_matching}" IsVisible="{Binding CanFindMatching}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).FindMatchingCommand}" CommandParameter="{Binding}"
                               ToolTip.Tip="{l:T instance.mods.find_matching_hint}" />
-                      <Button Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteModCommand}" CommandParameter="{Binding}" />
+                      <Button Classes="danger" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteModCommand}" CommandParameter="{Binding}" />
                     </WrapPanel>
                   </Grid>
                 </DataTemplate>
@@ -149,7 +150,7 @@
                       <Button Content="{l:T instance.datapacks.title}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).ShowDatapacksCommand}" CommandParameter="{Binding}" />
                       <Button Content="{l:T common.backup}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).BackupWorldCommand}" CommandParameter="{Binding}" />
                       <Button Content="{l:T common.open}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).OpenWorldCommand}" CommandParameter="{Binding}" />
-                      <Button Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteWorldCommand}" CommandParameter="{Binding}" />
+                      <c:ConfirmButton Content="{l:T common.delete}" ObjectName="{Binding Name}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteWorldCommand}" CommandParameter="{Binding}" />
                     </WrapPanel>
                   </Grid>
                 </DataTemplate>
@@ -180,7 +181,7 @@
                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" />
                             <TextBlock Text="{Binding Meta}" Classes="caption" ToolTip.Tip="{Binding Meta}" TextTrimming="CharacterEllipsis" />
                           </StackPanel>
-                          <Button Grid.Column="2" Content="{l:T common.delete}" VerticalAlignment="Center"
+                          <Button Grid.Column="2" Classes="danger" Content="{l:T common.delete}" VerticalAlignment="Center"
                                   Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).DeleteDatapackCommand}" CommandParameter="{Binding}" />
                         </Grid>
                       </DataTemplate>
@@ -209,7 +210,7 @@
                       </Button>
                       <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0">
                         <TextBlock Text="{Binding Name}" Classes="caption" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                        <Button Grid.Column="1" Content="{l:T common.delete}" Padding="6,1" FontSize="{StaticResource FontCaption}" Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).DeleteScreenshotCommand}" CommandParameter="{Binding}" />
+                        <Button Grid.Column="1" Classes="danger" Content="{l:T common.delete}" Padding="6,1" FontSize="{StaticResource FontCaption}" Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).DeleteScreenshotCommand}" CommandParameter="{Binding}" />
                       </Grid>
                     </StackPanel>
                   </DataTemplate>
@@ -231,7 +232,7 @@
                   <Grid ColumnDefinitions="*,80,Auto">
                     <TextBlock Text="{Binding Name}" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="1" Text="{Binding Size}" Classes="hint" VerticalAlignment="Center" />
-                    <Button Grid.Column="2" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
+                    <Button Grid.Column="2" Classes="danger" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
                   </Grid>
                 </DataTemplate>
               </ListBox.ItemTemplate>
@@ -251,7 +252,7 @@
                   <Grid ColumnDefinitions="*,80,Auto">
                     <TextBlock Text="{Binding Name}" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="1" Text="{Binding Size}" Classes="hint" VerticalAlignment="Center" />
-                    <Button Grid.Column="2" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
+                    <Button Grid.Column="2" Classes="danger" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
                   </Grid>
                 </DataTemplate>
               </ListBox.ItemTemplate>

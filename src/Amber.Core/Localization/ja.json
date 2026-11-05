@@ -53,6 +53,7 @@
   "common.connect": "接続",
   "common.copied": "コピーしました",
   "common.copy": "コピー",
+  "common.details": "詳細",
   "common.delete": "削除",
   "common.disabled": "無効",
   "common.ellipsis": "…",
@@ -1039,5 +1040,19 @@
   "tools.update.hint": "通知のみで、自動ダウンロードや置き換えは行いません。",
   "tools.update.latest": "現在のバージョン {0} は最新です",
   "tools.update.no_feed": "現在のバージョンは {0} です。更新URLが未設定のため、オンラインでの確認は行いません。「設定」ページで入力できます。",
-  "tools.update.open_page": "ダウンロードページを開く"
+  "tools.update.open_page": "ダウンロードページを開く",
+  "common.undo": "元に戻す",
+  "trash.deleted": "{0} を削除しました",
+  "trash.restored": "{0} を元に戻しました",
+  "trash.restore_failed": "元に戻せませんでした：{0}",
+  "trash.failure.source_missing": "{0} はもうありません",
+  "trash.failure.no_location": "Amber のごみ箱を置ける場所が見つかりません",
+  "trash.failure.is_trash": "Amber のごみ箱そのものは削除できません",
+  "trash.failure.in_scanned": "Amber のごみ箱はゲームが読み込むフォルダーの中には置けません",
+  "trash.failure.outside_owner": "記録されている元の場所が正しくないため、元に戻しませんでした",
+  "trash.failure.entry_missing": "この項目はもう Amber のごみ箱にありません",
+  "instance.delete.body": "インスタンス {0} のフォルダー（分離されたワールドと MOD を含む、合計 {1}）を完全に削除します。元に戻すことはできず、Amber のごみ箱にも入りません。",
+  "instance.delete.computing": "サイズを計算中…",
+  "instance.delete.done": "インスタンス {0} を削除しました",
+  "common.confirm_remove": "削除する"
 }

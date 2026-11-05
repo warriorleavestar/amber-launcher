@@ -53,6 +53,7 @@
   "common.connect": "进入",
   "common.copied": "已复制",
   "common.copy": "复制",
+  "common.details": "详情",
   "common.delete": "删除",
   "common.disabled": "禁用",
   "common.ellipsis": "……",
@@ -1039,5 +1040,19 @@
   "tools.update.hint": "只提示，不会自动下载或替换。",
   "tools.update.latest": "当前版本 {0} 已是最新",
   "tools.update.no_feed": "当前版本 {0}。没有配置更新地址，所以不会联网检查（可以在设置页填写）。",
-  "tools.update.open_page": "打开下载页"
+  "tools.update.open_page": "打开下载页",
+  "common.undo": "撤销",
+  "trash.deleted": "已删除 {0}",
+  "trash.restored": "已恢复 {0}",
+  "trash.restore_failed": "恢复失败：{0}",
+  "trash.failure.source_missing": "{0} 已经不在了",
+  "trash.failure.no_location": "找不到能放回收目录的位置",
+  "trash.failure.is_trash": "不能删除回收目录本身",
+  "trash.failure.in_scanned": "回收目录不能放在游戏会读取的文件夹里",
+  "trash.failure.outside_owner": "记录里的原位置不对，没有恢复",
+  "trash.failure.entry_missing": "回收目录里已经没有这一项了",
+  "instance.delete.body": "将永久删除实例 {0} 的文件夹（含隔离的存档和模组），共 {1}。这一步无法撤销，也不会放进回收目录。",
+  "instance.delete.computing": "正在计算大小…",
+  "instance.delete.done": "已删除实例 {0}",
+  "common.confirm_remove": "确认移除"
 }

@@ -315,7 +315,13 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await LayoutHereAsync("世界页");
         await DatapacksAsync(instance, world);
         instance.DeleteWorldCommand.Execute(instance.Worlds.First());
-        Check("删除世界进回收站", !Directory.Exists(world), instance.Status);
+        var trashRoot = Path.Combine(GameRoot(), TrashService.TrashFolder);
+        Check("删除世界进回收目录", !Directory.Exists(world) && TrashService.List(trashRoot).Any(e => Path.GetFullPath(e.OriginalPath) == Path.GetFullPath(world)), instance.Status);
+        var undone = Services.Toasts.UndoLatest();
+        await WaitAsync(() => instance.Worlds.Any(w => w.Name == "自检世界"), 5);
+        Check("撤销删除世界", undone && Directory.Exists(world) && instance.Worlds.Any(w => w.Name == "自检世界"), instance.Status);
+        instance.DeleteWorldCommand.Execute(instance.Worlds.First(w => w.Name == "自检世界"));
+        Check("再次删除世界", !Directory.Exists(world), instance.Status);
 
         for (var tab = 3; tab <= 7; tab++)
         {

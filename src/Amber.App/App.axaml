@@ -38,6 +38,13 @@
       <Setter Property="FontSize" Value="{StaticResource FontCaption}" />
       <Setter Property="Foreground" Value="{DynamicResource TextTertiary}" />
     </Style>
+    <!-- 兼容提示：没问题时是普通的次要文字，有问题时用警告色 -->
+    <Style Selector="TextBlock.compat">
+      <Setter Property="Foreground" Value="{DynamicResource TextTertiary}" />
+    </Style>
+    <Style Selector="TextBlock.compat.problem">
+      <Setter Property="Foreground" Value="{DynamicResource WarningText}" />
+    </Style>
     <!-- 表单：左边一列是标签，宽度按内容，太长就换行（英文、日文的标签比中文长） -->
     <Style Selector="Grid.form > TextBlock">
       <Setter Property="MaxWidth" Value="190" />

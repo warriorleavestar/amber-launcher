@@ -42,6 +42,12 @@ public sealed class App : Application
             desktop.MainWindow = new MainWindow(settings) { DataContext = viewModel };
             StartupTrace.Mark("window");
             desktop.Exit += (_, _) => service.Dispose();
+            // 回收目录里过期的条目放到后台清，不拖慢启动。
+            _ = Task.Run(() =>
+            {
+                try { service.PurgeTrash(); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            });
         }
         base.OnFrameworkInitializationCompleted();
     }

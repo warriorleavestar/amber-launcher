@@ -24,6 +24,15 @@ public partial class MainWindow : Window
         // 窗口打开后才知道标题栏有多高：Width/Height 是客户区，加上标题栏可能比屏幕的可用区域还高（底下被任务栏挡住）。
         Opened += (_, _) => FitFrameToScreen();
         Closing += (_, _) => RememberPlacement();
+        Toasts.Attach(this);
+        // Esc 取消所有“再点一次确认”的按钮；Ctrl+Z 撤销最近一次删除（焦点在输入框里时留给输入框自己的撤销）。
+        AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (e.Key == Avalonia.Input.Key.Escape) Controls.ConfirmButton.CancelAll();
+            else if (e.Key == Avalonia.Input.Key.Z && e.KeyModifiers == Avalonia.Input.KeyModifiers.Control
+                     && FocusManager?.GetFocusedElement() is not TextBox)
+                e.Handled = Toasts.UndoLatest();
+        }, RoutingStrategies.Tunnel);
         // 开发用：设置 AMBER_SNAPSHOT_DIR 后，依次把每个页面渲染成 PNG 然后退出。
         if (Environment.GetEnvironmentVariable("AMBER_SNAPSHOT_DIR") is { Length: > 0 } dir)
             Opened += async (_, _) => await SnapshotPagesAsync(dir);

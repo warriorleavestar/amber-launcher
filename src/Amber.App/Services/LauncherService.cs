@@ -104,6 +104,18 @@ public sealed class LauncherService : IDisposable
 
     public List<string> InstalledVersions() => Directory.ListInstalled().OrderDescending().ToList();
 
+    /// <summary>
+    /// 启动时清理回收目录里超过保留天数的条目：游戏目录下的，以及游戏目录在别的卷上时各实例根目录下的。返回清掉的条数。
+    /// </summary>
+    public int PurgeTrash(DateTimeOffset? now = null)
+    {
+        var keep = Settings.TrashRetentionDays;
+        var removed = TrashService.Purge(Path.Combine(Directory.Root, TrashService.TrashFolder), keep, now);
+        foreach (var id in Directory.ListInstalled())
+            removed += TrashService.Purge(Path.Combine(Directory.VersionDir(id), TrashService.TrashFolder), keep, now);
+        return removed;
+    }
+
     /// <summary>版本设置叠加全局设置后的结果。</summary>
     public InstanceSettings EffectiveSettings(string id) =>
         InstanceSettings.Load(Directory, id).Over(Settings.ToGlobalInstanceSettings());

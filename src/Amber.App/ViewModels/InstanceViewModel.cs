@@ -183,9 +183,6 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial string Status { get; set; } = "";
 
-    [ObservableProperty]
-    public partial bool DeleteArmed { get; set; }
-
     public InstanceViewModel(LauncherService service)
     {
         _service = service;
@@ -214,7 +211,6 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     partial void OnSelectedIdChanged(string? value)
     {
-        DeleteArmed = false;
         _loadedTabs.Clear();
         Current = null;
         InfoText = "";
@@ -255,24 +251,28 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
 
-    /// <summary>删除走回收站，误删还能找回来。</summary>
-    private static void Recycle(string path)
+    /// <summary>
+    /// 删除：移进回收目录（TrashService），弹“已删除 X【撤销】”。afterRestore 在撤销恢复后调用（刷新列表）。
+    /// 失败时写状态并返回 false，原文件不动。
+    /// </summary>
+    private bool Trash(string path, Action afterRestore, bool toast = true)
     {
-        if (OperatingSystem.IsWindows())
+        try
         {
-            if (System.IO.Directory.Exists(path))
-                Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
-            else if (File.Exists(path))
-                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+            var entry = TrashService.MoveToTrash(path, _service.Directory.Root);
+            if (toast) Toasts.Deleted(entry, _ => afterRestore());
+            Status = L.F("trash.deleted", entry.Name);
+            return true;
         }
-        else if (System.IO.Directory.Exists(path))
+        catch (TrashException e)
         {
-            System.IO.Directory.Delete(path, true);
+            Status = L.F("instance.status.delete_failed", Toasts.Describe(e));
         }
-        else
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            File.Delete(path);
+            Status = L.F("instance.status.delete_failed", e.Message);
         }
+        return false;
     }
 
     [RelayCommand]
@@ -300,25 +300,27 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         });
     }
 
-    /// <summary>删除版本要点两次。</summary>
+    /// <summary>
+    /// 删除实例：弹对话框写明实例名和占用空间，确认后直接删除实例文件夹（不进回收目录，对话框里写明无法撤销，规格 3.9）。
+    /// </summary>
     [RelayCommand]
-    private void DeleteVersion()
+    private async Task DeleteVersionAsync()
     {
         if (Current is not { } c) return;
-        if (!DeleteArmed)
-        {
-            DeleteArmed = true;
-            Status = L.F("instance.version.confirm_delete", c.Id);
+        var dir = _service.Directory.VersionDir(c.Id);
+        if (Avalonia.Application.Current?.ApplicationLifetime is not Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
             return;
-        }
-        DeleteArmed = false;
+        var ok = await Views.ConfirmDialog.AskAsync(owner, L.T("instance.version.delete"),
+            L.F("instance.delete.body", c.Id, L.T("instance.delete.computing")), L.T("common.confirm_delete"),
+            () => Task.Run(() => L.F("instance.delete.body", c.Id, Fmt.Size(TrashService.SizeOf(dir)))));
+        if (!ok) return;
         try
         {
-            Recycle(_service.Directory.VersionDir(c.Id));
-            Status = L.F("instance.status.recycled", c.Id);
+            await Task.Run(() => System.IO.Directory.Delete(dir, recursive: true));
+            Status = L.F("instance.delete.done", c.Id);
             _service.NotifyInstalledChanged();
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             Status = L.F("instance.status.delete_failed", e.Message);
         }
@@ -625,8 +627,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
                 return;
             }
             await _service.ContentInstaller.InstallAsync(new InstallPlan([file], []), c.ModsDir, null, ct);
-            Recycle(item.Mod.Path);
-            Status = L.F("instance.mods.replaced", item.Name, file.FileName);
+            // 换下来的旧文件也进回收目录（不弹撤销），以后能在“最近删除”里找回。
+            if (Trash(item.Mod.Path, () => { }, toast: false))
+                Status = L.F("instance.mods.replaced", item.Name, file.FileName);
         });
         await LoadModsAsync();
     }
@@ -653,19 +656,10 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private void DeleteMod(ModItem? item)
     {
-        if (item is null) return;
-        try
-        {
-            Recycle(item.Mod.Path);
-            Mods.Remove(item);
-            ModSummary = L.P("instance.mods.summary", Mods.Count, Mods.Count, Mods.Count(m => m.Enabled));
-            RecheckCompat();
-            Status = L.F("instance.status.recycled", item.Name);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
-        {
-            Status = L.F("instance.status.delete_failed", e.Message);
-        }
+        if (item is null || !Trash(item.Mod.Path, () => _ = LoadModsAsync())) return;
+        Mods.Remove(item);
+        ModSummary = L.P("instance.mods.summary", Mods.Count, Mods.Count, Mods.Count(m => m.Enabled));
+        RecheckCompat();
     }
 
     [RelayCommand]
@@ -788,18 +782,10 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private void DeleteWorld(WorldItem? item)
     {
-        if (item is null) return;
-        try
-        {
-            Recycle(item.World.Path);
-            if (DatapackWorld == item) DatapackWorld = null;
-            Worlds.Remove(item);
-            Status = L.F("instance.status.recycled", item.Name);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
-        {
-            Status = L.F("instance.status.delete_failed", e.Message);
-        }
+        // 界面上是两步确认（ConfirmButton），到这里已经确认过了。
+        if (item is null || !Trash(item.World.Path, LoadWorlds)) return;
+        if (DatapackWorld == item) DatapackWorld = null;
+        Worlds.Remove(item);
     }
 
     public void ImportWorld(string zipPath)
@@ -853,17 +839,8 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private void DeleteDatapack(DatapackItem? item)
     {
-        if (item is null) return;
-        try
-        {
-            Recycle(item.Pack.Path);
-            Datapacks.Remove(item);
-            Status = L.F("instance.status.recycled", item.Name);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
-        {
-            Status = L.F("instance.status.delete_failed", e.Message);
-        }
+        if (item is null || !Trash(item.Pack.Path, LoadDatapacks)) return;
+        Datapacks.Remove(item);
     }
 
     [RelayCommand]
@@ -943,22 +920,21 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private void DeleteScreenshot(ScreenshotItem? item)
     {
-        if (item is null) return;
-        try
-        {
-            Recycle(item.Path);
-            Screenshots.Remove(item);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
-        {
-            Status = L.F("instance.status.delete_failed", e.Message);
-        }
+        if (item is null || !Trash(item.Path, LoadScreenshots)) return;
+        Screenshots.Remove(item);
     }
 
     // ---- 资源包、光影 ----
 
     public ObservableCollection<PackFileItem> ResourcePacks { get; } = [];
     public ObservableCollection<PackFileItem> ShaderPacks { get; } = [];
+
+    private void ReloadPackFiles()
+    {
+        if (Current is not { } c) return;
+        LoadPackFiles(ResourcePacks, c.ResourcePacksDir);
+        LoadPackFiles(ShaderPacks, c.ShaderPacksDir);
+    }
 
     private static void LoadPackFiles(ObservableCollection<PackFileItem> target, string dir)
     {
@@ -982,17 +958,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private void DeletePack(PackFileItem? item)
     {
-        if (item is null) return;
-        try
-        {
-            Recycle(item.Path);
-            ResourcePacks.Remove(item);
-            ShaderPacks.Remove(item);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
-        {
-            Status = L.F("instance.status.delete_failed", e.Message);
-        }
+        if (item is null || !Trash(item.Path, ReloadPackFiles)) return;
+        ResourcePacks.Remove(item);
+        ShaderPacks.Remove(item);
     }
 
     // ---- 服务器 ----
