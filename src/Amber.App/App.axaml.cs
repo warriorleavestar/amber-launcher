@@ -30,6 +30,7 @@ public sealed class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        DevCrashGuard.HookDispatcher();
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var settings = AppSettings.Load();
