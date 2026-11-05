@@ -16,7 +16,7 @@
             <Grid ColumnDefinitions="*,Auto">
               <TextBlock Text="{Binding ComponentText}" TextWrapping="Wrap" VerticalAlignment="Center" />
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="12,0,0,0" IsVisible="{Binding !IsComponentReady}">
-                <Button Classes="amber" Content="{l:T multiplayer.component.download}" Command="{Binding DownloadComponentCommand}" IsVisible="{Binding !IsDownloading}" />
+                <Button Classes="primary" Content="{l:T multiplayer.component.download}" Command="{Binding DownloadComponentCommand}" IsVisible="{Binding !IsDownloading}" />
                 <Button Content="{l:T common.cancel}" Command="{Binding CancelDownloadCommand}" IsVisible="{Binding IsDownloading}" />
               </StackPanel>
             </Grid>
@@ -35,13 +35,13 @@
               <Grid ColumnDefinitions="*,Auto">
                 <ComboBox ItemsSource="{Binding LanGames}" SelectedItem="{Binding SelectedLanGame}" HorizontalAlignment="Stretch" PlaceholderText="{l:T multiplayer.lan.empty}">
                   <ComboBox.ItemTemplate>
-                    <DataTemplate DataType="vm:LanGameItem"><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" /></DataTemplate>
+                    <DataTemplate DataType="vm:LanGameItem"><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}" /></DataTemplate>
                   </ComboBox.ItemTemplate>
                 </ComboBox>
                 <Button Grid.Column="1" Content="{l:T common.find}" Command="{Binding ScanCommand}" Margin="6,0,0,0" ToolTip.Tip="{l:T multiplayer.lan.scan_tooltip}" />
               </Grid>
               <TextBox Text="{Binding ManualPort}" PlaceholderText="{l:T multiplayer.lan.port_placeholder}" />
-              <Button Classes="amber" Content="{l:T multiplayer.host.create}" Command="{Binding CreateRoomCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+              <Button Classes="primary" Content="{l:T multiplayer.host.create}" Command="{Binding CreateRoomCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
             </StackPanel>
           </Border>
           <Border Grid.Column="2" Classes="card" Margin="0">
@@ -49,7 +49,7 @@
               <TextBlock Classes="h2" Text="{l:T multiplayer.join.title}" Margin="0" />
               <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.join.hint}" />
               <TextBox Text="{Binding JoinCode}" PlaceholderText="{l:T multiplayer.join.code_placeholder}" />
-              <Button Classes="amber" Content="{l:T multiplayer.join.join}" Command="{Binding JoinCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+              <Button Classes="primary" Content="{l:T multiplayer.join.join}" Command="{Binding JoinCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
             </StackPanel>
           </Border>
         </Grid>
@@ -69,12 +69,12 @@
             <Grid ColumnDefinitions="*,14,*">
               <StackPanel Spacing="6">
                 <TextBlock Text="{l:T multiplayer.direct.host_title}" FontWeight="SemiBold" TextWrapping="Wrap" />
-                <Button Classes="amber" Content="{l:T multiplayer.direct.create}" Command="{Binding CreateDirectRoomCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                <Button Classes="primary" Content="{l:T multiplayer.direct.create}" Command="{Binding CreateDirectRoomCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
               </StackPanel>
               <StackPanel Grid.Column="2" Spacing="6">
                 <TextBlock Text="{l:T multiplayer.direct.join_title}" FontWeight="SemiBold" TextWrapping="Wrap" />
                 <TextBox Text="{Binding DirectInviteInput}" PlaceholderText="{l:T multiplayer.direct.invite_placeholder}" />
-                <Button Classes="amber" Content="{l:T common.join}" Command="{Binding JoinDirectCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                <Button Classes="primary" Content="{l:T common.join}" Command="{Binding JoinDirectCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
               </StackPanel>
             </Grid>
             <Expander>
@@ -92,10 +92,10 @@
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
                        Text="{l:T multiplayer.lan.full_mode_hint}" />
             <CheckBox Content="{l:T multiplayer.exit.allow}" IsChecked="{Binding AllowExitNode}" IsEnabled="{Binding FullLanMode}" Margin="0,6,0,0" />
-            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowExitNode}" Foreground="#E0703A"
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowExitNode}" Foreground="{DynamicResource WarningText}"
                        Text="{l:T multiplayer.exit.warning}" />
             <CheckBox Content="{l:T multiplayer.proxy.allow}" IsChecked="{Binding AllowGameProxy}" Margin="0,6,0,0" />
-            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowGameProxy}" Foreground="#E0703A"
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowGameProxy}" Foreground="{DynamicResource WarningText}"
                        Text="{l:T multiplayer.proxy.allow_warning}" />
           </StackPanel>
         </Border>
@@ -120,10 +120,10 @@
         </Border>
 
         <!-- 正在经别人上网 -->
-        <Border Classes="card" Margin="0" IsVisible="{Binding UsingExit}" BorderBrush="#E0703A" BorderThickness="2">
+        <Border Classes="card" Margin="0" IsVisible="{Binding UsingExit}" BorderBrush="{DynamicResource Warning}" BorderThickness="2">
           <Grid ColumnDefinitions="*,Auto">
             <TextBlock Text="{Binding ExitBanner}" TextWrapping="Wrap" VerticalAlignment="Center" FontWeight="SemiBold" />
-            <Button Grid.Column="1" Classes="amber" Content="{l:T multiplayer.exit.stop}" Command="{Binding StopExitNodeCommand}" Margin="12,0,0,0" />
+            <Button Grid.Column="1" Classes="primary" Content="{l:T multiplayer.exit.stop}" Command="{Binding StopExitNodeCommand}" Margin="12,0,0,0" />
           </Grid>
         </Border>
 
@@ -154,7 +154,7 @@
               <TextBlock Text="{l:T multiplayer.join.version_label}" VerticalAlignment="Center" />
               <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding TargetInstance}" MinWidth="220" />
               <Button Content="{l:T multiplayer.join.add_to_servers}" Command="{Binding AddToServersCommand}" />
-              <Button Classes="amber" Content="{l:T multiplayer.join.launch}" Command="{Binding LaunchAndJoinCommand}" />
+              <Button Classes="primary" Content="{l:T multiplayer.join.launch}" Command="{Binding LaunchAndJoinCommand}" />
             </WrapPanel>
           </StackPanel>
         </Border>
@@ -166,7 +166,7 @@
             <TextBlock Text="{Binding CurrentPathText}" FontWeight="SemiBold" TextWrapping="Wrap" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding DirectHint}" />
             <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding MyDirectCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-              <TextBox Text="{Binding MyDirectCode}" IsReadOnly="True" FontFamily="Consolas,monospace" FontSize="11" TextWrapping="Wrap" MaxHeight="70" />
+              <TextBox Text="{Binding MyDirectCode}" IsReadOnly="True" FontFamily="Consolas,monospace" FontSize="{StaticResource FontCaption}" TextWrapping="Wrap" MaxHeight="70" />
               <Button Grid.Column="1" Content="{l:T common.copy}" Command="{Binding CopyDirectCodeCommand}" Margin="6,0,0,0" VerticalAlignment="Top" />
             </Grid>
             <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsDirectHost}">
@@ -179,13 +179,13 @@
                          Text="{l:T multiplayer.matrix.hint}" />
               <CheckBox Content="{l:T multiplayer.matrix.include_full_lan}" IsChecked="{Binding MatrixFullLan}" />
               <StackPanel Orientation="Horizontal" Spacing="6">
-                <Button Classes="amber" Content="{l:T multiplayer.matrix.start}" Command="{Binding RunMatrixCommand}" IsEnabled="{Binding !MatrixRunning}" />
+                <Button Classes="primary" Content="{l:T multiplayer.matrix.start}" Command="{Binding RunMatrixCommand}" IsEnabled="{Binding !MatrixRunning}" />
                 <Button Content="{l:T common.stop}" Command="{Binding CancelMatrixCommand}" IsVisible="{Binding MatrixRunning}" />
               </StackPanel>
             </StackPanel>
             <ItemsControl ItemsSource="{Binding MatrixLines}" IsVisible="{Binding !!MatrixLines.Count}">
               <ItemsControl.ItemTemplate>
-                <DataTemplate><SelectableTextBlock Text="{Binding}" FontFamily="Consolas,monospace" FontSize="11" TextWrapping="Wrap" /></DataTemplate>
+                <DataTemplate><SelectableTextBlock Text="{Binding}" FontFamily="Consolas,monospace" FontSize="{StaticResource FontCaption}" TextWrapping="Wrap" /></DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
           </StackPanel>
@@ -200,11 +200,11 @@
               <Button Grid.Column="2" Content="{l:T multiplayer.diagnostics.export}" Click="ExportDiagnostics_Click" />
             </Grid>
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.diagnostics.hint}" />
-            <Border Background="{DynamicResource PageBackground}" CornerRadius="6" Padding="8" Height="260">
+            <Border Background="{DynamicResource PageBg}" CornerRadius="6" Padding="8" Height="260">
               <ScrollViewer Name="DebugScroll">
                 <ItemsControl ItemsSource="{Binding DebugLines}">
                   <ItemsControl.ItemTemplate>
-                    <DataTemplate><SelectableTextBlock Text="{Binding}" FontFamily="Consolas,monospace" FontSize="11" TextWrapping="Wrap" /></DataTemplate>
+                    <DataTemplate><SelectableTextBlock Text="{Binding}" FontFamily="Consolas,monospace" FontSize="{StaticResource FontCaption}" TextWrapping="Wrap" /></DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
               </ScrollViewer>
@@ -220,13 +220,13 @@
               <Button Grid.Column="1" Content="{l:T multiplayer.chat.export}" Click="ExportChat_Click" />
             </Grid>
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding ChatStatus}" />
-            <Border Background="{DynamicResource PageBackground}" CornerRadius="6" Padding="8" Height="220">
+            <Border Background="{DynamicResource PageBg}" CornerRadius="6" Padding="8" Height="220">
               <ScrollViewer Name="ChatScroll">
                 <ItemsControl ItemsSource="{Binding ChatLines}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate DataType="vm:ChatLine">
                       <Grid ColumnDefinitions="Auto,*" Margin="0,2">
-                        <TextBlock Text="{Binding Time}" Classes="hint" FontSize="11" Margin="0,2,8,0" />
+                        <TextBlock Text="{Binding Time}" Classes="caption" Margin="0,2,8,0" />
                         <StackPanel Grid.Column="1">
                           <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12" IsVisible="{Binding !IsNotice}" />
                           <SelectableTextBlock Text="{Binding Text}" TextWrapping="Wrap" Classes.hint="{Binding IsNotice}" />
@@ -239,7 +239,7 @@
             </Border>
             <Grid ColumnDefinitions="*,Auto">
               <TextBox Text="{Binding ChatInput}" PlaceholderText="{l:T multiplayer.chat.input_placeholder}" MaxLength="500" KeyDown="ChatInput_KeyDown" IsEnabled="{Binding ChatReady}" />
-              <Button Grid.Column="1" Classes="amber" Content="{l:T common.send}" Command="{Binding SendChatCommand}" IsEnabled="{Binding ChatReady}" Margin="6,0,0,0" />
+              <Button Grid.Column="1" Classes="primary" Content="{l:T common.send}" Command="{Binding SendChatCommand}" IsEnabled="{Binding ChatReady}" Margin="6,0,0,0" />
             </Grid>
           </StackPanel>
         </Border>
@@ -253,7 +253,7 @@
             </Grid>
             <TextBlock Classes="hint" Text="{l:T multiplayer.peers.empty}" IsVisible="{Binding !Peers.Count}" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding TransportText}" />
-            <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="#E0703A" Text="{Binding ExitWarning}"
+            <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource WarningText}" Text="{Binding ExitWarning}"
                        IsVisible="{Binding ExitWarning, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             <WrapPanel ItemSpacing="6" LineSpacing="6" IsVisible="{Binding !UsingGameProxy}">
               <TextBlock Text="{l:T multiplayer.proxy.peer_label}" VerticalAlignment="Center" />
@@ -265,7 +265,7 @@
               <Button Content="{l:T multiplayer.proxy.start}" Command="{Binding UseGameProxyCommand}" IsEnabled="{Binding CanUseGameProxy}"
                       ToolTip.Tip="{l:T multiplayer.proxy.start_tip}" />
             </WrapPanel>
-            <Border IsVisible="{Binding UsingGameProxy}" BorderBrush="#E0703A" BorderThickness="1" CornerRadius="6" Padding="8">
+            <Border IsVisible="{Binding UsingGameProxy}" BorderBrush="{DynamicResource Warning}" BorderThickness="1" CornerRadius="6" Padding="8">
               <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Text="{Binding GameProxyBanner}" TextWrapping="Wrap" VerticalAlignment="Center" />
                 <Button Grid.Column="1" Content="{l:T multiplayer.proxy.stop}" Command="{Binding StopGameProxyCommand}" Margin="8,0,0,0" />
@@ -285,7 +285,7 @@
                 <DataTemplate DataType="vm:PeerItem">
                   <StackPanel Margin="0,3">
                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding Meta}" Classes="hint" FontSize="11" />
+                    <TextBlock Text="{Binding Meta}" Classes="caption" />
                   </StackPanel>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
@@ -309,7 +309,7 @@
               <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:NodeItem">
                   <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,2">
-                    <TextBlock Text="{Binding Url}" FontFamily="Consolas,monospace" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding Url}" FontFamily="Consolas,monospace" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Url}" />
                     <TextBlock Grid.Column="1" Text="{Binding LatencyText}" Classes="hint" VerticalAlignment="Center" Margin="10,0" />
                     <Button Grid.Column="2" Content="{l:T common.delete}" Command="{Binding $parent[ItemsControl].((vm:MultiplayerViewModel)DataContext).RemoveNodeCommand}" CommandParameter="{Binding}" />
                   </Grid>

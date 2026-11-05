@@ -49,18 +49,18 @@
       <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
 
-    <!-- 按钮四种：primary（每块区域最多一个）、secondary、ghost、danger。amber 是 primary 的旧名字，过渡期保留。 -->
-    <Style Selector="Button.primary, Button.amber">
+    <!-- 按钮四种：primary（每块区域最多一个）、secondary、ghost、danger。 -->
+    <Style Selector="Button.primary">
       <Setter Property="Background" Value="{DynamicResource Accent}" />
       <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}" />
     </Style>
-    <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.amber:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource AccentHover}" />
       <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
     </Style>
-    <Style Selector="Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter, Button.amber:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource AccentPressed}" />
       <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
     </Style>
@@ -128,27 +128,6 @@
       <ResourceDictionary.MergedDictionaries>
         <ResourceInclude Source="avares://Amber/Themes/Tokens.axaml" />
       </ResourceDictionary.MergedDictionaries>
-      <!-- 旧名字：页面还在用，逐页换成 Tokens.axaml 里的新名字后删掉。值和新 token 一样。 -->
-      <ResourceDictionary.ThemeDictionaries>
-        <ResourceDictionary x:Key="Light">
-          <SolidColorBrush x:Key="CardBackground" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="PageBackground" Color="#F4F1EC" />
-          <SolidColorBrush x:Key="SidebarBackground" Color="#2B2622" />
-          <SolidColorBrush x:Key="AmberAccent" Color="#D98A1E" />
-          <SolidColorBrush x:Key="AmberAccentHover" Color="#E79A2E" />
-          <SolidColorBrush x:Key="AmberAccentPressed" Color="#B97314" />
-          <SolidColorBrush x:Key="AmberAccentDisabled" Color="#E6E0D8" />
-        </ResourceDictionary>
-        <ResourceDictionary x:Key="Dark">
-          <SolidColorBrush x:Key="CardBackground" Color="#2A2724" />
-          <SolidColorBrush x:Key="PageBackground" Color="#1C1A18" />
-          <SolidColorBrush x:Key="SidebarBackground" Color="#141210" />
-          <SolidColorBrush x:Key="AmberAccent" Color="#E89B32" />
-          <SolidColorBrush x:Key="AmberAccentHover" Color="#F0A93F" />
-          <SolidColorBrush x:Key="AmberAccentPressed" Color="#C9801F" />
-          <SolidColorBrush x:Key="AmberAccentDisabled" Color="#3A342E" />
-        </ResourceDictionary>
-      </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>
   </Application.Resources>
 </Application>
