@@ -48,6 +48,9 @@ public sealed class DirectSession : IAsyncDisposable
     // 启动、换参数重启 EasyTier 一次只做一个（测试步骤、提权、结束恢复可能同时触发）。
     private readonly SemaphoreSlim _startLock = new(1, 1);
 
+    // 路径切换与恢复也要串行：结束时先取消旧步骤，之后它不能再清掉已恢复的连接。
+    private readonly object _pathGate = new();
+
     // 加入方：每次同意的测试一个取消源。步骤和提权都用它；测试结束（房主说结束、超时、用户点停止）时取消，
     // 还在路上的步骤不会在恢复之后又把 EasyTier 切回测试模式。
     private readonly object _runGate = new();
@@ -59,6 +62,11 @@ public sealed class DirectSession : IAsyncDisposable
 
     /// <summary>测试用：保留真实的新会话模式选择，只替代最后的进程创建。</summary>
     internal Func<bool, EasyTierOptions, IEasyTierSession>? CreateSessionForTest { get; init; }
+
+    // 本机回归测试使用独立监听端口和短期限，不占用正在联机的房间。
+    internal int SpeedTestPortForTest { get; init; } = SpeedTestServer.Port;
+    internal TimeSpan MatrixStepTimeout { get; init; } = TimeSpan.FromSeconds(120);
+    internal TimeSpan MatrixRecoveryDelay { get; init; } = TimeSpan.FromSeconds(35);
 
     /// <summary>
     /// 房主：现在连着的加入方（测试要用的那个）是 0.5.9 以前的版本（hello 里带完整房间码、没有会话 id）。全条件测试需要对方升级。
@@ -130,7 +138,7 @@ public sealed class DirectSession : IAsyncDisposable
             Bridge = new DirectBridge(socket, Room, true, _easyTierUdpPort, Log);
             Bridge.Connected += OnConnected;
             Bridge.ControlReceived += OnControl;
-            _speed = new SpeedTestServer();
+            _speed = new SpeedTestServer(SpeedTestPortForTest);
             await StartEasyTierAsync(HostOptions(Options.FullLan, Options.AllowExit), ct);
         }
         else
@@ -152,7 +160,7 @@ public sealed class DirectSession : IAsyncDisposable
 
     private EasyTierOptions HostOptions(bool tun, bool allowExit, IReadOnlyList<string>? extra = null) =>
         new(Room, true, Options.FallbackNodes, EasyTierArgs.FreeTcpPort(), null, [$"udp://127.0.0.1:{_easyTierUdpPort}"], _machineId, tun, null, allowExit, null,
-            Verbose(extra)) { ServesSpeedTest = true };
+            Verbose(extra)) { ServesSpeedTest = true, DirectUnderlayAddresses = UnderlayAddresses(), DirectUnderlayUsesIpv6 = UnderlayUsesIpv6 };
 
     private EasyTierOptions GuestOptions(bool viaBridge, bool tun, string? exitNode, IReadOnlyList<string>? extra = null, bool nodes = true)
     {
@@ -160,7 +168,45 @@ public sealed class DirectSession : IAsyncDisposable
         if (viaBridge && Bridge is not null) peers.Add($"udp://127.0.0.1:{Bridge.LocalPort}");
         if (nodes) peers.AddRange(Options.FallbackNodes);
         return new EasyTierOptions(Room, false, peers, EasyTierArgs.FreeTcpPort(), tun ? null : LocalGamePort, null, _machineId, tun,
-            tun ? null : LocalChatPort, false, exitNode, Verbose(extra), [(LocalSpeedPort, SpeedTestServer.Port)]);
+            tun ? null : LocalChatPort, false, exitNode, Verbose(extra), [(LocalSpeedPort, SpeedTestServer.Port)])
+        {
+            DirectUnderlayAddresses = UnderlayAddresses(),
+            DirectUnderlayUsesIpv6 = UnderlayUsesIpv6,
+        };
+    }
+
+    private IReadOnlyList<string> UnderlayAddresses() => CollectDirectUnderlayAddresses(
+        (_remote?.Candidates ?? _guestCandidates).Select(c => c.EndPoint.Address),
+        Bridge?.Peers.Select(p => p.Remote.Address) ?? []);
+
+    private bool UnderlayUsesIpv6 => Bridge?.Peers.Any(p => p.Remote.Address.AddressFamily == AddressFamily.InterNetworkV6
+        && !p.Remote.Address.IsIPv4MappedToIPv6) == true;
+
+    /// <summary>出口接管系统流量之前，直连桥的物理对端仍须走原网络；包含打洞后变化的端口对应地址。</summary>
+    internal static IReadOnlyList<string> CollectDirectUnderlayAddresses(IEnumerable<IPAddress> candidates, IEnumerable<IPAddress> connected) =>
+        candidates.Concat(connected).Select(a => a.IsIPv4MappedToIPv6 ? a.MapToIPv4() : a)
+            .Where(a => a.AddressFamily == AddressFamily.InterNetwork).Select(a => a.ToString())
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+    /// <summary>手动切换出口和矩阵切换共用启动锁，直连会话一直拥有其 EasyTier 子会话。</summary>
+    public async Task SetExitNodeAsync(string? exitNode, CancellationToken ct = default)
+    {
+        await _startLock.WaitAsync(ct);
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var current = EasyTier?.Options ?? _currentOptions;
+            if (current is null || !current.Tun) throw new InvalidOperationException(L.T("core.mp.component.exitrequireslan"));
+            var options = current with { ExitNode = exitNode, DirectUnderlayAddresses = UnderlayAddresses(), DirectUnderlayUsesIpv6 = UnderlayUsesIpv6 };
+            await StartEasyTierLockedAsync(options, ct);
+            ObjectDisposedException.ThrowIf(_disposed, this);
+        }
+        finally
+        {
+            _startLock.Release();
+            StateChanged?.Invoke();
+        }
     }
 
     private IReadOnlyList<string> Verbose(IReadOnlyList<string>? extra) =>
@@ -169,16 +215,31 @@ public sealed class DirectSession : IAsyncDisposable
     /// <summary>
     /// 启动或换参数重启 EasyTier。完整局域网第一次启动会弹权限确认；已经提权的会话换参数不再弹。
     /// 一次只做一个；拿到锁之后 ct 已经取消（比如测试已经结束）就不再启动。
-    /// 和“正在跑的参数”比较（EasyTier.Options），不是上一次要求的参数；force 时总是重启（测试结束恢复）。
+    /// 和“正在跑的参数”比较（EasyTier.Options），不是上一次要求的参数；force 时总是重启。
     /// </summary>
     internal async Task StartEasyTierAsync(EasyTierOptions options, CancellationToken ct, bool force = false)
     {
         await _startLock.WaitAsync(ct);
         try
         {
-            ct.ThrowIfCancellationRequested();
-            if (!force && EasyTier is { HasExited: false } running && SameConfig(running.Options, options)) return;
-            Log(L.T("core.mp.session.start") + string.Join(' ', EasyTierArgs.Build(options).Select(a => Room.Secrets.Contains(a) ? L.T("core.mp.diagnostics.secret") : a)));
+            await StartEasyTierLockedAsync(options, ct, force);
+        }
+        finally
+        {
+            _startLock.Release();
+            StateChanged?.Invoke();
+        }
+    }
+
+    // 调用方持有 _startLock；成功时才提交参数和启动计数，失败时关闭可能已部分启用出口的会话。
+    private async Task StartEasyTierLockedAsync(EasyTierOptions options, CancellationToken ct, bool force = false)
+    {
+        ct.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!force && EasyTier is { HasExited: false } running && SameConfig(running.Options, options)) return;
+        Log(L.T("core.mp.session.start") + string.Join(' ', EasyTierArgs.Build(options).Select(a => Room.Secrets.Contains(a) ? L.T("core.mp.diagnostics.secret") : a)));
+        try
+        {
             if (StartForTest is { } start)
             {
                 var next = await start(options, ct);
@@ -187,8 +248,7 @@ public sealed class DirectSession : IAsyncDisposable
             }
             else if (EasyTier is EasyTierElevatedSession elevated && !elevated.HasExited)
             {
-                elevated.Restart(options);
-                for (var i = 0; i < 40 && elevated.RestartPending; i++) await Task.Delay(250, ct);
+                await elevated.RestartAsync(options, ct);
             }
             else
             {
@@ -200,17 +260,23 @@ public sealed class DirectSession : IAsyncDisposable
                         ? EasyTierElevatedSession.Start(_installer, options, Path.Combine(_workDir, "run-lan"))
                         : EasyTierSession.Start(_installer, options, Path.Combine(_workDir, IsHost ? "run-direct-host" : "run-direct-guest"));
                 if (EasyTier is EasyTierSession plain && Options.Verbose) plain.Output += line => _log.Add("EasyTier", line);
+                if (EasyTier is EasyTierElevatedSession fresh) await fresh.WaitForReadyAsync(ct);
             }
+            if (!_disposed && (EasyTier is null || EasyTier.HasExited)) throw new IOException(L.T("core.mp.component.startfailed"));
             _currentOptions = options;
             EasyTierStarts++;
             // 启动途中（比如在等权限确认）用户已经离开：刚起来的 EasyTier 马上关掉，不留在后台。
             if (_disposed) EasyTier?.Dispose();
         }
-        finally
+        catch
         {
-            _startLock.Release();
+            var failed = EasyTier;
+            EasyTier = null;
+            _currentOptions = null;
+            try { failed?.Dispose(); }
+            catch (Exception stopError) { Log(L.T("core.mp.matrix.restorefailedsettings") + stopError.Message); }
+            throw;
         }
-        StateChanged?.Invoke();
     }
 
     /// <summary>加入方：同意了一次测试，给它一个取消源（最长 <see cref="GuestTestConsent.MaxDuration"/>）。</summary>
@@ -248,7 +314,9 @@ public sealed class DirectSession : IAsyncDisposable
 
     private static bool SameConfig(EasyTierOptions a, EasyTierOptions b) =>
         a.Tun == b.Tun && a.AllowExit == b.AllowExit && a.ExitNode == b.ExitNode && a.Peers.SequenceEqual(b.Peers)
-        && (a.ExtraArgs ?? []).SequenceEqual(b.ExtraArgs ?? []);
+        && (a.ExtraArgs ?? []).SequenceEqual(b.ExtraArgs ?? [])
+        && (a.ExitNode is null || (a.DirectUnderlayAddresses.SequenceEqual(b.DirectUnderlayAddresses)
+            && a.DirectUnderlayUsesIpv6 == b.DirectUnderlayUsesIpv6));
 
     /// <summary>加入方：按邀请码打洞。房主能直接连到时很快通；否则要等房主贴回复码，所以等得久一点。</summary>
     public async Task<bool> JoinAsync(DirectCode invite, CancellationToken ct = default)
@@ -492,7 +560,7 @@ public sealed class DirectSession : IAsyncDisposable
 
     /// <summary>
     /// 加入方：测试结束（房主说结束、太久没动静、超过最长时间、用户点停止）：清掉同意，取消还在路上的步骤，
-    /// 在启动锁里无条件恢复所有路径和原来的联机设置。
+    /// 在启动锁里恢复所有路径和原来的联机设置；参数未变且进程仍在时保留游戏连接。
     /// </summary>
     /// <param name="notify">不是这次测试（比如只是撤回了还没回答的请求）时也通知界面。</param>
     /// <param name="beforeRestore">放开路径之后、恢复 EasyTier 之前做的事（停止时通知房主）。</param>
@@ -509,8 +577,7 @@ public sealed class DirectSession : IAsyncDisposable
             {
                 if (Bridge is { } bridge)
                 {
-                    bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
-                    bridge.SprayPorts = 256;
+                    RestoreBridgePaths();
                     // 停在直连某一步时连接可能已经断了：重新打洞，好让通知和之后的联机走得通。
                     if (bridge.Peers.Count == 0 && _remote is { } remote && !_disposed)
                         await bridge.PunchAsync(remote.Candidates, remote.Nat, TimeSpan.FromSeconds(30));
@@ -525,7 +592,7 @@ public sealed class DirectSession : IAsyncDisposable
             {
                 try
                 {
-                    await StartEasyTierAsync(original with { RpcPort = EasyTierArgs.FreeTcpPort() }, CancellationToken.None, force: true);
+                    await StartEasyTierAsync(original with { RpcPort = EasyTierArgs.FreeTcpPort() }, CancellationToken.None);
                     Log(L.T("core.mp.matrix.restored"));
                 }
                 catch (Exception e)
@@ -617,7 +684,7 @@ public sealed class DirectSession : IAsyncDisposable
             if (!guestExit) plan = [.. plan.Where(s => !s.Exit).Select((s, i) => s with { Index = i + 1 })];
             Log(L.P("core.mp.matrix.plan", plan.Count, plan.Count));
             _chatProbe = chatProbe;
-            return await TestMatrix.RunAsync(plan, new HostRunner(this, run), TimeSpan.FromSeconds(120), progress, Options.Simulated, ct);
+            return await TestMatrix.RunAsync(plan, new HostRunner(this, run), MatrixStepTimeout, progress, Options.Simulated, ct);
         }
         catch (OperationCanceledException) when (abort.IsCancellationRequested && !callerCt.IsCancellationRequested)
         {
@@ -627,14 +694,23 @@ public sealed class DirectSession : IAsyncDisposable
         {
             _hostRun = null;
             _hostAbort = null;
+            _testAnswer = null;
+            _elevateReply = null;
+            _chatProbe = null;
             // 恢复：所有路径、原来的模式；通知加入方结束（它会恢复自己的设置）。
-            Bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
-            if (Bridge.Peers.FirstOrDefault() is { } back)
+            RestoreBridgePaths();
+            try
             {
-                try { await Bridge.SendControlAsync(back, new JsonObject { ["op"] = "test-end", ["run"] = run }); }
-                catch (Exception e) when (e is SocketException or ObjectDisposedException or OperationCanceledException) { }
+                if (!_disposed && Bridge.Peers.Count == 0 && _guestCandidates.Count > 0)
+                    await Bridge.PunchAsync(_guestCandidates, _guestNat, TimeSpan.FromSeconds(30));
+                if (Bridge.Peers.FirstOrDefault() is { } back)
+                    await Bridge.SendControlAsync(back, new JsonObject { ["op"] = "test-end", ["run"] = run });
             }
-            await StartEasyTierAsync(HostOptions(Options.FullLan, Options.AllowExit), CancellationToken.None);
+            catch (Exception e) when (e is SocketException or ObjectDisposedException or OperationCanceledException)
+            {
+                Log(L.T("core.mp.matrix.restorefailedsettings") + e.Message);
+            }
+            if (!_disposed) await StartEasyTierAsync(HostOptions(Options.FullLan, Options.AllowExit), CancellationToken.None);
         }
     }
 
@@ -696,58 +772,90 @@ public sealed class DirectSession : IAsyncDisposable
             var peer = s.Bridge!.Peers.FirstOrDefault() ?? throw new InvalidOperationException(L.T("core.mp.matrix.disconnected"));
             var reply = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (s._pending) s._pending[step.Index] = reply;
-            s.Log(L.F("core.mp.matrix.step", step.Index, step.Label));
-            await s.Bridge.SendControlAsync(peer, new JsonObject
+            using var work = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            Task punch = Task.CompletedTask, restore = Task.CompletedTask, chat = Task.CompletedTask;
+            try
             {
-                ["op"] = "step",
-                ["run"] = run,
-                ["i"] = step.Index,
-                ["route"] = step.Route.ToString(),
-                ["path"] = step.Path?.ToString(),
-                ["fullLan"] = step.FullLan,
-                ["exit"] = step.Exit,
-                ["hostIp"] = s.PublicIPv4?.ToString(),
-            });
-            // 房主这边：同样只开这条路径、按这一步的模式重启 EasyTier，然后往加入方打洞。
-            await s.ApplyStepAsync(step, ct);
-            if (step.Route == RouteKind.Direct)
-            {
-                _ = s.Bridge.PunchAsync(s._guestCandidates, s._guestNat, TimeSpan.FromSeconds(30), ct);
-            }
-            var chatTask = s._chatProbe is { } probe ? probe(step, true, ct) : Task.FromResult<bool?>(null);
-            // 等加入方的结果；期间如果这一步把连接弄断了，30 秒后恢复全部路径以便收结果。
-            var restore = Task.Delay(TimeSpan.FromSeconds(35), ct).ContinueWith(_ =>
-            {
-                if (s.Bridge.Peers.Count == 0)
+                s.Log(L.F("core.mp.matrix.step", step.Index, step.Label));
+                await s.Bridge.SendControlAsync(peer, new JsonObject
                 {
-                    s.Bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
-                    _ = s.Bridge.PunchAsync(s._guestCandidates, s._guestNat, TimeSpan.FromSeconds(60), CancellationToken.None);
-                }
-            }, TaskScheduler.Default);
-            var message = await reply.Task.WaitAsync(ct);
-            s.Bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
-            return new MatrixResult(step,
-                Bool(message, "passed"),
-                Long(message, "connectMs"),
-                Double(message, "latency"),
-                Double(message, "mbps"),
-                Bool(message, "chat"),
-                Bool(message, "exit"),
-                Str(message, "reason") ?? "");
+                    ["op"] = "step",
+                    ["run"] = run,
+                    ["i"] = step.Index,
+                    ["route"] = step.Route.ToString(),
+                    ["path"] = step.Path?.ToString(),
+                    ["fullLan"] = step.FullLan,
+                    ["exit"] = step.Exit,
+                    ["hostIp"] = s.PublicIPv4?.ToString(),
+                });
+                // 同样只开这条路径；保留本地传输端点，让同配置的 EasyTier 隧道能继续收发。
+                await s.ApplyStepAsync(step, work.Token);
+                if (step.Route == RouteKind.Direct)
+                    punch = s.Bridge.PunchAsync(s._guestCandidates, s._guestNat, TimeSpan.FromSeconds(30), work.Token);
+                if (s._chatProbe is { } probe) chat = probe(step, true, work.Token);
+                restore = s.RestoreStepConnectionAsync(work.Token);
+                var message = await reply.Task.WaitAsync(work.Token);
+                return new MatrixResult(step,
+                    Bool(message, "passed"),
+                    Long(message, "connectMs"),
+                    Double(message, "latency"),
+                    Double(message, "mbps"),
+                    Bool(message, "chat"),
+                    Bool(message, "exit"),
+                    Str(message, "reason") ?? "");
+            }
+            finally
+            {
+                // 成功、超时、取消都先收束本步任务，迟到的恢复不能改动下一步的路径限制。
+                work.Cancel();
+                try { await Task.WhenAll(punch, restore, chat); }
+                catch (OperationCanceledException) when (work.IsCancellationRequested) { }
+                catch (Exception e) { s.Log(L.T("core.mp.matrix.restorefailedsettings") + e.Message); }
+                lock (s._pending) s._pending.Remove(step.Index);
+                s.RestoreBridgePaths();
+            }
         }
     }
 
-    /// <summary>两边都要做的切换：只允许这一步的路径、断开旧连接、按模式重启 EasyTier。</summary>
+    private void RestoreBridgePaths(CancellationToken ct = default)
+    {
+        lock (_pathGate)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Bridge is not { } bridge) return;
+            bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
+            bridge.SprayPorts = 256;
+        }
+    }
+
+    private async Task RestoreStepConnectionAsync(CancellationToken ct)
+    {
+        await Task.Delay(MatrixRecoveryDelay, ct);
+        ct.ThrowIfCancellationRequested();
+        if (Bridge!.Peers.Count == 0)
+        {
+            RestoreBridgePaths(ct);
+            await Bridge.PunchAsync(_guestCandidates, _guestNat, TimeSpan.FromSeconds(60), ct);
+        }
+    }
+
+    /// <summary>两边都要做的切换：只允许这一步的路径、重新认证直连，按需切换 EasyTier 配置。</summary>
     private async Task ApplyStepAsync(MatrixStep step, CancellationToken ct)
     {
+        if (step.Exit && step.Path == PathKind.IPv6)
+            throw new InvalidOperationException(L.T("core.mp.exit.ipv6path"));
         var bridge = Bridge!;
-        if (step.Route == RouteKind.Direct)
+        lock (_pathGate)
         {
-            bridge.AllowedPaths.Clear();
-            bridge.AllowedPaths.Add(step.Path!.Value);
-            if (step.Path == PathKind.PunchSpray) bridge.AllowedPaths.Add(PathKind.Punch);
-            bridge.SprayPorts = step.Path == PathKind.PunchSpray ? 256 : 0;
-            bridge.DropPeers();
+            ct.ThrowIfCancellationRequested();
+            if (step.Route == RouteKind.Direct)
+            {
+                bridge.AllowedPaths.Clear();
+                bridge.AllowedPaths.Add(step.Path!.Value);
+                if (step.Path == PathKind.PunchSpray) bridge.AllowedPaths.Add(PathKind.Punch);
+                bridge.SprayPorts = step.Path == PathKind.PunchSpray ? 256 : 0;
+                bridge.DropPeers(preserveLocalTransport: true);
+            }
         }
         var relay = step.Route == RouteKind.Relay ? new[] { "--disable-p2p" } : null;
         if (IsHost)
@@ -775,7 +883,7 @@ public sealed class DirectSession : IAsyncDisposable
         return new MatrixStep(index, route, path, Bool(message, "fullLan") == true, Bool(message, "exit") == true);
     }
 
-    private async Task GuestStepAsync(DirectPeer controlPeer, JsonObject message)
+    internal async Task GuestStepAsync(DirectPeer controlPeer, JsonObject message)
     {
         var run = Str(message, "run");
         if (ParseStep(message) is not { } step) return;
@@ -786,18 +894,23 @@ public sealed class DirectSession : IAsyncDisposable
             await Bridge!.SendControlAsync(controlPeer, new JsonObject { ["op"] = "result", ["run"] = run, ["i"] = step.Index, ["passed"] = false, ["reason"] = L.T("core.mp.matrix.notconsented") });
             return;
         }
+        JsonObject? result = null;
         try
         {
             GuestStepStarted?.Invoke(run!, step);
-            await GuestRunStepAsync(step, Str(message, "hostIp"), run);
+            result = await GuestRunStepAsync(step, Str(message, "hostIp"), run);
         }
+        catch (OperationCanceledException) when (RunToken(run).IsCancellationRequested) { }
         finally
         {
+            // 房主收到结果就可能发下一步，因此必须先释放本步状态，再发结果。
             TestConsent.EndStep(run);
         }
+        if (result is not null && !RunToken(run).IsCancellationRequested && Bridge!.Peers.FirstOrDefault() is { } back)
+            await Bridge.SendControlAsync(back, result);
     }
 
-    private async Task GuestRunStepAsync(MatrixStep step, string? hostIp, string? run)
+    private async Task<JsonObject?> GuestRunStepAsync(MatrixStep step, string? hostIp, string? run)
     {
         Log(L.F("core.mp.matrix.step", step.Index, step.Label));
         var result = new JsonObject { ["op"] = "result", ["run"] = run, ["i"] = step.Index };
@@ -842,10 +955,15 @@ public sealed class DirectSession : IAsyncDisposable
                 }
                 catch (Exception e) when (e is IOException or SocketException or OperationCanceledException && !cts.IsCancellationRequested)
                 {
-                    Log(L.T("core.mp.matrix.speedfailed") + e.Message);
+                    throw new DirectFailedException(L.T("core.mp.matrix.speedfailed") + e.Message);
                 }
             }
-            if (GuestChatProbe is { } chat) result["chat"] = await chat(step, cts.Token);
+            if (GuestChatProbe is { } chat)
+            {
+                result["chat"] = await chat(step, cts.Token);
+                if (Bool(result, "chat") == false)
+                    throw new DirectFailedException(L.F("core.mp.matrix.pathfailed", L.T("multiplayer.chat.title")));
+            }
             if (step.Exit)
             {
                 if (Options.Simulated || hostIp is null)
@@ -871,14 +989,15 @@ public sealed class DirectSession : IAsyncDisposable
             Log(L.F("core.mp.matrix.stepfailed", step.Index, result["reason"]));
         }
         // 测试已经结束：恢复由 EndGuestTestAsync 做，这里不再打洞、不再回结果。
-        if (runToken.IsCancellationRequested) return;
+        if (runToken.IsCancellationRequested) return null;
         // 恢复全部路径，确保能把结果发回去。
         var bridge = Bridge!;
-        bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
-        bridge.SprayPorts = 256;
-        if (bridge.Peers.Count == 0) await bridge.PunchAsync(_remote!.Candidates, _remote.Nat, TimeSpan.FromSeconds(60));
-        if (bridge.Peers.FirstOrDefault() is { } back) await bridge.SendControlAsync(back, result);
-        else Log(L.F("core.mp.matrix.restorefailed", step.Index));
+        RestoreBridgePaths(runToken);
+        // 留出房主 120 秒期限内的回报时间；结束测试时连恢复打洞也一起取消。
+        if (bridge.Peers.Count == 0) await bridge.PunchAsync(_remote!.Candidates, _remote.Nat, TimeSpan.FromSeconds(15), runToken);
+        if (bridge.Peers.Count > 0) return result;
+        Log(L.F("core.mp.matrix.restorefailed", step.Index));
+        return null;
     }
 
     public async ValueTask DisposeAsync()
@@ -895,6 +1014,7 @@ public sealed class DirectSession : IAsyncDisposable
             catch (Exception e) { Log(L.F("core.mp.punch.localerror", e.GetType().Name)); }
         }
         _disposed = true;
+        Try(() => _hostAbort?.Cancel());
         Try(() => _consentWatch?.Dispose());
         Try(() => _pendingWatch?.Dispose());
         Try(() =>
