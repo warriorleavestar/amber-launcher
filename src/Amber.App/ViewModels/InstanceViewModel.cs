@@ -163,8 +163,15 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     public partial string? SelectedId { get; set; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasInstance), nameof(SupportsQuickPlay))]
+    [NotifyPropertyChangedFor(nameof(HasInstance), nameof(SupportsQuickPlay), nameof(IsSharedDir))]
     public partial GameInstance? Current { get; set; }
+
+    /// <summary>版本隔离关闭：模组、资源包、光影都在 .minecraft 下，所有实例共用（改版规格 2.3）。</summary>
+    public bool IsSharedDir => Current is { } c && _service.UsesSharedDir(c.Id);
+
+    /// <summary>共享目录提示上的【去开启】：切到设置 Tab。</summary>
+    [RelayCommand]
+    private void GoToIsolationSetting() => TabIndex = 0;
 
     public bool HasInstance => Current is not null;
 
@@ -184,6 +191,10 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     {
         _service = service;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
+        service.CurrentInstanceChanged += () => Dispatcher.UIThread.Post(() =>
+        {
+            if (_active && _service.CurrentInstance is { } id && Instances.Contains(id)) SelectedId = id;
+        });
         service.ContentChanged += () => Dispatcher.UIThread.Post(() => { _loadedTabs.Clear(); LoadTab(TabIndex); });
     }
 
@@ -198,16 +209,14 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private void RefreshInstances()
     {
         if (!_active) return;
-        var keep = SelectedId;
         Instances.Clear();
         foreach (var v in _service.InstalledVersions()) Instances.Add(v);
-        SelectedId = keep is not null && Instances.Contains(keep) ? keep
-            : _service.Settings.LastVersion is { } last && Instances.Contains(last) ? last
-            : Instances.FirstOrDefault();
+        SelectedId = _service.CurrentOr(Instances, Instances.FirstOrDefault());
     }
 
     partial void OnSelectedIdChanged(string? value)
     {
+        _service.SetCurrentInstance(value);
         _loadedTabs.Clear();
         Current = null;
         InfoText = "";
@@ -297,6 +306,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
                 }
             }), ct);
             await Ui.FlushAsync();
+            // 补全完了，上次没装完的实例也就装完了。
+            _service.Directory.MarkInstallFinished(c.Id);
+            UpdateInfoText();
             SetStatus(StatusMessage.Success("instance.files.complete_status"));
         });
     }
@@ -567,7 +579,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private void UpdateInfoText()
     {
         if (Current is { } c)
-            InfoText = L.F("instance.version.info", c.McVersion, c.Loader is null ? L.T("home.version.vanilla") : $"{c.Loader} {c.LoaderVersion}", c.WorkDir);
+            InfoText = _service.WithStateNote(c.Id, L.F("instance.version.info", c.McVersion, c.Loader is null ? L.T("home.version.vanilla") : $"{c.Loader} {c.LoaderVersion}", c.WorkDir));
     }
 
     protected override void OnLanguageChanged()

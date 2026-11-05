@@ -24,6 +24,20 @@
       <Setter Property="Background" Value="{DynamicResource PageBg}" />
       <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
     </Style>
+    <!-- 提示条：色调底、左侧一道强调色（改版规格的 callout.info / warning） -->
+    <Style Selector="Border.callout">
+      <Setter Property="BorderThickness" Value="3,0,0,0" />
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}" />
+      <Setter Property="Padding" Value="10,6" />
+    </Style>
+    <Style Selector="Border.callout.info">
+      <Setter Property="Background" Value="{DynamicResource AccentTint}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+    </Style>
+    <Style Selector="Border.callout.warning">
+      <Setter Property="Background" Value="{DynamicResource WarningTint}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Warning}" />
+    </Style>
     <Style Selector="Border.card">
       <Setter Property="Background" Value="{DynamicResource Surface}" />
       <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />

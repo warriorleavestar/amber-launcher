@@ -77,6 +77,18 @@
           </StackPanel>
         </ScrollViewer>
       </Border>
+
+      <!-- 成功卡：装好后给出下一步 -->
+      <Border Grid.Column="1" Classes="card" Width="300" Margin="14,0,0,14" VerticalAlignment="Top" IsVisible="{Binding HasInstalled}">
+        <StackPanel Spacing="10">
+          <TextBlock Classes="h2" Margin="0" Text="{Binding InstalledTitle}" TextWrapping="Wrap" />
+          <TextBlock Classes="hint" Text="{l:T download.installed.hint}" TextWrapping="Wrap" />
+          <Button Classes="primary" Content="{l:T download.installed.launch}" Command="{Binding LaunchInstalledCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+          <Button Content="{l:T download.installed.add_mods}" Command="{Binding AddModsToInstalledCommand}" IsVisible="{Binding InstalledHasLoader}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+          <Button Content="{l:T download.installed.open}" Command="{Binding OpenInstalledCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+          <Button Classes="ghost" Content="{l:T common.close}" Command="{Binding CloseInstalledCommand}" HorizontalAlignment="Right" />
+        </StackPanel>
+      </Border>
     </Grid>
 
     <Border Grid.Row="3" Classes="card" Margin="0">

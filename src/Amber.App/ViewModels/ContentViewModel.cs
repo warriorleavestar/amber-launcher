@@ -141,20 +141,27 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     {
         _service = service;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
+        service.CurrentInstanceChanged += () => Dispatcher.UIThread.Post(() =>
+        {
+            if (_service.CurrentInstance is { } id && Instances.Contains(id)) TargetInstance = id;
+            OnPropertyChanged(nameof(IsTemporaryTarget));
+        });
         RefreshInstances();
     }
 
     private void RefreshInstances()
     {
-        var keep = TargetInstance;
+        // 资源页“装到”跟着当前实例；手动换成别的只算这一次（不改当前实例），切换当前实例时回到它。
+        var keep = IsTemporaryTarget ? TargetInstance : null;
         Instances.Clear();
         foreach (var v in _service.InstalledVersions()) Instances.Add(v);
-        TargetInstance = keep is not null && Instances.Contains(keep) ? keep : _service.Settings.LastVersion is { } last && Instances.Contains(last) ? last : Instances.FirstOrDefault();
+        TargetInstance = keep is not null && Instances.Contains(keep) ? keep : _service.CurrentOr(Instances, Instances.FirstOrDefault());
     }
 
     partial void OnTypeIndexChanged(int value)
     {
         if (value < 0) return;
+        OnPropertyChanged(nameof(IsSharedTarget));
         if (IsDatapack) RefreshWorlds();
         _ = SearchFromStart();
     }
@@ -164,8 +171,19 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     }
     partial void OnSelectedChanged(ProjectItem? value) => _ = LoadFilesAsync();
     partial void OnShowUnstableChanged(bool value) => _ = LoadFilesAsync();
+    /// <summary>“装到”临时换成了不是当前实例的那个（显示“仅本次”）。</summary>
+    public bool IsTemporaryTarget => TargetInstance is { } t && _service.CurrentInstance is { } c && t != c && Instances.Contains(c);
+
+    /// <summary>
+    /// 版本隔离关闭时模组、资源包、光影装进共享目录（所有实例共用），“装到”的实例只用来筛选兼容的游戏版本和加载器。
+    /// </summary>
+    public bool IsSharedTarget => TargetInstance is { } t && CurrentType is ContentType.Mod or ContentType.ResourcePack or ContentType.Shader
+        && _service.UsesSharedDir(t);
+
     partial void OnTargetInstanceChanged(string? value)
     {
+        OnPropertyChanged(nameof(IsTemporaryTarget));
+        OnPropertyChanged(nameof(IsSharedTarget));
         if (IsDatapack) RefreshWorlds();
         if (Selected is not null) _ = LoadFilesAsync();
     }
@@ -184,6 +202,15 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             // 版本文件坏了就没有世界可选。
         }
         TargetWorld = Worlds.FirstOrDefault(w => w.World.FolderName == keep) ?? Worlds.FirstOrDefault();
+    }
+
+    /// <summary>从别的页面跳来给某个实例找模组（比如安装成功卡上的“添加模组”）。</summary>
+    public void BrowseModsFor(string instanceId)
+    {
+        if (Instances.Contains(instanceId)) TargetInstance = instanceId;
+        Query = "";
+        if (TypeIndex != (int)ContentType.Mod) TypeIndex = (int)ContentType.Mod;
+        else _ = SearchFromStart();
     }
 
     /// <summary>从实例页的“下载数据包”跳过来：切到数据包，并选好版本和世界。</summary>
@@ -480,6 +507,8 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         _service.ForceIsolated(id);
         SetStatus(StatusMessage.Success("content.modpack.installed", id));
         _service.NotifyInstalledChanged();
+        // 新装的整合包直接成为当前实例（改版规格 2.3）。
+        _service.SetCurrentInstance(id);
     }
 
     [RelayCommand]

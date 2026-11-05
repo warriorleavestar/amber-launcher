@@ -105,6 +105,38 @@ public sealed class LauncherService : IDisposable
     public List<string> InstalledVersions() => Directory.ListInstalled().OrderDescending().ToList();
 
     /// <summary>
+    /// 全局唯一的“当前实例”（改版规格 2.3）：启动、实例、联机页都绑定它，资源页默认装到它。
+    /// 切换时马上写进 Settings.LastVersion，重启后保持。
+    /// </summary>
+    public string? CurrentInstance => Settings.LastVersion;
+
+    /// <summary>CurrentInstance 变了（在调用 SetCurrentInstance 的线程上触发）。</summary>
+    public event Action? CurrentInstanceChanged;
+
+    public void SetCurrentInstance(string? id)
+    {
+        if (id is null || id == Settings.LastVersion) return;
+        Settings.LastVersion = id;
+        Settings.Save();
+        CurrentInstanceChanged?.Invoke();
+    }
+
+    /// <summary>当前实例还装着就返回它，否则返回 fallback（比如列表第一项）。</summary>
+    public string? CurrentOr(IReadOnlyCollection<string> installed, string? fallback) =>
+        CurrentInstance is { } id && installed.Contains(id) ? id : fallback;
+
+    /// <summary>实例状态不正常时给版本说明后面加的一句提示（正常时为空串）。</summary>
+    public string StateNote(string id) => Directory.StateOf(id) switch
+    {
+        InstanceState.Incomplete => Amber.Core.Localization.L.T("instance.state.incomplete"),
+        InstanceState.Broken => Amber.Core.Localization.L.T("instance.state.broken"),
+        _ => "",
+    };
+
+    /// <summary>把状态提示接在说明文字后面（另起一行）。</summary>
+    public string WithStateNote(string id, string text) => StateNote(id) is { Length: > 0 } note ? text + Environment.NewLine + note : text;
+
+    /// <summary>
     /// 启动时清理回收目录里超过保留天数的条目：游戏目录下的，以及游戏目录在别的卷上时各实例根目录下的。返回清掉的条数。
     /// </summary>
     public int PurgeTrash(DateTimeOffset? now = null)
@@ -120,7 +152,10 @@ public sealed class LauncherService : IDisposable
     public InstanceSettings EffectiveSettings(string id) =>
         InstanceSettings.Load(Directory, id).Over(Settings.ToGlobalInstanceSettings());
 
-    public string WorkDirFor(string id) => EffectiveSettings(id).Isolate == true ? Directory.VersionDir(id) : Directory.Root;
+    public string WorkDirFor(string id) => UsesSharedDir(id) ? Directory.Root : Directory.VersionDir(id);
+
+    /// <summary>没开“按实例分开文件夹”：模组、资源包、存档都在游戏目录下，所有实例共用。</summary>
+    public bool UsesSharedDir(string id) => EffectiveSettings(id).Isolate != true;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _runningDirs = new(StringComparer.OrdinalIgnoreCase);
 

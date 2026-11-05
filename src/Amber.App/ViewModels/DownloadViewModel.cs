@@ -81,6 +81,43 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     public bool IsConfiguring => Target is not null;
     public string InstallTitle => L.F("download.install.title", Target?.Id);
 
+    /// <summary>刚装好的实例；非空时右侧显示成功卡（立即启动、添加模组、打开实例）。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasInstalled), nameof(InstalledTitle), nameof(InstalledHasLoader))]
+    public partial string? JustInstalled { get; set; }
+
+    public bool HasInstalled => JustInstalled is not null;
+    public string InstalledTitle => L.F("download.installed.title", JustInstalled);
+
+    /// <summary>原版实例装不了模组，成功卡不给“添加模组”。</summary>
+    public bool InstalledHasLoader { get; private set; }
+
+    /// <summary>成功卡上的去处（MainViewModel 接上）。</summary>
+    public Action<string>? LaunchInstance { get; set; }
+    public Action<string>? OpenInstance { get; set; }
+    public Action<string>? BrowseModsFor { get; set; }
+
+    [RelayCommand]
+    private void LaunchInstalled()
+    {
+        if (JustInstalled is { } id) LaunchInstance?.Invoke(id);
+    }
+
+    [RelayCommand]
+    private void OpenInstalled()
+    {
+        if (JustInstalled is { } id) OpenInstance?.Invoke(id);
+    }
+
+    [RelayCommand]
+    private void AddModsToInstalled()
+    {
+        if (JustInstalled is { } id) BrowseModsFor?.Invoke(id);
+    }
+
+    [RelayCommand]
+    private void CloseInstalled() => JustInstalled = null;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(NeedsLoaderVersion))]
     public partial LoaderChoice SelectedLoader { get; set; }
@@ -199,6 +236,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     private void Configure(RemoteVersionItem? item)
     {
         Target = item;
+        if (item is not null) JustInstalled = null;
         SelectedLoader = LoaderChoices[0];
         UpdateDefaultName();
     }
@@ -264,6 +302,10 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         _installCts = new CancellationTokenSource();
         var watch = Stopwatch.StartNew();
         var ct = _installCts.Token;
+        // 先放“安装未完成”标记：中途取消或失败时，实例列表会显示“安装未完成”，补全文件可以接着装。
+        var expectedId = loader is null ? item.Id : string.IsNullOrWhiteSpace(CustomName) ? SelectedLoaderVersion!.DefaultId : CustomName.Trim();
+        try { _service.Directory.MarkInstallStarted(expectedId); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         try
         {
             string id;
@@ -294,7 +336,14 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             var elapsedSeconds = watch.Elapsed.TotalSeconds;
             Status = L.P("download.status.installed", (long)Math.Round(elapsedSeconds), id, elapsedSeconds);
             Target = null;
+            _service.Directory.MarkInstallFinished(id);
+            if (id != expectedId) _service.Directory.MarkInstallFinished(expectedId);
             _service.NotifyInstalledChanged();
+            _service.SetCurrentInstance(id);
+            InstalledHasLoader = loader is not null;
+            JustInstalled = id;
+            // 装的时候切到别的页面了：用 Toast 告诉一声，带“打开实例”。
+            if (!IsCurrent) Toasts.WithAction(L.F("download.installed.title", id), L.T("download.installed.open"), () => OpenInstance?.Invoke(id));
         }
         catch (OperationCanceledException)
         {

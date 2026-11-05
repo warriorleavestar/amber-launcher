@@ -10,6 +10,17 @@
     <TextBlock Classes="h1" Text="{l:T home.launch}" />
     <ScrollViewer Grid.Row="1">
       <StackPanel>
+        <!-- 游戏在运行时又要启动：问一声，允许同时开两个客户端 -->
+        <Border Classes="callout warning" IsVisible="{Binding HasPendingLaunch}" Margin="0,0,0,12">
+          <DockPanel>
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8" Margin="12,0,0,0" VerticalAlignment="Center">
+              <Button Classes="primary" Content="{l:T home.multi.launch_anyway}" Command="{Binding LaunchAnywayCommand}" />
+              <Button Content="{l:T common.cancel}" Command="{Binding DismissPendingLaunchCommand}" />
+            </StackPanel>
+            <TextBlock Text="{Binding PendingLaunchText}" TextWrapping="Wrap" VerticalAlignment="Center" />
+          </DockPanel>
+        </Border>
+
         <Border Classes="card">
           <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
             <TextBlock Text="{l:T home.version.label}" VerticalAlignment="Center" />
@@ -52,10 +63,11 @@
               <TextBlock Text="{l:T home.crash.suspect_mods}" FontWeight="SemiBold" />
               <ItemsControl ItemsSource="{Binding Crash.SuspectMods}" />
             </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="8">
+            <WrapPanel ItemSpacing="8" LineSpacing="8">
+              <Button Content="{l:T home.crash.view_log}" Command="{Binding ViewLogCommand}" />
               <Button Content="{l:T home.crash.open_report}" Command="{Binding OpenLatestCrashFileCommand}" />
               <Button Content="{l:T home.crash.export}" Click="ExportCrash_Click" />
-            </StackPanel>
+            </WrapPanel>
           </StackPanel>
         </Border>
       </StackPanel>
@@ -65,12 +77,30 @@
       <Grid ColumnDefinitions="*,Auto,Auto">
         <StackPanel VerticalAlignment="Center" Spacing="6">
           <c:StatusBar Message="{Binding StatusInfo}" />
-          <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
+          <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding ShowProgress}" IsIndeterminate="{Binding ProgressIndeterminate}" />
         </StackPanel>
-        <Button Grid.Column="1" Content="{l:T common.end}" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}"
-                Margin="12,0,0,0" Padding="18,10" />
-        <Button Grid.Column="2" Classes="primary" Content="{l:T home.launch}" Command="{Binding LaunchCommand}"
-                Margin="12,0,0,0" Padding="36,12" FontSize="16" FontWeight="SemiBold" />
+        <!-- 退出等太久才出现；确认文字放在 Flyout 里，不塞进主按钮 -->
+        <Button Grid.Column="1" x:Name="ForceKillButton" Classes="danger" Content="{l:T home.button.force_kill}" IsVisible="{Binding ShowForceKill}"
+                Margin="12,0,0,0" Padding="18,10" VerticalAlignment="Center">
+          <Button.Flyout>
+            <Flyout Placement="TopEdgeAlignedRight">
+              <StackPanel Spacing="10" MaxWidth="280">
+                <TextBlock Text="{l:T home.force_kill.confirm}" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                  <Button Classes="danger" Content="{l:T home.button.force_kill}" Command="{Binding ForceKillCommand}" Click="CloseForceKillFlyout" />
+                  <Button Content="{l:T common.cancel}" Click="CloseForceKillFlyout" />
+                </StackPanel>
+              </StackPanel>
+            </Flyout>
+          </Button.Flyout>
+        </Button>
+        <StackPanel Grid.Column="2" Margin="12,0,0,0" Spacing="4" VerticalAlignment="Center">
+          <Button x:Name="PrimaryButton" Classes="primary" Content="{Binding PrimaryLabel}" Command="{Binding PrimaryCommand}"
+                  MinHeight="48" MinWidth="160" Padding="28,10" FontSize="16" FontWeight="SemiBold"
+                  HorizontalContentAlignment="Center" VerticalContentAlignment="Center" />
+          <TextBlock Classes="hint" Text="{Binding AccountHint}" HorizontalAlignment="Center" MaxWidth="200"
+                     TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding AccountHint}" IsVisible="{Binding !!AccountHint.Length}" />
+        </StackPanel>
       </Grid>
     </Border>
   </Grid>

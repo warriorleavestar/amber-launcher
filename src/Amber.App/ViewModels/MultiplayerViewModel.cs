@@ -240,6 +240,10 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         SelectedTransport = TransportChoices[0];
         service.GameOutput += OnGameOutput;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
+        service.CurrentInstanceChanged += () => Dispatcher.UIThread.Post(() =>
+        {
+            if (_service.CurrentInstance is { } id && Instances.Contains(id)) TargetInstance = id;
+        });
         InitDirect();
     }
 
@@ -251,14 +255,13 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         // 不自动听局域网广播：绑定端口可能让 Windows 弹防火墙询问。用 Amber 启动的游戏从日志就能认出端口。
     }
 
+    partial void OnTargetInstanceChanged(string? value) => _service.SetCurrentInstance(value);
+
     private void RefreshInstances()
     {
-        var keep = TargetInstance;
         Instances.Clear();
         foreach (var v in _service.InstalledVersions()) Instances.Add(v);
-        TargetInstance = keep is not null && Instances.Contains(keep) ? keep
-            : _service.Settings.LastVersion is { } last && Instances.Contains(last) ? last
-            : Instances.FirstOrDefault();
+        TargetInstance = _service.CurrentOr(Instances, Instances.FirstOrDefault());
     }
 
     private void OnGameOutput(string versionId, string line)

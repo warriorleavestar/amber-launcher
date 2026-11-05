@@ -21,6 +21,14 @@
       <WrapPanel ItemSpacing="10" LineSpacing="4" IsVisible="{Binding !IsModpack}">
         <TextBlock Text="{l:T content.install.target}" VerticalAlignment="Center" />
         <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding TargetInstance}" MinWidth="260" />
+        <Border IsVisible="{Binding IsTemporaryTarget}" Background="{DynamicResource WarningTint}" CornerRadius="{DynamicResource RadiusPill}" Padding="8,2" VerticalAlignment="Center"
+                ToolTip.Tip="{l:T content.install.temporary_hint}">
+          <TextBlock Text="{l:T content.install.temporary}" Foreground="{DynamicResource WarningText}" FontSize="{StaticResource FontCaption}" />
+        </Border>
+        <Border IsVisible="{Binding IsSharedTarget}" Background="{DynamicResource AccentTint}" CornerRadius="{DynamicResource RadiusPill}" Padding="8,2" VerticalAlignment="Center"
+                ToolTip.Tip="{l:T content.install.shared_hint}">
+          <TextBlock Text="{l:T content.install.shared}" Foreground="{DynamicResource AccentText}" FontSize="{StaticResource FontCaption}" />
+        </Border>
         <CheckBox Content="{l:T content.search.filter_by_instance}" IsChecked="{Binding FilterByInstance}" />
       </WrapPanel>
       <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding IsDatapack}">

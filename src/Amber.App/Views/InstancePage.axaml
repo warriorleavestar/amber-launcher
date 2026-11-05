@@ -81,6 +81,12 @@
           <Grid RowDefinitions="Auto,Auto,*">
             <!-- 汇总一行、按钮一行（按钮放不下时换行），英文、日文的长按钮不会把汇总挤没。 -->
             <StackPanel Spacing="6" Margin="0,0,0,6">
+              <Border Classes="callout info" IsVisible="{Binding IsSharedDir}">
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Classes="ghost" Content="{l:T instance.shared.enable}" Command="{Binding GoToIsolationSettingCommand}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                  <TextBlock Text="{l:T instance.shared.notice}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </DockPanel>
+              </Border>
               <TextBlock Classes="hint" Text="{Binding ModSummary}" TextWrapping="Wrap" />
               <WrapPanel ItemSpacing="6" LineSpacing="6">
                 <Button Content="{l:T common.add_files}" Click="AddMods_Click" />
@@ -220,9 +226,17 @@
 
         <TabItem Header="{l:T instance.resourcepacks.title}" FontSize="14">
           <Grid RowDefinitions="Auto,*">
-            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
-              <Button Content="{l:T common.add_files}" Click="AddResourcePacks_Click" />
-              <Button Content="{l:T common.open_folder}" Command="{Binding OpenResourcePacksFolderCommand}" />
+            <StackPanel Spacing="6" Margin="0,0,0,6">
+              <Border Classes="callout info" IsVisible="{Binding IsSharedDir}">
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Classes="ghost" Content="{l:T instance.shared.enable}" Command="{Binding GoToIsolationSettingCommand}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                  <TextBlock Text="{l:T instance.shared.notice}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </DockPanel>
+              </Border>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button Content="{l:T common.add_files}" Click="AddResourcePacks_Click" />
+                <Button Content="{l:T common.open_folder}" Command="{Binding OpenResourcePacksFolderCommand}" />
+              </StackPanel>
             </StackPanel>
             <ListBox Grid.Row="1" ItemsSource="{Binding ResourcePacks}" Background="Transparent">
               <ListBox.ItemTemplate>
@@ -240,9 +254,17 @@
 
         <TabItem Header="{l:T instance.shaderpacks.title}" FontSize="14">
           <Grid RowDefinitions="Auto,*">
-            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
-              <Button Content="{l:T common.add_files}" Click="AddShaderPacks_Click" />
-              <Button Content="{l:T common.open_folder}" Command="{Binding OpenShaderPacksFolderCommand}" />
+            <StackPanel Spacing="6" Margin="0,0,0,6">
+              <Border Classes="callout info" IsVisible="{Binding IsSharedDir}">
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Classes="ghost" Content="{l:T instance.shared.enable}" Command="{Binding GoToIsolationSettingCommand}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                  <TextBlock Text="{l:T instance.shared.notice}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </DockPanel>
+              </Border>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button Content="{l:T common.add_files}" Click="AddShaderPacks_Click" />
+                <Button Content="{l:T common.open_folder}" Command="{Binding OpenShaderPacksFolderCommand}" />
+              </StackPanel>
             </StackPanel>
             <ListBox Grid.Row="1" ItemsSource="{Binding ShaderPacks}" Background="Transparent">
               <ListBox.ItemTemplate>

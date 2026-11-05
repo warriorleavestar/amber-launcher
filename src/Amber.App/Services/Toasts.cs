@@ -30,6 +30,25 @@ public static class Toasts
     public static void Show(string text, NotificationType type = NotificationType.Information) =>
         Dispatcher.UIThread.Post(() => _manager?.Show(new TextBlock { Text = text, TextWrapping = Avalonia.Media.TextWrapping.Wrap, MaxWidth = 360 }, type, TimeSpan.FromSeconds(4)));
 
+    /// <summary>带一个按钮的 Toast（比如安装完成后的“打开实例”）。</summary>
+    public static void WithAction(string text, string actionLabel, Action action) =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_manager is null) return;
+            var button = new Button { Content = actionLabel, Classes = { "secondary" }, Margin = new Avalonia.Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            var content = new DockPanel
+            {
+                Children =
+                {
+                    button,
+                    new TextBlock { Text = text, TextWrapping = Avalonia.Media.TextWrapping.Wrap, MaxWidth = 320, VerticalAlignment = VerticalAlignment.Center },
+                },
+            };
+            DockPanel.SetDock(button, Dock.Right);
+            button.Click += (_, _) => action();
+            _manager.Show(content, NotificationType.Success, UndoDuration);
+        });
+
     /// <summary>文件进回收目录后调用：记下撤销信息并显示 Toast。restored 收到实际恢复到的路径。</summary>
     public static void Deleted(TrashEntry entry, Action<string> restored) =>
         Add(new UndoItem(entry.Name, () =>

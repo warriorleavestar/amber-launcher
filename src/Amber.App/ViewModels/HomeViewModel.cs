@@ -7,6 +7,7 @@ using Amber.Core.Diagnostics;
 using Amber.Core.Install;
 using Amber.Core.Launch;
 using Amber.Core.Localization;
+using Amber.Core.Game;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -48,22 +49,52 @@ public sealed partial class HomeViewModel : PageViewModel
 
     private const int KeptOutputLines = 400;
 
+    /// <summary>进程起来后这么久还没在日志里看到进入游戏的标志，就当作“可能已进入游戏”（老版本、Forge 的日志写法不一样）。</summary>
+    private static readonly TimeSpan EnterGameFallback = TimeSpan.FromMinutes(3);
+
+    /// <summary>点“退出游戏”后这么久进程还在，就给出“强制结束”。</summary>
+    private static readonly TimeSpan ForceKillDelay = TimeSpan.FromSeconds(30);
+
     private readonly LauncherService _service;
+
+    /// <summary>自检用。</summary>
+    internal LauncherService Service => _service;
     private readonly LogViewModel _log;
-    private readonly Queue<string> _recentOutput = new();
-    private CancellationTokenSource? _cts;
-    private Process? _game;
-    private bool _stoppedByUser;
     private List<string> _lastRunFiles = [];
+    private Queue<string> _lastRunOutput = new();
     private bool _refreshingAccounts;
     private (string WorkDir, DateTime Started, string[] Output)? _crashInput;
     /// <summary>每次显示新的崩溃结果（或清掉）加一：换语言的重新分析只在期间没有新结果时才替换。</summary>
     private int _crashGeneration;
 
+    /// <summary>一次启动，从准备到游戏退出。可以同时有好几个（同时开两个客户端测联机）。</summary>
+    private sealed class GameRun(string id)
+    {
+        public string Id { get; } = id;
+        public CancellationTokenSource Cts { get; } = new();
+        public Process? Game { get; set; }
+        public bool StoppedByUser { get; set; }
+        public DateTime Started { get; set; } = DateTime.UtcNow;
+        /// <summary>日志里出现了进入游戏的标志，或者等够了兜底时间。</summary>
+        public bool InGame { get; set; }
+        /// <summary>是兜底时间到了才算进入的（没看到标志）。</summary>
+        public bool InGameGuessed { get; set; }
+        public bool Exiting { get; set; }
+        public Queue<string> Output { get; } = new();
+    }
+
+    private readonly List<GameRun> _runs = [];
+    private GameRun? Latest => _runs.Count > 0 ? _runs[^1] : null;
+
+    /// <summary>进行中的启动有几个（自检用）。</summary>
+    internal int RunCount => _runs.Count;
+    private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
+
     partial void OnCrashChanged(CrashAnalysis? value) => _crashGeneration++;
 
     protected override void OnLanguageChanged()
     {
+        UpdateRunState();
         if (Crash is null || _crashInput is not { } input) return;
         var generation = _crashGeneration;
         _ = Task.Run(() => CrashAnalyzer.AnalyzeRun(input.WorkDir, input.Started, input.Output)).ContinueWith(
@@ -78,12 +109,16 @@ public sealed partial class HomeViewModel : PageViewModel
     public ObservableCollection<Account> Accounts { get; } = [];
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LaunchCommand))]
     public partial string? SelectedVersion { get; set; }
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LaunchCommand))]
+    [NotifyPropertyChangedFor(nameof(AccountHint))]
     public partial Account? SelectedAccount { get; set; }
+
+    /// <summary>启动按钮下面的一行：“正版 · Steve”，免得拿离线账号去进正版服。</summary>
+    public string AccountHint => SelectedAccount is { } a
+        ? L.F(a.Kind switch { AccountKind.Microsoft => "home.account.online", AccountKind.External => "home.account.external", _ => "home.account.offline" }, a.Name)
+        : "";
 
     [ObservableProperty]
     public partial bool AutoMemory { get; set; }
@@ -94,15 +129,57 @@ public sealed partial class HomeViewModel : PageViewModel
     [ObservableProperty]
     public partial string VersionInfo { get; set; } = "";
 
+    /// <summary>有启动在进行（准备中或游戏在运行）。</summary>
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(LaunchCommand))]
     public partial bool IsBusy { get; set; }
+
+    /// <summary>最近一次启动还在准备（检查文件、Java、账号）。</summary>
+    [ObservableProperty]
+    public partial bool IsPreparing { get; set; }
 
     [ObservableProperty]
     public partial bool IsRunning { get; set; }
 
+    /// <summary>点过“退出游戏”，等它保存退出。</summary>
+    [ObservableProperty]
+    public partial bool IsExiting { get; set; }
+
+    /// <summary>退出等太久了，给出“强制结束”。</summary>
+    [ObservableProperty]
+    public partial bool ShowForceKill { get; set; }
+
     [ObservableProperty]
     public partial double Progress { get; set; }
+
+    /// <summary>时长不知道的阶段（准备里没有文件进度、游戏加载中、正在退出）用不确定进度条。</summary>
+    [ObservableProperty]
+    public partial bool ProgressIndeterminate { get; set; }
+
+    [ObservableProperty]
+    public partial bool ShowProgress { get; set; }
+
+    /// <summary>主按钮的文字：不禁用，缺什么就写什么（先添加账号、先安装游戏），运行中变成退出游戏。</summary>
+    [ObservableProperty]
+    public partial string PrimaryLabel { get; set; } = "";
+
+    /// <summary>游戏在运行时又要启动：先问一声（多开是允许的，测联机常用）。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasPendingLaunch), nameof(PendingLaunchText))]
+    public partial LaunchRequest? PendingLaunch { get; set; }
+
+    private string _pendingRunningId = "";
+    public bool HasPendingLaunch => PendingLaunch is not null;
+    public string PendingLaunchText => L.F("home.multi.warning", _pendingRunningId);
+
+    /// <summary>主按钮在缺账号、缺实例时去的地方，崩溃卡的“查看日志”（MainViewModel 接上）。</summary>
+    public Action? NavigateToAccounts { get; set; }
+    public Action? NavigateToNewInstance { get; set; }
+    public Action? NavigateToLog { get; set; }
+    public Action? NavigateHere { get; set; }
+
+    /// <summary>游戏进程起来了 / 退出了（参数：是不是崩溃）。窗口按“启动后启动器”的设置最小化、恢复。</summary>
+    public event Action? GameStarted;
+    public event Action<bool>? GameExited;
 
     protected override StatusMessage? DefaultStatus => StatusMessage.Info("home.status.ready");
 
@@ -125,11 +202,19 @@ public sealed partial class HomeViewModel : PageViewModel
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshVersions);
         service.AccountsChanged += RefreshAccounts;
         service.LaunchRequested += request => Dispatcher.UIThread.Post(() => _ = RunAsync(request));
+        service.CurrentInstanceChanged += () => Dispatcher.UIThread.Post(() =>
+        {
+            if (_service.CurrentInstance is { } id && Versions.Contains(id)) SelectedVersion = id;
+        });
+        _clock.Tick += (_, _) => Tick();
         RefreshVersions();
         RefreshAccounts();
+        UpdateRunState();
         L.Changed += () => Dispatcher.UIThread.Post(() =>
         {
             OnSelectedVersionChanged(SelectedVersion);
+            OnPropertyChanged(nameof(AccountHint));
+            OnPropertyChanged(nameof(PendingLaunchText));
         });
     }
 
@@ -140,10 +225,12 @@ public sealed partial class HomeViewModel : PageViewModel
         foreach (var a in _service.Accounts.Store.Accounts) Accounts.Add(a);
         SelectedAccount = _service.Accounts.Store.Selected;
         _refreshingAccounts = false;
+        UpdateRunState();
     }
 
     partial void OnSelectedAccountChanged(Account? value)
     {
+        UpdateRunState();
         if (_refreshingAccounts || value is null || value.Id == _service.Accounts.Store.SelectedId) return;
         _service.Accounts.Store.SelectedId = value.Id;
         _service.Accounts.Store.Save();
@@ -152,23 +239,25 @@ public sealed partial class HomeViewModel : PageViewModel
 
     private void RefreshVersions()
     {
-        var keep = SelectedVersion ?? _service.Settings.LastVersion;
         Versions.Clear();
         foreach (var v in _service.InstalledVersions()) Versions.Add(v);
-        SelectedVersion = keep is not null && Versions.Contains(keep) ? keep : Versions.FirstOrDefault();
+        SelectedVersion = _service.CurrentOr(Versions, Versions.FirstOrDefault());
         if (Versions.Count == 0) SetIdleStatus("home.status.no_versions");
+        UpdateRunState();
     }
 
     partial void OnSelectedVersionChanged(string? value)
     {
         VersionInfo = "";
+        UpdateRunState();
         if (value is null) return;
+        _service.SetCurrentInstance(value);
         try
         {
             var instance = _service.GetInstance(value);
             var loader = instance.Loader is null ? L.T("home.version.vanilla") : $"{instance.Loader} {instance.LoaderVersion}";
             var mods = new ModManager(instance.ModsDir).CountEnabled();
-            VersionInfo = L.F("home.version.info", instance.McVersion, loader, mods == 0 ? "" : L.P("home.version.mod_count", mods, mods));
+            VersionInfo = _service.WithStateNote(value, L.F("home.version.info", instance.McVersion, loader, mods == 0 ? "" : L.P("home.version.mod_count", mods, mods)));
         }
         catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException)
         {
@@ -188,14 +277,93 @@ public sealed partial class HomeViewModel : PageViewModel
         _service.Settings.Save();
     }
 
-    private bool CanLaunch() => !IsBusy && SelectedVersion is not null && SelectedAccount is not null;
-
-    [RelayCommand(CanExecute = nameof(CanLaunch))]
-    private Task LaunchAsync() => RunAsync(new LaunchRequest(SelectedVersion!));
-
-    private async Task RunAsync(LaunchRequest request)
+    /// <summary>按最近一次启动的阶段和当前选择，重算主按钮文字和进度条。</summary>
+    private void UpdateRunState()
     {
-        if (IsBusy) return;
+        var run = Latest;
+        IsBusy = _runs.Count > 0;
+        IsPreparing = run is { Game: null };
+        IsRunning = run is { Game: not null };
+        IsExiting = run is { Exiting: true };
+        if (run is null) ShowForceKill = false;
+        ShowProgress = run is not null && (run.Game is null || !run.InGame || run.Exiting);
+        ProgressIndeterminate = run is not null && (run.Game is not null || Progress <= 0);
+        PrimaryLabel = L.T(PrimaryKey(run));
+        if (IsRunning) _clock.Start();
+        else _clock.Stop();
+    }
+
+    private string PrimaryKey(GameRun? run)
+    {
+        if (run is not null)
+            return run.Game is null ? "home.button.cancel_launch" : run.Exiting ? "home.button.exiting" : "home.button.exit_game";
+        if (SelectedAccount is null) return "home.button.need_account";
+        if (SelectedVersion is not { } id) return "home.button.need_instance";
+        return _service.Directory.StateOf(id) switch
+        {
+            Amber.Core.Game.InstanceState.Incomplete => "home.button.resume_install",
+            Amber.Core.Game.InstanceState.Broken => "home.button.repair",
+            _ => "home.launch",
+        };
+    }
+
+    partial void OnProgressChanged(double value)
+    {
+        if (Latest is { Game: null }) ProgressIndeterminate = value <= 0;
+    }
+
+    /// <summary>主按钮：缺什么去补什么；准备中是取消，运行中是退出游戏。</summary>
+    [RelayCommand]
+    private async Task PrimaryAsync()
+    {
+        if (Latest is { } run)
+        {
+            if (run.Game is null) CancelRun(run);
+            else if (!run.Exiting) ExitGame(run);
+            return;
+        }
+        if (SelectedAccount is null)
+        {
+            SetStatus(StatusMessage.Warning("home.status.account_required"));
+            NavigateToAccounts?.Invoke();
+            return;
+        }
+        if (SelectedVersion is not { } id)
+        {
+            NavigateToNewInstance?.Invoke();
+            return;
+        }
+        await RunAsync(new LaunchRequest(id));
+    }
+
+    [RelayCommand]
+    private Task LaunchAsync() => SelectedVersion is { } id ? RunAsync(new LaunchRequest(id)) : Task.CompletedTask;
+
+    [RelayCommand]
+    private void LaunchAnyway()
+    {
+        if (PendingLaunch is not { } request) return;
+        PendingLaunch = null;
+        _ = RunAsync(request, allowSecond: true);
+    }
+
+    [RelayCommand]
+    private void DismissPendingLaunch() => PendingLaunch = null;
+
+    private async Task RunAsync(LaunchRequest request, bool allowSecond = false)
+    {
+        if (_runs.Any(r => r.Game is null))
+        {
+            SetStatus(StatusMessage.Warning("home.status.preparing_other"));
+            return;
+        }
+        if (!allowSecond && _runs.FirstOrDefault(r => r.Game is not null) is { } other)
+        {
+            _pendingRunningId = other.Id;
+            PendingLaunch = request;
+            NavigateHere?.Invoke();
+            return;
+        }
         if (SelectedAccount is not { } account)
         {
             SetStatus(StatusMessage.Warning("home.status.account_required"));
@@ -203,19 +371,21 @@ public sealed partial class HomeViewModel : PageViewModel
         }
         var id = request.VersionId;
         SelectedVersion = id;
-        var global = _service.Settings;
-        global.LastVersion = id;
-        global.Save();
+        _service.SetCurrentInstance(id);
 
-        IsBusy = true;
+        var run = new GameRun(id);
+        _runs.Add(run);
         Crash = null;
-        _stoppedByUser = false;
-        _cts = new CancellationTokenSource();
+        Progress = 0;
+        UpdateRunState();
+        var ct = run.Cts.Token;
         var workDir = _service.WorkDirFor(id);
-        var started = DateTime.UtcNow;
+        var crashed = false;
+        var gameStarted = false;
         try
         {
             var settings = _service.EffectiveSettings(id);
+            await RepairIfBrokenAsync(id, ct);
             SetStatus(StatusMessage.Info("home.status.checking_game_files"));
             await _service.Installer.CompleteAsync(id, new Progress<InstallProgress>(p =>
             {
@@ -226,18 +396,23 @@ public sealed partial class HomeViewModel : PageViewModel
                         ? L.F("home.status.completing_files", p.Files.CompletedFiles, p.Files.TotalFiles)
                         : L.F("home.status.checking_files", p.Files.CompletedFiles, p.Files.TotalFiles);
                 }
-            }), _cts.Token);
+            }), ct);
+            // 文件补齐了：上次没装完的实例到这里也算装完了。
+            try { _service.Directory.MarkInstallFinished(id); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
 
             var version = _service.Directory.ResolveVersion(id);
             var javaPath = settings.JavaPath;
             if (string.IsNullOrEmpty(javaPath) || !File.Exists(javaPath))
             {
+                Progress = 0;
                 _service.Java.Status = new Progress<string>(text => Status = text);
-                javaPath = await _service.Java.ForVersionAsync(version, _cts.Token);
+                javaPath = await _service.Java.ForVersionAsync(version, ct);
             }
 
+            Progress = 0;
             SetStatus(StatusMessage.Info("home.status.verifying_account"));
-            var session = await _service.Accounts.ResolveAsync(account, _cts.Token);
+            var session = await _service.Accounts.ResolveAsync(account, ct);
 
             var options = _service.BaseLaunchOptions(id, javaPath, session.Session, session.ExtraJvmArgs) with
             {
@@ -253,37 +428,38 @@ public sealed partial class HomeViewModel : PageViewModel
             if (!string.IsNullOrWhiteSpace(settings.PreLaunchCommand))
             {
                 SetStatus(StatusMessage.Info("home.status.pre_launch_command"));
-                await RunUserCommandAsync(settings.PreLaunchCommand, id, workDir, _cts.Token);
+                await RunUserCommandAsync(settings.PreLaunchCommand, id, workDir, ct);
             }
 
             SetStatus(StatusMessage.Info("home.status.launching"));
-            Progress = 100;
             _log.Clear();
             _log.BeginRun(id, DateTimeOffset.Now);
-            _recentOutput.Clear();
             _log.AddRaw(L.F("home.log.launch", id, javaPath, memory));
             foreach (var note in _proxyNotes) _log.AddRaw(note);
             var parser = new GameLogParser();
             var launcher = new GameLauncher(_service.Directory);
-            started = DateTime.UtcNow;
             using var running = _service.MarkRunning(workDir);
-            _game = launcher.Launch(options, line =>
+            var game = launcher.Launch(options, line =>
             {
                 lock (parser)
                 {
-                    _recentOutput.Enqueue(line);
-                    if (_recentOutput.Count > KeptOutputLines) _recentOutput.Dequeue();
+                    run.Output.Enqueue(line);
+                    if (run.Output.Count > KeptOutputLines) run.Output.Dequeue();
                     if (parser.Feed(line) is { } entry) _log.Add(entry);
                 }
+                if (!run.InGame && IsEnterGameLine(line)) Dispatcher.UIThread.Post(() => EnterGame(run, guessed: false));
                 _service.NotifyGameOutput(id, line);
             });
-            IsRunning = true;
-            SetStatus(StatusMessage.Info("home.status.running", id, memory));
-            await _game.WaitForExitAsync();
-            IsRunning = false;
+            run.Started = DateTime.UtcNow;
+            run.Game = game;
+            UpdateRunState();
+            Tick();
+            gameStarted = true;
+            GameStarted?.Invoke();
+            await game.WaitForExitAsync();
 
-            var code = _game.ExitCode;
-            if (_stoppedByUser)
+            var code = game.ExitCode;
+            if (run.StoppedByUser)
             {
                 SetStatus(StatusMessage.Info("home.status.stopped"));
             }
@@ -293,15 +469,19 @@ public sealed partial class HomeViewModel : PageViewModel
             }
             else
             {
+                crashed = true;
                 SetStatus(StatusMessage.Error("home.status.crashed", code));
                 string[] output;
-                lock (parser) output = _recentOutput.ToArray();
-                var analysis = await Task.Run(() => CrashAnalyzer.AnalyzeRun(workDir, started, output));
+                lock (parser) output = run.Output.ToArray();
+                var analysis = await Task.Run(() => CrashAnalyzer.AnalyzeRun(workDir, run.Started, output));
                 // 崩溃分析的标题和建议是按当时的语言写的：记下输入，换语言时重新分析一遍。
-                _crashInput = (workDir, started, output);
+                _crashInput = (workDir, run.Started, output);
                 _lastRunFiles = [.. analysis.SourceFiles];
+                _lastRunOutput = new Queue<string>(output);
                 _log.AddRaw(L.F("home.log.crash_analysis", analysis.Summary));
                 Crash = analysis;
+                // 玩家在别的页面：弹个 Toast，带“查看”。
+                if (!IsCurrent) Toasts.WithAction(L.F("home.crash.toast", id), L.T("home.crash.show"), () => NavigateHere?.Invoke());
             }
 
             if (!string.IsNullOrWhiteSpace(settings.PostExitCommand))
@@ -318,11 +498,121 @@ public sealed partial class HomeViewModel : PageViewModel
         }
         finally
         {
-            IsBusy = false;
-            IsRunning = false;
+            _runs.Remove(run);
+            run.Cts.Dispose();
             Progress = 0;
-            _game = null;
+            UpdateRunState();
+            if (gameStarted && _runs.Count == 0) GameExited?.Invoke(crashed);
         }
+    }
+
+    /// <summary>“已损坏”最常见的原因是继承的原版不在了：补装原版。版本文件本身坏了修不了，提示重新安装。</summary>
+    private async Task RepairIfBrokenAsync(string id, CancellationToken ct)
+    {
+        if (_service.Directory.StateOf(id) != Amber.Core.Game.InstanceState.Broken) return;
+        Amber.Core.Game.VersionJson own;
+        try { own = _service.Directory.ReadVersion(id); }
+        catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException)
+        {
+            throw new InvalidDataException(L.T("instance.state.broken"), e);
+        }
+        if (own.InheritsFrom is not { } parent || File.Exists(_service.Directory.VersionJsonPath(parent)))
+            throw new InvalidDataException(L.T("instance.state.broken"));
+        SetStatus(StatusMessage.Info("home.status.repairing", parent));
+        await _service.Installer.InstallAsync(parent, new Progress<InstallProgress>(p =>
+        {
+            if (p.Stage == InstallStage.Files && p.Files.TotalFiles > 0) Progress = 100.0 * p.Files.CompletedFiles / p.Files.TotalFiles;
+        }), ct);
+    }
+
+    /// <summary>日志里表示“已经到了游戏主界面”的几行（新版本是声音引擎，老版本是 OpenAL）。</summary>
+    internal static bool IsEnterGameLine(string line) =>
+        line.Contains("Sound engine started", StringComparison.Ordinal) || line.Contains("OpenAL initialized", StringComparison.Ordinal);
+
+    private void EnterGame(GameRun run, bool guessed)
+    {
+        if (run.InGame) return;
+        run.InGame = true;
+        run.InGameGuessed = guessed;
+        UpdateRunState();
+        Tick();
+    }
+
+    /// <summary>每秒更新一次运行状态：加载中显示已等了多久，进了游戏显示运行时长。</summary>
+    private void Tick()
+    {
+        if (Latest is not { Game: not null } run || run.Exiting) return;
+        var elapsed = DateTime.UtcNow - run.Started;
+        if (!run.InGame && elapsed >= EnterGameFallback)
+        {
+            EnterGame(run, guessed: true);
+            return;
+        }
+        if (!run.InGame)
+            SetStatus(StatusMessage.Info("home.status.loading_game", (int)elapsed.TotalSeconds));
+        else if (run.InGameGuessed)
+            SetStatus(StatusMessage.Info("home.status.maybe_in_game", run.Id, (int)elapsed.TotalMinutes));
+        else
+            SetStatus(StatusMessage.Info("home.status.in_game", run.Id, (int)elapsed.TotalMinutes));
+    }
+
+    private void CancelRun(GameRun run)
+    {
+        run.StoppedByUser = true;
+        try { run.Cts.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>像点窗口的关闭按钮一样让游戏自己保存退出；等太久了再给“强制结束”。</summary>
+    private void ExitGame(GameRun run)
+    {
+        if (run.Game is not { } game) return;
+        run.StoppedByUser = true;
+        run.Exiting = true;
+        UpdateRunState();
+        SetStatus(StatusMessage.Info("home.status.exiting", run.Id));
+        bool closed;
+        try { closed = game.CloseMainWindow(); }
+        catch (InvalidOperationException) { closed = false; }
+        if (!closed)
+        {
+            // 没有能关的主窗口（还在加载、或者是无窗口的老版本）：直接给出强制结束。
+            ShowForceKill = true;
+            return;
+        }
+        _ = Task.Delay(ForceKillDelay).ContinueWith(_ => Dispatcher.UIThread.Post(() =>
+        {
+            if (_runs.Contains(run) && run.Game is { HasExited: false }) ShowForceKill = true;
+        }), TaskScheduler.Default);
+    }
+
+    /// <summary>强制结束最近一次启动（Flyout 里确认过）：准备中就是取消。</summary>
+    [RelayCommand]
+    private void ForceKill()
+    {
+        ShowForceKill = false;
+        Cancel();
+    }
+
+    /// <summary>立即结束最近一次启动：准备中取消，运行中结束进程（自检和强制结束用）。</summary>
+    [RelayCommand]
+    private void Cancel()
+    {
+        if (Latest is not { } run) return;
+        CancelRun(run);
+        try
+        {
+            if (run.Game is { HasExited: false } game) game.Kill(true);
+        }
+        catch (InvalidOperationException) { }
+    }
+
+    /// <summary>崩溃卡上的“查看日志”：打开日志页，只看警告和错误。</summary>
+    [RelayCommand]
+    private void ViewLog()
+    {
+        _log.OnlyProblems = true;
+        NavigateToLog?.Invoke();
     }
 
     /// <summary>用户自己配置的启动前 / 退出后命令。命令失败只记日志，不拦启动。</summary>
@@ -351,17 +641,9 @@ public sealed partial class HomeViewModel : PageViewModel
         }
     }
 
-    [RelayCommand]
-    private void Cancel()
-    {
-        _stoppedByUser = true;
-        _cts?.Cancel();
-        if (_game is { HasExited: false } game) game.Kill(true);
-    }
-
     public void ExportCrashBundle(string zipPath)
     {
-        CrashAnalyzer.ExportBundle(zipPath, _lastRunFiles, _recentOutput);
+        CrashAnalyzer.ExportBundle(zipPath, _lastRunFiles, _lastRunOutput);
         SetStatus(StatusMessage.Success("home.status.report_exported", zipPath));
     }
 

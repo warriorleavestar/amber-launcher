@@ -21,4 +21,6 @@ public partial class HomePage : UserControl
         });
         if (file?.TryGetLocalPath() is { } path) vm.ExportCrashBundle(path);
     }
+
+    private void CloseForceKillFlyout(object? sender, RoutedEventArgs e) => ForceKillButton.Flyout?.Hide();
 }

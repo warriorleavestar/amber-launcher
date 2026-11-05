@@ -25,6 +25,7 @@ public partial class MainWindow : Window
         Opened += (_, _) => FitFrameToScreen();
         Closing += (_, _) => RememberPlacement();
         Toasts.Attach(this);
+        DataContextChanged += (_, _) => AttachGameWindowBehaviour();
         // Esc 取消所有“再点一次确认”的按钮；Ctrl+Z 撤销最近一次删除（焦点在输入框里时留给输入框自己的撤销）。
         AddHandler(KeyDownEvent, (_, e) =>
         {
@@ -131,6 +132,34 @@ public partial class MainWindow : Window
         var visibleHeight = (int)Math.Ceiling((title + Height) * scale);
         var y = Math.Clamp(Position.Y, work.Y, Math.Max(work.Y, work.Bottom - visibleHeight));
         if (y != Position.Y) Position = new PixelPoint(Position.X, y);
+    }
+
+    private HomeViewModel? _home;
+    private bool _minimizedForGame;
+
+    /// <summary>
+    /// “启动后启动器”（改版规格 3.6）：默认游戏起来后最小化，正常退出后恢复；崩溃时总是恢复并放到前台，显示崩溃卡。
+    /// 托盘还没做，设成 tray 时先当作保持不动。自检时不动窗口（还要截图）。
+    /// </summary>
+    private void AttachGameWindowBehaviour()
+    {
+        if (DataContext is not MainViewModel main || main.Pages.OfType<HomeViewModel>().FirstOrDefault() is not { } home || ReferenceEquals(home, _home)) return;
+        _home = home;
+        home.GameStarted += () => Dispatcher.UIThread.Post(() =>
+        {
+            if (_settings?.AfterLaunch != "minimize" || Environment.GetEnvironmentVariable("AMBER_SELFTEST") is { Length: > 0 }) return;
+            _minimizedForGame = true;
+            WindowState = WindowState.Minimized;
+        });
+        home.GameExited += crashed => Dispatcher.UIThread.Post(() =>
+        {
+            if (crashed || _minimizedForGame)
+            {
+                if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+                Activate();
+            }
+            _minimizedForGame = false;
+        });
     }
 
     private void RememberPlacement()

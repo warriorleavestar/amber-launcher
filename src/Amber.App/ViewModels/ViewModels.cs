@@ -136,20 +136,42 @@ public sealed partial class MainViewModel : ObservableObject
         var instance = new InstanceViewModel(service) { NavigateHome = null };
         var content = new ContentViewModel(service);
         var multiplayer = new MultiplayerViewModel(service);
+        var download = new DownloadViewModel(service);
         Pages =
         [
             home,
             new AccountsViewModel(service),
             instance,
-            new DownloadViewModel(service),
+            download,
             content,
             multiplayer,
             new ToolsViewModel(service),
             new SettingsViewModel(service),
             log,
         ];
+        var accounts = Pages[1];
+        home.NavigateToAccounts = () => CurrentPage = accounts;
+        home.NavigateToNewInstance = () => CurrentPage = download;
+        home.NavigateToLog = () => CurrentPage = log;
+        home.NavigateHere = () => CurrentPage = home;
         instance.NavigateHome = () => CurrentPage = home;
         multiplayer.NavigateHome = () => CurrentPage = home;
+        download.LaunchInstance = id =>
+        {
+            service.SetCurrentInstance(id);
+            CurrentPage = home;
+            service.RequestLaunch(new LaunchRequest(id));
+        };
+        download.OpenInstance = id =>
+        {
+            service.SetCurrentInstance(id);
+            CurrentPage = instance;
+        };
+        download.BrowseModsFor = id =>
+        {
+            CurrentPage = content;
+            content.BrowseModsFor(id);
+        };
         instance.NavigateToDatapacks = (id, world) =>
         {
             CurrentPage = content;

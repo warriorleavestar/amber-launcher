@@ -115,6 +115,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             await MultiplayerAsync();
             await DirectRoomAsync();
             await ExportImportAsync();
+            await CurrentInstanceAsync();
             Log("DONE");
         }
         catch (Exception e)
@@ -276,7 +277,19 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await WaitAsync(() => !download.IsBusy, 600);
         Check("安装 Fabric（自定义名字）", download.Status.Contains("安装完成") && !download.IsConfiguring
                                          && File.Exists(Path.Combine(GameRoot(), "versions", FabricName, FabricName + ".json")), download.Status);
+        var launchButton = await FindAsync<Button>(b => b.Content as string == "立即启动" && b.IsEffectivelyVisible);
+        Check("安装完成后显示成功卡、设为当前实例，并去掉“安装未完成”标记",
+            download.HasInstalled && download.JustInstalled == FabricName && launchButton is not null
+            && Page<HomeViewModel>().Service.CurrentInstance == FabricName
+            && !File.Exists(Path.Combine(GameRoot(), "versions", FabricName, GameDirectory.IncompleteMarker)), download.InstalledTitle);
+        // 换页会重建页面控件，先在这一页把搜索框清掉。
         Dispatcher.UIThread.Invoke(() => search!.Text = "");
+        var addMods = await FindAsync<Button>(b => b.Content as string == "添加模组…" && b.IsEffectivelyVisible);
+        Check("成功卡的“添加模组…”跳到资源页的模组，装到新实例",
+            Press(addMods) && await WaitAsync(() => main.CurrentPage is ContentViewModel { TargetInstance: FabricName, TypeIndex: (int)ContentType.Mod }, 5),
+            main.CurrentPage.Title);
+        main.CurrentPage = download;
+        download.CloseInstalledCommand.Execute(null);
     }
 
     private async Task InstallModAsync()
@@ -344,18 +357,40 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         main.CurrentPage = home;
         await WaitAsync(() => home.Versions.Contains(FabricName), 5);
         home.SelectedVersion = FabricName;
+        Check("主按钮：有账号和实例时是“启动游戏”", home.PrimaryLabel == "启动游戏", home.PrimaryLabel);
         var launching = home.LaunchCommand.ExecuteAsync(null);
+        await WaitAsync(() => home.IsPreparing, 5);
+        Check("主按钮：准备中变成“取消启动”", home.PrimaryLabel == "取消启动", home.PrimaryLabel);
         var reached = await WaitAsync(() => log.Lines.Any(l => l.Message.Contains("Sound engine started") || l.Message.Contains("OpenAL initialized")), 180);
         Check("启动游戏到主界面", reached, home.Status);
         Check("启动前命令运行过", File.Exists(Path.Combine(reportDir, "prelaunch.txt")) && File.ReadAllText(Path.Combine(reportDir, "prelaunch.txt")).Contains(FabricName));
         Check("实例内存生效", log.Lines.Any(l => l.Message.Contains("最大内存 3072 MB")));
+        await WaitAsync(() => home.Status.Contains("运行中 ·"), 5);
+        Check("进入游戏后显示运行时长，主按钮变成“退出游戏”", home.Status.Contains("运行中 ·") && home.PrimaryLabel == "退出游戏" && !home.ShowProgress,
+            $"{home.Status} / {home.PrimaryLabel}");
         await ShotAsync("运行中");
         main.CurrentPage = log;
         await ShotAsync("日志页");
-        main.CurrentPage = home;
+
+        // 游戏在运行时从别的页面再请求启动：启动页给出多开警告，【仍然启动】能同时开第二个客户端。
+        home.Service.RequestLaunch(new Amber.App.Services.LaunchRequest(FabricName));
+        await WaitAsync(() => home.HasPendingLaunch && main.CurrentPage == home, 5);
+        Check("多开：游戏运行中再启动出现警告并回到启动页", home.HasPendingLaunch && main.CurrentPage == home && home.PendingLaunchText.Contains(FabricName), home.PendingLaunchText);
+        await ShotAsync("多开警告");
+        home.LaunchAnywayCommand.Execute(null);
+        var second = await WaitAsync(() => home.RunCount == 2 && home.IsRunning
+            && log.Lines.Any(l => l.Message.Contains("Sound engine started") || l.Message.Contains("OpenAL initialized")), 180);
+        Check("多开：【仍然启动】后同时开着两个客户端", second, $"{home.RunCount} 个 {home.Status}");
         home.CancelCommand.Execute(null);
+        await WaitAsync(() => home.RunCount == 1, 30);
+
+        // 【退出游戏】让游戏自己保存退出，不是直接结束进程。
+        await home.PrimaryCommand.ExecuteAsync(null);
+        Check("退出游戏：按钮变成“正在保存并退出…”", home.PrimaryLabel == "正在保存并退出…" || home.RunCount == 0, home.PrimaryLabel);
+        var exited = await WaitAsync(() => home.RunCount == 0, 60);
+        if (!exited) home.CancelCommand.Execute(null);
         await launching;
-        Check("结束游戏后状态正确（不报崩溃）", home.Status.Contains("已结束") && !home.HasCrash, home.Status);
+        Check("退出游戏：游戏自己退出，状态正确（不报崩溃）", exited && home.Status.Contains("已结束") && !home.HasCrash, home.Status);
     }
 
     private async Task CrashAsync()
@@ -954,6 +989,80 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         var prismSettings = Amber.Core.Launch.InstanceSettings.Load(gameDir, "E2E-Prism");
         Check("导入 Prism 实例", Directory.Exists(prismMods) && Directory.EnumerateFiles(prismMods, "sodium*").Any() && prismSettings.MaxMemoryMb == 2500
                               && GameInstance.Detect(gameDir, "E2E-Prism", prismDir).Loader == "fabric", content.Status);
+    }
+
+    /// <summary>全局当前实例：实例页切换后启动页、资源页、联机页跟着变，写进设置；资源页临时换一个只算这一次。</summary>
+    private async Task CurrentInstanceAsync()
+    {
+        var home = Page<HomeViewModel>();
+        var instance = Page<InstanceViewModel>();
+        var content = Page<ContentViewModel>();
+        var multiplayer = Page<MultiplayerViewModel>();
+        var service = home.Service;
+        Check("当前实例：刚导入的整合包成为当前实例", service.CurrentInstance == "E2E-Prism", service.CurrentInstance ?? "");
+
+        instance.Activate();
+        await WaitAsync(() => instance.Instances.Contains(FabricName), 5);
+        instance.SelectedId = FabricName;
+        await WaitAsync(() => home.SelectedVersion == FabricName && content.TargetInstance == FabricName && multiplayer.TargetInstance == FabricName, 5);
+        Check("当前实例：实例页切换后启动页、资源页、联机页都跟着变，并写进设置",
+            home.SelectedVersion == FabricName && content.TargetInstance == FabricName && multiplayer.TargetInstance == FabricName
+            && service.Settings.LastVersion == FabricName && !content.IsTemporaryTarget,
+            $"启动 {home.SelectedVersion}，资源 {content.TargetInstance}，联机 {multiplayer.TargetInstance}");
+
+        content.TargetInstance = "E2E-Pack";
+        await Task.Delay(100);
+        Check("当前实例：资源页临时换实例显示“仅本次”，不改当前实例",
+            content.IsTemporaryTarget && service.CurrentInstance == FabricName && home.SelectedVersion == FabricName, service.CurrentInstance ?? "");
+
+        home.SelectedVersion = "E2E-Pack";
+        await WaitAsync(() => instance.SelectedId == "E2E-Pack" && content.TargetInstance == "E2E-Pack", 5);
+        Check("当前实例：启动页切换后实例页跟着变，资源页回到当前实例",
+            instance.SelectedId == "E2E-Pack" && content.TargetInstance == "E2E-Pack" && !content.IsTemporaryTarget, $"实例 {instance.SelectedId}");
+
+        // 安装中途停下的实例（版本文件夹里留着标记）：启动页和实例页都提示“安装未完成”，标记去掉后提示消失。
+        var note = L.T("instance.state.incomplete");
+        service.Directory.MarkInstallStarted("E2E-Pack");
+        home.SelectedVersion = FabricName;
+        await WaitAsync(() => instance.SelectedId == FabricName, 5);
+        home.SelectedVersion = "E2E-Pack";
+        await WaitAsync(() => instance.SelectedId == "E2E-Pack" && instance.InfoText.Contains(note), 5);
+        Check("实例状态：安装没走完的实例在启动页和实例页提示“安装未完成”",
+            home.VersionInfo.Contains(note) && instance.InfoText.Contains(note), home.VersionInfo);
+        service.Directory.MarkInstallFinished("E2E-Pack");
+        home.SelectedVersion = FabricName;
+        await WaitAsync(() => instance.SelectedId == FabricName, 5);
+        home.SelectedVersion = "E2E-Pack";
+        await WaitAsync(() => instance.SelectedId == "E2E-Pack" && !instance.InfoText.Contains(note), 5);
+        Check("实例状态：标记去掉后不再提示", !home.VersionInfo.Contains(note) && !instance.InfoText.Contains(note), home.VersionInfo);
+
+        // 关掉某个实例的“按实例分开文件夹”：实例页提示共用，资源页“装到”标成共享目录；改回后提示消失。
+        var saved = InstanceSettings.Load(service.Directory, FabricName);
+        var initiallyShared = service.EffectiveSettings(FabricName).Isolate != true;
+        var shared = InstanceSettings.Load(service.Directory, FabricName);
+        shared.Isolate = false;
+        shared.Save(service.Directory, FabricName);
+        try
+        {
+            home.SelectedVersion = FabricName;
+            await WaitAsync(() => instance.SelectedId == FabricName && instance.IsSharedDir, 5);
+            content.TypeIndex = (int)ContentType.Mod;
+            content.TargetInstance = FabricName;
+            await Task.Delay(100);
+            Check("共享目录：关掉分开文件夹后实例页显示共用提示，资源页“装到”标成共享目录", instance.IsSharedDir && content.IsSharedTarget, instance.InfoText);
+        }
+        finally
+        {
+            saved.Save(service.Directory, FabricName);
+        }
+        instance.SelectedId = null;
+        instance.SelectedId = FabricName;
+        await WaitAsync(() => instance.Current is not null && instance.IsSharedDir == initiallyShared, 5);
+        content.TargetInstance = null;
+        content.TargetInstance = FabricName;
+        Check("共享目录：改回后恢复原样", instance.IsSharedDir == initiallyShared && content.IsSharedTarget == initiallyShared, $"原来共用 {initiallyShared}");
+        home.SelectedVersion = "E2E-Pack";
+        await WaitAsync(() => instance.SelectedId == "E2E-Pack", 5);
     }
 
     /// <summary>导入时版本名字来自整合包名字，改一下避免和原实例同名。</summary>
