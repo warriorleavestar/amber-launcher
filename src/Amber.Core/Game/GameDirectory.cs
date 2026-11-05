@@ -12,14 +12,56 @@ public sealed class GameDirectory(string root)
     public string LibrariesDir => Path.Combine(Root, "libraries");
     public string AssetsDir => Path.Combine(Root, "assets");
 
-    public string VersionDir(string id) => Path.Combine(VersionsDir, id);
-    public string VersionJsonPath(string id) => Path.Combine(VersionDir(id), id + ".json");
-    public string VersionJarPath(string id) => Path.Combine(VersionDir(id), id + ".jar");
-    public string NativesDir(string id) => Path.Combine(VersionDir(id), "natives");
-    public string AssetIndexPath(string id) => Path.Combine(AssetsDir, "indexes", id + ".json");
-    public string LoggingConfigPath(string fileId) => Path.Combine(AssetsDir, "log_configs", fileId);
-    public string AssetObjectPath(string hash) => Path.Combine(AssetsDir, "objects", hash[..2], hash);
-    public string LibraryPath(string relative) => Path.Combine(LibrariesDir, relative.Replace('/', Path.DirectorySeparatorChar));
+    // 版本文件里的 id、jar、assetIndex.id、logging.file.id、库路径都可能来自整合包，不可信：
+    // 每个路径都经 Contained 拼接，拼出来必须还在对应的目录里，不然抛异常（宁可装不上，也不往别处写）。
+    public string VersionDir(string id) => Contained(VersionsDir, CheckId(id));
+    public string VersionJsonPath(string id) => Contained(VersionDir(id), id + ".json");
+    public string VersionJarPath(string id) => Contained(VersionDir(id), id + ".jar");
+    public string NativesDir(string id) => Contained(VersionDir(id), "natives");
+    public string AssetIndexPath(string id) => Contained(Path.Combine(AssetsDir, "indexes"), CheckId(id) + ".json");
+    public string LoggingConfigPath(string fileId) => Contained(Path.Combine(AssetsDir, "log_configs"), CheckId(fileId));
+    public string AssetObjectPath(string hash) =>
+        hash.Length == 40 && hash.All(char.IsAsciiHexDigit)
+            ? Path.Combine(AssetsDir, "objects", hash[..2], hash)
+            : throw new InvalidDataException(L.F("core.game.directory.unsafepath", hash));
+    public string LibraryPath(string relative) => Contained(LibrariesDir, relative);
+
+    /// <summary>
+    /// 版本 id（以及 assetIndex.id、logging.file.id 这类单个文件名）：不能是空的、“.”“..”，不能带路径分隔符、冒号或别的文件名非法字符。
+    /// </summary>
+    public static string CheckId(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id) || id is "." or ".." || id.IndexOfAny(['/', '\\', ':']) >= 0 || id.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || id != id.TrimEnd('.', ' '))
+            throw new InvalidDataException(L.F("core.game.directory.unsafepath", id));
+        return id;
+    }
+
+    /// <summary>
+    /// 在 baseDir 下拼接相对路径，结果必须在 baseDir 里面。拒绝绝对路径、盘符、UNC、带冒号（备用数据流）、“..” 段。
+    /// </summary>
+    public static string Contained(string baseDir, string relative)
+    {
+        if (string.IsNullOrEmpty(relative) || relative.Contains(':') || relative.StartsWith('/') || relative.StartsWith('\\') || Path.IsPathRooted(relative)
+            || relative.Split('/', '\\').Any(s => s == ".."))
+            throw new InvalidDataException(L.F("core.game.directory.unsafepath", relative));
+        var root = Path.GetFullPath(baseDir);
+        var full = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
+        if (!IsWithin(root, full))
+            throw new InvalidDataException(L.F("core.game.directory.unsafepath", relative));
+        return full;
+    }
+
+    /// <summary>
+    /// full 是不是在 root 里面（不等于 root 本身）。root 可以是盘符根目录（“D:\”）：那时不能再拼一个分隔符，
+    /// 否则“D:\\”谁都不匹配。full 和 root 都要先规范化。
+    /// </summary>
+    public static bool IsWithin(string root, string full)
+    {
+        root = Path.GetFullPath(root);
+        var prefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+        return full.Length > prefix.Length && full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>当前系统的 Minecraft 官方默认目录。</summary>
     public static string DefaultRoot() =>
@@ -36,7 +78,10 @@ public sealed class GameDirectory(string root)
         foreach (var dir in Directory.EnumerateDirectories(VersionsDir))
         {
             var id = Path.GetFileName(dir);
-            if (File.Exists(VersionJsonPath(id))) yield return id;
+            string json;
+            try { json = VersionJsonPath(id); }
+            catch (InvalidDataException) { continue; }
+            if (File.Exists(json)) yield return id;
         }
     }
 

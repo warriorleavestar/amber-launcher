@@ -12,26 +12,189 @@ public sealed record ExternalProfile(string Id, string Name);
 
 public sealed record ExternalLoginResult(Account Account, IReadOnlyList<ExternalProfile> Profiles);
 
-/// <summary>外置登录（authlib-injector / Yggdrasil 协议）。密码只用于这一次请求，不保存。</summary>
+/// <summary>
+/// 外置登录（authlib-injector / Yggdrasil 协议）。密码只用于这一次请求，不保存。
+/// http 要用不自动跟随跳转的（<see cref="CreateHttpClient"/>）：自动跟随 307/308 时，密码和令牌在检查之前就已经发到别的服务器了。
+/// </summary>
 public sealed class ExternalAuth(HttpClient http)
 {
-    /// <summary>按 authlib-injector 约定解析服务器地址：响应头可以把用户填的网址指向真正的 API 地址。</summary>
+    /// <summary>发现 API 地址时最多跟几次跳转。</summary>
+    private const int MaxDiscoveryRedirects = 5;
+
+    /// <summary>外置登录专用的 HttpClient：不自动跟随跳转。</summary>
+    public static HttpClient CreateHttpClient()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            AutomaticDecompression = System.Net.DecompressionMethods.All,
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+        };
+        var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(60) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd($"Amber/{typeof(ExternalAuth).Assembly.GetName().Version?.ToString(3) ?? "0.1"}");
+        return client;
+    }
+
+    /// <summary>
+    /// 外置登录服务器地址只能是 https（密码和令牌要经它传）；本机回环地址例外（本地测试用）。
+    /// 返回规范化的地址；不合格时抛 <see cref="InvalidOperationException"/>。
+    /// </summary>
+    public static Uri CheckSecure(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || !(uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp && IsLoopbackHost(uri))
+            || !string.IsNullOrEmpty(uri.UserInfo))
+            throw new InvalidOperationException(L.F("core.auth.external.insecure", url));
+        return uri;
+    }
+
+    /// <summary>
+    /// 只认用户写的 localhost、127.0.0.0/8 和 ::1。Uri 会把主机名“loopback”悄悄改写成 localhost（Uri.IsLoopback 也认它），
+    /// 所以这里看原文里写的主机名，不看规范化之后的。
+    /// </summary>
+    public static bool IsLoopbackHost(Uri uri)
+    {
+        var host = WrittenHost(uri.OriginalString);
+        if (host is null) return false;
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)) return string.Equals(uri.DnsSafeHost, "localhost", StringComparison.OrdinalIgnoreCase);
+        return System.Net.IPAddress.TryParse(host.Trim('[', ']'), out var ip) && System.Net.IPAddress.IsLoopback(ip)
+            && System.Net.IPAddress.TryParse(uri.DnsSafeHost, out var parsed) && System.Net.IPAddress.IsLoopback(parsed);
+    }
+
+    /// <summary>地址原文里的主机名（去掉协议、用户信息、端口和路径）。</summary>
+    private static string? WrittenHost(string url)
+    {
+        var start = url.IndexOf("://", StringComparison.Ordinal);
+        if (start < 0) return null;
+        var rest = url[(start + 3)..];
+        var end = rest.IndexOfAny(['/', '?', '#', '\\']);
+        var authority = end < 0 ? rest : rest[..end];
+        authority = authority[(authority.LastIndexOf('@') + 1)..];
+        if (authority.StartsWith('[')) return authority.IndexOf(']') is var close and > 0 ? authority[..(close + 1)] : null;
+        var colon = authority.IndexOf(':');
+        return colon < 0 ? authority : authority[..colon];
+    }
+
+    /// <summary>返回了跳转（3xx）：不跟着走，当作错误。</summary>
+    private static void CheckNotRedirected(HttpResponseMessage response)
+    {
+        if ((int)response.StatusCode is >= 300 and < 400)
+            throw new InvalidOperationException(L.F("core.auth.external.redirected",
+                response.Headers.Location is { } location && location.IsAbsoluteUri ? location.GetLeftPart(UriPartial.Authority) : (int)response.StatusCode));
+    }
+
+    /// <summary>
+    /// 按 authlib-injector 约定解析服务器地址：响应头可以把用户填的网址指向真正的 API 地址。
+    /// 用户填的地址、跳转后的地址和响应头指过去的地址都要是 https，从 https 换到 http 一律拒绝。
+    /// </summary>
     public async Task<string> ResolveApiRootAsync(string url, CancellationToken ct = default)
     {
         url = url.Trim();
         if (!url.Contains("://", StringComparison.Ordinal)) url = "https://" + url;
-        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
-        if (response.Headers.TryGetValues("X-Authlib-Injector-API-Location", out var locations) && locations.FirstOrDefault() is { } location)
+        var final = CheckSecure(url);
+        // 跳转自己一步步跟：每一步都不能降到 http，也不能换到别的服务器。
+        for (var hop = 0; ; hop++)
         {
-            var resolved = new Uri(response.RequestMessage?.RequestUri ?? new Uri(url), location).ToString();
-            return resolved.TrimEnd('/');
+            using var response = await http.GetAsync(final, HttpCompletionOption.ResponseHeadersRead, ct);
+            if ((int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is { } next)
+            {
+                if (hop >= MaxDiscoveryRedirects) throw new InvalidOperationException(L.F("core.auth.external.redirected", final.GetLeftPart(UriPartial.Authority)));
+                var target = new Uri(final, next);
+                CheckNoDowngrade(final, target);
+                CheckSameOrigin(final, target);
+                final = target;
+                continue;
+            }
+            // 传进来的 HttpClient 自己跟随了跳转（不是 CreateHttpClient 建的）：最终地址也得过同样的检查。
+            if (response.RequestMessage?.RequestUri is { } followed && followed != final)
+            {
+                CheckNoDowngrade(final, followed);
+                CheckSameOrigin(final, followed);
+            }
+            if (response.Headers.TryGetValues("X-Authlib-Injector-API-Location", out var locations) && locations.FirstOrDefault() is { } location)
+            {
+                var resolved = new Uri(final, location);
+                CheckNoDowngrade(final, resolved);
+                return resolved.ToString().TrimEnd('/');
+            }
+            return final.ToString().TrimEnd('/');
         }
-        return url.TrimEnd('/');
+    }
+
+    private static void CheckNoDowngrade(Uri from, Uri to)
+    {
+        CheckSecure(to.ToString());
+        if (from.Scheme == Uri.UriSchemeHttps && to.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException(L.F("core.auth.external.insecure", to));
     }
 
     /// <summary>API 根地址返回的元数据原文，启动时要预取给 authlib-injector。</summary>
-    public async Task<string> GetMetadataAsync(string apiRoot, CancellationToken ct = default) =>
-        await http.GetStringAsync(apiRoot + "/", ct);
+    public async Task<string> GetMetadataAsync(string apiRoot, CancellationToken ct = default)
+    {
+        using var response = await GetSameOriginAsync(CheckSecure(apiRoot + "/"), ct);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(ct);
+    }
+
+    /// <summary>
+    /// 不带密码和令牌的 GET（元数据、皮肤资料）：允许同一服务器内的跳转（比如补一个结尾斜杠），本机 http 也可以升到 https；
+    /// 换服务器、降到 http 都不跟。最多跟 MaxDiscoveryRedirects 次。
+    /// </summary>
+    private async Task<HttpResponseMessage> GetSameOriginAsync(Uri start, CancellationToken ct)
+    {
+        var current = start;
+        for (var hop = 0; ; hop++)
+        {
+            var response = await http.GetAsync(current, ct);
+            if ((int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is { } next && hop < MaxDiscoveryRedirects)
+            {
+                var target = new Uri(current, next);
+                response.Dispose();
+                CheckNoDowngrade(current, target);
+                CheckSameOrigin(current, target);
+                current = target;
+                continue;
+            }
+            try
+            {
+                CheckSameOrigin(current, response);
+            }
+            catch
+            {
+                response.Dispose();
+                throw;
+            }
+            return response;
+        }
+    }
+
+    /// <summary>请求被跳转到了别的地方（3xx，或者传进来的 HttpClient 自己跟随了跳转）：不认，令牌和密码只发给用户填的那个服务器。</summary>
+    private static void CheckSameOrigin(Uri requested, HttpResponseMessage response)
+    {
+        CheckNotRedirected(response);
+        if (response.RequestMessage?.RequestUri is { } final) CheckSameOrigin(requested, final);
+    }
+
+    /// <summary>
+    /// 同一服务器：协议、主机、端口都一样。唯一的例外是本机回环的 http 升到同一主机的 https（升级不降级，
+    /// 端口按协议默认值变化也算同一台）。
+    /// </summary>
+    private static void CheckSameOrigin(Uri requested, Uri final)
+    {
+        var same = final.Scheme == requested.Scheme && string.Equals(final.Authority, requested.Authority, StringComparison.OrdinalIgnoreCase);
+        var upgrade = requested.Scheme == Uri.UriSchemeHttp && final.Scheme == Uri.UriSchemeHttps && IsLoopbackHost(requested)
+                      && string.Equals(final.DnsSafeHost, requested.DnsSafeHost, StringComparison.OrdinalIgnoreCase);
+        if (!same && !upgrade)
+            throw new InvalidOperationException(L.F("core.auth.external.redirected", final.GetLeftPart(UriPartial.Authority)));
+    }
+
+    /// <summary>这个外置账号存的服务器地址不安全（v0.5.8 及以前允许 http）：要用 https 重新添加。</summary>
+    public static bool HasInsecureServer(Account account)
+    {
+        if (account.Kind != AccountKind.External || string.IsNullOrEmpty(account.ServerUrl)) return false;
+        try { CheckSecure(account.ServerUrl); return false; }
+        catch (InvalidOperationException) { return true; }
+    }
 
     public async Task<string> GetServerNameAsync(string apiRoot, CancellationToken ct = default)
     {
@@ -87,11 +250,13 @@ public sealed class ExternalAuth(HttpClient http)
     public async Task EnsureValidAsync(Account account, CancellationToken ct = default)
     {
         if (account.AccessToken is null) throw new LoginRequiredException(L.F("core.auth.account.expired", account.Name));
-        using var validate = await http.PostAsync(account.ServerUrl + "/authserver/validate", AmberJson.Body(new JsonObject
+        var validateUri = CheckSecure(account.ServerUrl + "/authserver/validate");
+        using var validate = await http.PostAsync(validateUri, AmberJson.Body(new JsonObject
         {
             ["accessToken"] = account.AccessToken,
             ["clientToken"] = account.ClientToken,
         }), ct);
+        CheckSameOrigin(validateUri, validate);
         if (validate.IsSuccessStatusCode) return;
 
         try
@@ -112,7 +277,10 @@ public sealed class ExternalAuth(HttpClient http)
     /// <summary>从 sessionserver 读皮肤地址。没有皮肤时 SkinUrl 保持为空。</summary>
     public async Task LoadSkinAsync(Account account, CancellationToken ct = default)
     {
-        var text = await http.GetStringAsync($"{account.ServerUrl}/sessionserver/session/minecraft/profile/{account.Uuid:N}", ct);
+        var profileUri = CheckSecure($"{account.ServerUrl}/sessionserver/session/minecraft/profile/{account.Uuid:N}");
+        using var profileResponse = await GetSameOriginAsync(profileUri, ct);
+        profileResponse.EnsureSuccessStatusCode();
+        var text = await profileResponse.Content.ReadAsStringAsync(ct);
         var profile = JsonNode.Parse(text);
         var property = (profile?["properties"] as JsonArray)?.FirstOrDefault(p => p?["name"]?.GetValue<string>() == "textures");
         if (property?["value"]?.GetValue<string>() is not { } encoded) return;
@@ -129,7 +297,9 @@ public sealed class ExternalAuth(HttpClient http)
 
     private async Task<JsonObject> PostAsync(string url, JsonObject body, CancellationToken ct)
     {
-        using var response = await http.PostAsync(url, AmberJson.Body(body), ct);
+        var uri = CheckSecure(url);
+        using var response = await http.PostAsync(uri, AmberJson.Body(body), ct);
+        CheckSameOrigin(uri, response);
         var text = await response.Content.ReadAsStringAsync(ct);
         JsonObject json;
         try { json = string.IsNullOrWhiteSpace(text) ? [] : JsonNode.Parse(text) as JsonObject ?? []; }

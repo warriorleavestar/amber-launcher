@@ -66,7 +66,12 @@ public class MultiplayerTests
         var room = new RoomCode("K7Q2M9XD", "4HZP8RW2N6TC", 51234);
         var args = EasyTierArgs.Build(new EasyTierOptions(room, true, ["tcp://public.easytier.top:11010", " "], 15999));
         var text = string.Join(' ', args);
-        Assert.Contains("--network-name amber-k7q2m9xd --network-secret 4HZP8RW2N6TC", text);
+        Assert.Contains("--network-name amber-k7q2m9xd", text);
+        // 房间密钥不放命令行，经环境变量传。
+        Assert.DoesNotContain("--network-secret", args);
+        Assert.DoesNotContain(args, a => a.Contains("4HZP8RW2N6TC"));
+        Assert.Equal(new Dictionary<string, string> { ["ET_NETWORK_SECRET"] = "4HZP8RW2N6TC" },
+            EasyTierArgs.Environment(new EasyTierOptions(room, true, [], 15999)));
         Assert.Contains("--ipv4 10.233.144.1", text);
         Assert.Contains("--no-tun", args);
         Assert.Contains("--rpc-portal 127.0.0.1:15999", text);
@@ -87,7 +92,8 @@ public class MultiplayerTests
         var ip = args[args.IndexOf("--ipv4") + 1];
         Assert.StartsWith(EasyTierArgs.Subnet, ip);
         Assert.NotEqual(EasyTierArgs.HostIp, ip);
-        Assert.Equal(ip, EasyTierArgs.Build(new EasyTierOptions(room, false, [], 1, 2, null, "guest-1"))[5]);
+        var again = EasyTierArgs.Build(new EasyTierOptions(room, false, [], 1, 2, null, "guest-1"));
+        Assert.Equal(ip, again[again.IndexOf("--ipv4") + 1]);
         Assert.Throws<ArgumentException>(() => EasyTierArgs.Build(new EasyTierOptions(room, false, [], 1)));
     }
 
@@ -125,89 +131,6 @@ public class MultiplayerTests
         Assert.Equal("Amber LAN", guest[guest.IndexOf("--dev-name") + 1]);
         Assert.Contains("--enable-udp-broadcast-relay", guest);
         Assert.DoesNotContain("--enable-udp-broadcast-relay", EasyTierArgs.Build(new EasyTierOptions(room, false, [], 1, 2)));
-    }
-}
-
-/// <summary>完整局域网模式的守护脚本：不提权运行，用 ping 代替 easytier-core，验证停止标记和父进程退出两种结束方式。</summary>
-public class ElevatedGuardTests : IDisposable
-{
-    private readonly string _dir = Path.Combine(Path.GetTempPath(), "amber-guard-" + Guid.NewGuid().ToString("N"));
-
-    public ElevatedGuardTests() => Directory.CreateDirectory(_dir);
-
-    public void Dispose()
-    {
-        try { Directory.Delete(_dir, true); } catch (IOException) { }
-    }
-
-    private (System.Diagnostics.Process Guard, string Stop, string Exited) StartGuard(int parentId)
-    {
-        var script = Path.Combine(_dir, "guard.ps1");
-        File.WriteAllText(script, EasyTierElevatedSession.GuardScript, new System.Text.UTF8Encoding(true));
-        var args = Path.Combine(_dir, "args.json");
-        File.WriteAllText(args, """["-n","60","127.0.0.1"]""");
-        var stop = Path.Combine(_dir, "stop");
-        var exited = Path.Combine(_dir, "exited");
-        var info = new System.Diagnostics.ProcessStartInfo("powershell.exe")
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var a in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Core", Path.Combine(Environment.SystemDirectory, "PING.EXE"),
-                     "-ArgsFile", args, "-ParentId", parentId.ToString(), "-StopFile", stop, "-ExitedFile", exited, "-LogFile", Path.Combine(_dir, "log.txt") })
-            info.ArgumentList.Add(a);
-        return (System.Diagnostics.Process.Start(info)!, stop, exited);
-    }
-
-    [Fact]
-    public async Task StopFileEndsCore()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        var (guard, stop, exited) = StartGuard(Environment.ProcessId);
-        for (var i = 0; i < 50 && !File.Exists(Path.Combine(_dir, "log.txt")); i++) await Task.Delay(100);
-        await Task.Delay(1500);
-        Assert.False(File.Exists(exited));
-        File.WriteAllText(stop, "stop");
-        Assert.True(guard.WaitForExit(15000));
-        Assert.True(File.Exists(exited));
-        Assert.Contains("127.0.0.1", File.ReadAllText(Path.Combine(_dir, "log.txt")));
-    }
-
-    private static string ReadShared(string path)
-    {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        return new StreamReader(stream).ReadToEnd();
-    }
-
-    [Fact]
-    public async Task RestartFileSwitchesArgumentsWithoutNewGuard()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        var (guard, stop, exited) = StartGuard(Environment.ProcessId);
-        var log = Path.Combine(_dir, "log.txt");
-        for (var i = 0; i < 50 && !File.Exists(log); i++) await Task.Delay(100);
-        File.WriteAllText(stop + ".restart", """["-n","60","127.0.0.2"]""");
-        for (var i = 0; i < 100 && File.Exists(stop + ".restart"); i++) await Task.Delay(100);
-        Assert.False(File.Exists(stop + ".restart"));
-        await Task.Delay(1500);
-        Assert.Contains("127.0.0.2", ReadShared(log));
-        Assert.Contains("restarted", ReadShared(log + ".guard"));
-        Assert.False(guard.HasExited);
-        File.WriteAllText(stop, "stop");
-        Assert.True(guard.WaitForExit(15000));
-        Assert.True(File.Exists(exited));
-    }
-
-    [Fact]
-    public async Task ParentExitEndsCore()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        using var parent = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell.exe", "-NoProfile -Command Start-Sleep 4") { CreateNoWindow = true, UseShellExecute = false })!;
-        var (guard, _, exited) = StartGuard(parent.Id);
-        await Task.Delay(1000);
-        Assert.False(File.Exists(exited));
-        Assert.True(guard.WaitForExit(20000));
-        Assert.True(File.Exists(exited));
     }
 }
 

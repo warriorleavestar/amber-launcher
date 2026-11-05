@@ -25,6 +25,7 @@ namespace Amber.Core;
 [JsonSerializable(typeof(ChatCipher.Body))]
 [JsonSerializable(typeof(Downloader.ChunkState))]
 [JsonSerializable(typeof(List<string>))]
+[JsonSerializable(typeof(Amber.Core.Multiplayer.GuardCommand))]
 [JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(List<string[]>))]
 [JsonSerializable(typeof(JsonObject))]

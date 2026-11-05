@@ -147,8 +147,23 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
 
         var search = await FindAsync<TextBox>(t => t.PlaceholderText?.StartsWith("搜索版本号", StringComparison.Ordinal) == true);
         Dispatcher.UIThread.Invoke(() => search!.Text = "1.21.1");
-        var row = await FindAsync<Button>(b => b.Content as string == "安装…" && b.DataContext is RemoteVersionItem { Id: "1.21.1" });
-        Check("搜索框过滤出 1.21.1 并显示安装按钮", row is not null && download.Items.All(i => i.Id.Contains("1.21.1")), $"{download.Items.Count} 个");
+        // 按行的数据和命令找按钮（不靠按钮文字）；每次找之前把这一行滚进可见区，列表是虚拟化的，没滚到的行不会生成。
+        var list = await FindAsync<ListBox>(l => ReferenceEquals(l.ItemsSource, download.Items));
+        Button? row = null;
+        await WaitAsync(() => Dispatcher.UIThread.Invoke(() =>
+        {
+            if (download.Items.FirstOrDefault(i => i.Id == "1.21.1") is { } item) list?.ScrollIntoView(item);
+            row = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.IsEffectivelyVisible
+                && b.DataContext is RemoteVersionItem { Id: "1.21.1" } && ReferenceEquals(b.Command, download.ConfigureCommand));
+            return row is not null;
+        }), 20);
+        var rowInfo = Dispatcher.UIThread.Invoke(() =>
+        {
+            var rows = window.GetVisualDescendants().OfType<Button>().Where(b => b.DataContext is RemoteVersionItem).ToList();
+            return $"{download.Items.Count} 个；窗口 {window.Bounds.Width:0}×{window.Bounds.Height:0}，已生成的行 {string.Join("/", rows.Select(b => ((RemoteVersionItem)b.DataContext!).Id))}，" +
+                   $"按钮文字「{row?.Content}」";
+        });
+        Check("搜索框过滤出 1.21.1 并显示安装按钮", row is not null && row.Content as string == "安装…" && download.Items.All(i => i.Id.Contains("1.21.1")), rowInfo);
         Check("点“安装…”打开安装面板", Press(row) && await WaitAsync(() => download.IsConfiguring && download.Target?.Id == "1.21.1", 5));
 
         var loaderBox = await FindAsync<ComboBox>(c => ReferenceEquals(c.ItemsSource, download.LoaderChoices));
@@ -238,11 +253,42 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         main.CurrentPage = home;
         await WaitAsync(() => home.Versions.Contains(FabricName), 5);
         home.SelectedVersion = FabricName;
+        // 无痕模式：在设置页勾上，这次启动的游戏日志不记聊天（生成过滤后的日志配置，游戏照常写 latest.log）。
+        var settings = Page<SettingsViewModel>();
+        main.CurrentPage = settings;
+        var noTraceBox = await FindAsync<CheckBox>(c => c.Name == "NoTraceBox");
+        Dispatcher.UIThread.Invoke(() => { if (noTraceBox is not null) noTraceBox.IsChecked = true; });
+        Dispatcher.UIThread.Invoke(() => settings.SaveCommand.Execute(null));
+        Check("无痕模式：勾选后存进设置", noTraceBox is not null && settings.NoTrace && File.ReadAllText(Amber.App.Services.AppSettings.FilePath).Contains("\"NoTrace\": true"));
+        var instance = Page<InstanceViewModel>();
+        instance.SelectedId = FabricName;
+        var script = Path.Combine(reportDir, OperatingSystem.IsWindows() ? "notrace-run.bat" : "notrace-run.sh");
+        await instance.ExportLaunchScriptAsync(script);
+        var scriptConfigs = Directory.Exists(script + ".amber")
+            ? Directory.GetFiles(script + ".amber", "*.amber-notrace.xml") : [];
+        Check("无痕模式：导出脚本附带持久日志配置", File.Exists(script) && scriptConfigs.Length == 1
+            && File.ReadAllText(script).Contains(".amber-notrace.xml")
+            && File.ReadAllText(scriptConfigs[0]).Contains("RegexFilter"), instance.Status);
+        main.CurrentPage = home;
+        var launchStart = DateTime.Now.AddSeconds(-2);
         var launching = home.LaunchCommand.ExecuteAsync(null);
         var reached = await WaitAsync(() => log.Lines.Any(l => l.Message.Contains("Sound engine started") || l.Message.Contains("OpenAL initialized")), 180);
         Check("启动游戏到主界面", reached, home.Status);
         Check("启动前命令运行过", File.Exists(Path.Combine(reportDir, "prelaunch.txt")) && File.ReadAllText(Path.Combine(reportDir, "prelaunch.txt")).Contains(FabricName));
         Check("实例内存生效", log.Lines.Any(l => l.Message.Contains("最大内存 3072 MB")));
+        // 过滤后的配置放在 Amber 自己的数据目录里，游戏目录里一个都不能有；游戏退出后删掉。
+        var noTraceRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Amber", "notrace");
+        var filtered = Directory.Exists(noTraceRoot)
+            ? Directory.EnumerateFiles(noTraceRoot, "*.amber-notrace.xml", SearchOption.AllDirectories).Where(f => File.GetLastWriteTime(f) >= launchStart).ToList()
+            : [];
+        var inGameDir = Directory.EnumerateFiles(GameRoot(), "*.amber-notrace.xml", SearchOption.AllDirectories).Where(f => File.GetLastWriteTime(f) >= launchStart).ToList();
+        Check("无痕模式：启动时提示并用过滤后的日志配置", log.Lines.Any(l => l.Message.Contains(Amber.Core.Localization.L.T("core.launch.notrace.on")))
+                                                && filtered.Count > 0 && File.ReadAllText(filtered[0]).Contains("RegexFilter")
+                                                && File.ReadAllText(filtered[0]).Contains("net.minecraft.server.MinecraftServer"), string.Join(", ", filtered.Select(Path.GetFileName)));
+        Check("无痕模式：生成的日志配置不写进游戏目录", inGameDir.Count == 0, string.Join(", ", inGameDir.Select(f => Path.GetRelativePath(GameRoot(), f))));
+        var latest = Directory.EnumerateFiles(GameRoot(), "latest.log", SearchOption.AllDirectories)
+            .Where(f => File.GetLastWriteTime(f) >= launchStart).ToList();
+        Check("无痕模式：游戏照常写 latest.log", latest.Count > 0 && new FileInfo(latest[0]).Length > 0, string.Join(", ", latest.Select(f => Path.GetRelativePath(GameRoot(), f))));
         await ShotAsync("运行中");
         main.CurrentPage = log;
         await ShotAsync("日志页");
@@ -250,6 +296,10 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         home.CancelCommand.Execute(null);
         await launching;
         Check("结束游戏后状态正确（不报崩溃）", home.Status.Contains("已结束") && !home.HasCrash, home.Status);
+        var cleaned = await WaitAsync(() => filtered.All(f => !File.Exists(f)), 15);
+        Check("无痕模式：游戏退出后删掉生成的日志配置", filtered.Count > 0 && cleaned, string.Join(", ", filtered.Where(File.Exists).Select(Path.GetFileName)));
+        // 后面的崩溃分析要看完整日志，把无痕模式关回去。
+        Dispatcher.UIThread.Invoke(() => { settings.NoTrace = false; settings.SaveCommand.Execute(null); });
     }
 
     private async Task CrashAsync()
@@ -647,7 +697,15 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("直连：聊天连上", await WaitAsync(() => host.ChatReady && guest.ChatReady, 40), guest.ChatStatus);
 
         main.CurrentPage = host;
-        await host.RunMatrixCommand.ExecuteAsync(null);
+        var matrix = host.RunMatrixCommand.ExecuteAsync(null);
+        // 加入方要先确认：确认前房主一步也不发。
+        Check("直连：全条件测试先请加入方确认", await WaitAsync(() => guest.TestRequestPending, 20) && host.MatrixLines.Count == 0, guest.Status);
+        await guest.AcceptTestRequestCommand.ExecuteAsync(null);
+        // 测试进行时加入方能看到“测试中”横幅和停止按钮；结束后收起。
+        var sawBanner = await WaitAsync(() => guest.GuestTestRunning && guest.GuestTestBanner.Length > 0, 60);
+        await matrix;
+        Check("直连：加入方测试中显示横幅，结束后收起", sawBanner && await WaitAsync(() => !guest.GuestTestRunning && !guest.TestRequestPending, 10),
+            $"横幅 {sawBanner}，结束后 {guest.GuestTestRunning}");
         Check("直连：全条件测试（模拟）跑完", host.MatrixLines.Count >= 2 && host.MatrixLines.Skip(1).All(l => l.Contains("（模拟）")), string.Join(" / ", host.MatrixLines));
         Check("直连：模拟的局域网路径通过", host.MatrixLines.Any(l => l.Contains("同一局域网") && l.Contains("通过")), host.Status);
         await ShotAsync("直连全条件测试");
