@@ -690,9 +690,10 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private void OnChatMessage(ChatClient client, ChatMessage message)
     {
         if (_chat is not null && _chat != client) return;
-        ChatLines.Add(new ChatLine(message, message.SenderId == client.SenderId));
+        var mine = client.IsMine(message);
+        ChatLines.Add(new ChatLine(message, mine));
         while (ChatLines.Count > 500) ChatLines.RemoveAt(0);
-        if (!IsCurrent && message.Kind == ChatKind.Message && message.SenderId != client.SenderId) Badge++;
+        if (!IsCurrent && message.Kind == ChatKind.Message && !mine) Badge++;
     }
 
     [RelayCommand]

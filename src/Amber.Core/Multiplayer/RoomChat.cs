@@ -8,13 +8,17 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Channels;
 
 namespace Amber.Core.Multiplayer;
 
 public enum ChatKind { Message, Join, Leave }
 
-/// <summary>一条聊天消息（解密后）。Time 是发送方的时间。</summary>
-public sealed record ChatMessage(ChatKind Kind, string SenderId, string Name, string Text, DateTimeOffset Time);
+/// <summary>一条聊天消息（解密后）。Time 是发送方的时间。Nonce 是这条消息加密时用的随机数（判断是不是自己发的）。</summary>
+public sealed record ChatMessage(ChatKind Kind, string SenderId, string Name, string Text, DateTimeOffset Time)
+{
+    public string Nonce { get; init; } = "";
+}
 
 /// <summary>
 /// 房间聊天的加密：密钥由房间密钥经 HKDF-SHA256 派生（盐是网络名），每条消息 AES-256-GCM、随机 12 字节 nonce，
@@ -43,14 +47,18 @@ public sealed class ChatCipher
         [property: JsonPropertyName("text")] string Text,
         [property: JsonPropertyName("ts")] long Time);
 
-    public byte[] Seal(ChatMessage message)
+    public byte[] Seal(ChatMessage message) => Seal(message, out _);
+
+    /// <summary>加密，同时给出这条消息的 nonce（Base64）。</summary>
+    public byte[] Seal(ChatMessage message, out string nonceText)
     {
         var plain = JsonSerializer.SerializeToUtf8Bytes(new Body(message.Kind, message.Name, message.Text, message.Time.ToUnixTimeMilliseconds()), AmberJsonContext.Default.Body);
         var nonce = RandomNumberGenerator.GetBytes(12);
         var cipher = new byte[plain.Length];
         var tag = new byte[16];
         using (var aes = new AesGcm(_key, 16)) aes.Encrypt(nonce, plain, cipher, tag, Encoding.UTF8.GetBytes(message.SenderId));
-        var envelope = new Envelope(message.SenderId, Convert.ToBase64String(nonce), Convert.ToBase64String([.. cipher, .. tag]));
+        nonceText = Convert.ToBase64String(nonce);
+        var envelope = new Envelope(message.SenderId, nonceText, Convert.ToBase64String([.. cipher, .. tag]));
         return JsonSerializer.SerializeToUtf8Bytes(envelope, AmberJsonContext.Default.Envelope);
     }
 
@@ -67,9 +75,9 @@ public sealed class ChatCipher
             var plain = new byte[data.Length - 16];
             using (var aes = new AesGcm(_key, 16)) aes.Decrypt(nonce, data.AsSpan(0, plain.Length), data.AsSpan(plain.Length), plain, Encoding.UTF8.GetBytes(envelope.Sender));
             var body = JsonSerializer.Deserialize(plain, AmberJsonContext.Default.Body);
-            if (body is null) return null;
+            if (body is null || !Enum.IsDefined(body.Kind)) return null;
             return new ChatMessage(body.Kind, envelope.Sender, RoomChat.Clean(body.Name, RoomChat.MaxNameLength), RoomChat.Clean(body.Text, RoomChat.MaxTextLength),
-                DateTimeOffset.FromUnixTimeMilliseconds(body.Time));
+                DateTimeOffset.FromUnixTimeMilliseconds(body.Time)) { Nonce = envelope.Nonce };
         }
         catch (Exception e) when (e is JsonException or FormatException or CryptographicException or ArgumentException or NotSupportedException)
         {
@@ -153,23 +161,49 @@ public sealed class RateLimiter(int count, TimeSpan window, Func<DateTimeOffset>
 
 /// <summary>
 /// 房主电脑上的聊天转发：接受房间成员的连接，把认证通过的消息转给其他人。
-/// 超长或认证失败的连接直接断开；发太快的消息丢弃。断开时替离开的人发一条“离开”通知。
+/// 一条连接的第一帧必须是认证通过的“加入”，之后才会收到别人的消息；发送者 id 和名字在这条连接里固定，
+/// 已经有人在用的 id 不让别的连接用。每个成员有自己的发送队列（满了就断开它，慢的人不拖住别人），
+/// 第一帧和空闲都有时限，连接数有上限。超长或认证失败的连接直接断开；发太快的帧丢弃。断开时替离开的人发一条“离开”通知。
 /// </summary>
 public sealed class ChatHub : IAsyncDisposable
 {
+    /// <summary>同时最多这么多条连接（包括还没发第一帧的）。</summary>
+    public const int MaxConnections = 32;
+
+    /// <summary>每个成员的发送队列能排多少帧。</summary>
+    internal int OutboxFrames { get; init; } = 32;
+
+    /// <summary>连上后多久内要发出第一帧（加入）。</summary>
+    internal TimeSpan FirstFrameTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>成员多久没发任何帧就断开。</summary>
+    internal TimeSpan IdleTimeout { get; init; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>测试用：给接受的连接设发送缓冲区大小，模拟网络慢。</summary>
+    internal int? SendBufferForTest { get; init; }
+
     private readonly ChatCipher _cipher;
     private readonly List<TcpListener> _listeners = [];
     private readonly ConcurrentDictionary<Guid, Member> _members = new();
+    private readonly object _identityGate = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly List<Task> _loops = [];
 
-    private sealed class Member(TcpClient client)
+    private sealed class Member(TcpClient client, int outboxFrames, CancellationToken hub)
     {
         public TcpClient Client { get; } = client;
-        public SemaphoreSlim WriteLock { get; } = new(1, 1);
+        public Channel<byte[]> Outbox { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(outboxFrames) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+        public CancellationTokenSource Cts { get; } = CancellationTokenSource.CreateLinkedTokenSource(hub);
         public RateLimiter Limiter { get; } = new(5, TimeSpan.FromSeconds(5));
         public string? SenderId { get; set; }
         public string? Name { get; set; }
+        public volatile bool Authenticated;
+
+        public void Kick()
+        {
+            try { Cts.Cancel(); } catch (ObjectDisposedException) { }
+            Client.Dispose();
+        }
     }
 
     /// <summary>监听在本机回环（房主自己和普通模式下 EasyTier 转发进来的连接）；完整局域网模式再加上虚拟 IP。</summary>
@@ -203,7 +237,12 @@ public sealed class ChatHub : IAsyncDisposable
     }
 
     public int Port => ((IPEndPoint)_listeners[0].LocalEndpoint).Port;
-    public int MemberCount => _members.Count;
+
+    /// <summary>已经加入（发过认证通过的第一帧）的成员数。</summary>
+    public int MemberCount => _members.Values.Count(m => m.Authenticated);
+
+    /// <summary>所有连接数（包括还没加入的）。</summary>
+    public int ConnectionCount => _members.Count;
 
     private async Task AcceptLoopAsync(TcpListener listener)
     {
@@ -218,8 +257,14 @@ public sealed class ChatHub : IAsyncDisposable
             {
                 return;
             }
+            if (_members.Count >= MaxConnections)
+            {
+                client.Dispose();
+                continue;
+            }
+            if (SendBufferForTest is { } size) client.Client.SendBufferSize = size;
             var id = Guid.NewGuid();
-            var member = new Member(client);
+            var member = new Member(client, OutboxFrames, _cts.Token);
             _members[id] = member;
             _ = ServeAsync(id, member);
         }
@@ -227,58 +272,79 @@ public sealed class ChatHub : IAsyncDisposable
 
     private async Task ServeAsync(Guid id, Member member)
     {
+        var writer = WriteLoopAsync(member);
         try
         {
             var stream = member.Client.GetStream();
-            while (!_cts.IsCancellationRequested)
+            while (!member.Cts.IsCancellationRequested)
             {
-                var frame = await RoomChat.ReadFrameAsync(stream, _cts.Token);
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(member.Cts.Token);
+                deadline.CancelAfter(member.Authenticated ? IdleTimeout : FirstFrameTimeout);
+                var frame = await RoomChat.ReadFrameAsync(stream, deadline.Token);
                 if (frame is null) break;
                 var message = _cipher.Open(frame);
                 if (message is null) break;
-                // 一条连接只能代表一个人，换 id 就断开。
-                if (member.SenderId is { } known && known != message.SenderId) break;
-                member.SenderId = message.SenderId;
-                if (message.Kind == ChatKind.Join) member.Name = message.Name;
+                if (!member.Authenticated)
+                {
+                    // 第一帧必须是加入；别的连接正在用这个 id 就不让进。
+                    if (message.Kind != ChatKind.Join) break;
+                    lock (_identityGate)
+                    {
+                        if (_members.Values.Any(m => m != member && m.Authenticated && m.SenderId == message.SenderId)) break;
+                        member.SenderId = message.SenderId;
+                        member.Name = message.Name;
+                        member.Authenticated = true;
+                    }
+                    Broadcast(frame);
+                    continue;
+                }
+                // 一条连接只能代表一个人：换 id、换名字、再发一次加入都断开。
+                if (message.SenderId != member.SenderId || message.Name != member.Name || message.Kind == ChatKind.Join) break;
                 if (message.Kind == ChatKind.Leave) break;
-                if (message.Kind == ChatKind.Message && !member.Limiter.TryAcquire()) continue;
-                await BroadcastAsync(frame, except: null);
+                if (!member.Limiter.TryAcquire()) continue;
+                Broadcast(frame);
             }
         }
         catch (Exception e) when (e is IOException or InvalidDataException or OperationCanceledException or SocketException or ObjectDisposedException)
         {
-            // 连接断了或者发了不合规的数据，按离开处理。
+            // 连接断了、超时了或者发了不合规的数据，按离开处理。
         }
         finally
         {
             _members.TryRemove(id, out _);
-            member.Client.Dispose();
-            if (member.SenderId is { } sender && !_cts.IsCancellationRequested)
+            member.Outbox.Writer.TryComplete();
+            member.Kick();
+            try { await writer; } catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException) { }
+            member.Cts.Dispose();
+            if (member.Authenticated && member.SenderId is { } sender && !_cts.IsCancellationRequested)
             {
                 var leave = _cipher.Seal(new ChatMessage(ChatKind.Leave, sender, member.Name ?? "", "", DateTimeOffset.UtcNow));
-                await BroadcastAsync(leave, except: null);
+                Broadcast(leave);
             }
         }
     }
 
-    private async Task BroadcastAsync(byte[] frame, Guid? except)
+    /// <summary>放进每个已加入成员的发送队列；谁的队列满了就断开谁。</summary>
+    private void Broadcast(byte[] frame)
     {
-        foreach (var (id, member) in _members)
+        foreach (var member in _members.Values)
         {
-            if (id == except) continue;
-            await member.WriteLock.WaitAsync();
-            try
-            {
-                await RoomChat.WriteFrameAsync(member.Client.GetStream(), frame, _cts.Token);
-            }
-            catch (Exception e) when (e is IOException or OperationCanceledException or ObjectDisposedException or InvalidOperationException)
-            {
-                // 写不进去的连接会在它自己的读循环里被清理。
-            }
-            finally
-            {
-                member.WriteLock.Release();
-            }
+            if (!member.Authenticated) continue;
+            if (!member.Outbox.Writer.TryWrite(frame)) member.Kick();
+        }
+    }
+
+    private static async Task WriteLoopAsync(Member member)
+    {
+        try
+        {
+            var stream = member.Client.GetStream();
+            await foreach (var frame in member.Outbox.Reader.ReadAllAsync(member.Cts.Token))
+                await RoomChat.WriteFrameAsync(stream, frame, member.Cts.Token);
+        }
+        catch (Exception e) when (e is IOException or OperationCanceledException or ObjectDisposedException or InvalidOperationException or SocketException)
+        {
+            member.Kick();
         }
     }
 
@@ -286,7 +352,7 @@ public sealed class ChatHub : IAsyncDisposable
     {
         _cts.Cancel();
         foreach (var l in _listeners) l.Stop();
-        foreach (var m in _members.Values) m.Client.Dispose();
+        foreach (var m in _members.Values) m.Kick();
         try
         {
             await Task.WhenAll(_loops);
@@ -304,6 +370,7 @@ public sealed class ChatClient : IAsyncDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly RateLimiter _limiter = new(5, TimeSpan.FromSeconds(5));
+    private readonly Queue<string> _sentNonces = new();
     private Task? _readLoop;
 
     public string SenderId { get; } = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
@@ -339,12 +406,24 @@ public sealed class ChatClient : IAsyncDisposable
         await _writeLock.WaitAsync(ct);
         try
         {
-            await RoomChat.WriteFrameAsync(_client.GetStream(), _cipher.Seal(message), ct);
+            var frame = _cipher.Seal(message, out var nonce);
+            lock (_sentNonces)
+            {
+                _sentNonces.Enqueue(nonce);
+                while (_sentNonces.Count > 256) _sentNonces.Dequeue();
+            }
+            await RoomChat.WriteFrameAsync(_client.GetStream(), frame, ct);
         }
         finally
         {
             _writeLock.Release();
         }
+    }
+
+    /// <summary>这条消息是不是自己发的：看 nonce 是不是自己加密时用的（只看发送者 id 的话，知道房间码的人能冒充）。</summary>
+    public bool IsMine(ChatMessage message)
+    {
+        lock (_sentNonces) return message.Nonce.Length > 0 && _sentNonces.Contains(message.Nonce);
     }
 
     /// <summary>测试用：直接写原始帧。</summary>

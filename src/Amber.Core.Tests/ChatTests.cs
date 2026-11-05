@@ -16,7 +16,7 @@ public class ChatTests
         var frame = cipher.Seal(message);
         Assert.DoesNotContain("你好", Encoding.UTF8.GetString(frame));
         Assert.DoesNotContain("world", Encoding.UTF8.GetString(frame));
-        Assert.Equal(message, cipher.Open(frame));
+        Assert.Equal(message, cipher.Open(frame)! with { Nonce = "" });
         // 同一条消息两次加密结果不同（随机 nonce）。
         Assert.NotEqual(frame, cipher.Seal(message));
     }
