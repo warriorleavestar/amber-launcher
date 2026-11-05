@@ -368,7 +368,24 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private void OpenPage()
     {
-        if (Selected?.Project.PageUrl is { } url) Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        if (Selected?.Project.PageUrl is not { } url) return;
+        try
+        {
+            if (!TryOpenProjectPage(url, start => Process.Start(start)))
+                SetStatus(StatusMessage.Error("tools.download.invalid_url"));
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            SetStatus(StatusMessage.Failure("content.project.open_failed", e, ErrorText.Of(e)));
+        }
+    }
+
+    // 最后一次校验紧贴系统调用，避免新提供方或手工构造的项目绕过入口校验。
+    internal static bool TryOpenProjectPage(string? url, Action<ProcessStartInfo> start)
+    {
+        if (!WebLinks.TryGetHttpUrl(url, out var uri)) return false;
+        start(new ProcessStartInfo(uri!.AbsoluteUri) { UseShellExecute = true });
+        return true;
     }
 
     [RelayCommand]

@@ -48,6 +48,7 @@ public class ContentTests : IDisposable
     [InlineData("C:\\Windows\\evil.txt")]
     [InlineData("..\\evil.txt")]
     [InlineData("mods\\..\\..\\evil.txt")]
+    [InlineData("mods\\../../evil.txt")]
     [InlineData("\\\\server\\share\\evil.txt")]
     [InlineData("mods/a.jar:hidden")]
     [InlineData("")]

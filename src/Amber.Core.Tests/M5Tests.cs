@@ -368,4 +368,22 @@ public class M5Tests : IDisposable
         Assert.Contains("'-Dname=Steve'\"'\"'s world'", text);
         Assert.True(File.GetUnixFileMode(path).HasFlag(UnixFileMode.UserExecute));
     }
+
+    [Theory]
+    [InlineData(@"C:\game\mods\a.jar", @"C:\game\", @"D:\alias\mods\a.jar")]
+    [InlineData(@"C:\game/mods/a.jar", @"C:\game/", @"D:\alias/mods/a.jar")]
+    [InlineData(@"C:\game", @"C:\game\", @"D:\alias")]
+    [InlineData(@"C:\game-other\a.jar", @"C:\game\", @"C:\game-other\a.jar")]
+    public void AsciiPaths_RemapWindowsStylePathsAcrossPlatforms(string path, string from, string expected) =>
+        Assert.Equal(expected, AsciiPaths.Remap(path, from, @"D:\alias"));
+
+    [Fact]
+    public void AsciiPaths_RemapPreservesNativeRootBoundary()
+    {
+        // 只进行字符串映射，不枚举或写入系统根目录。
+        var root = Path.GetPathRoot(_root)!;
+        Assert.Equal(_root, AsciiPaths.Remap(root, root, _root));
+        Assert.Equal(Path.Combine(_root, "a", "b"), AsciiPaths.Remap(Path.Combine(root, "a", "b"), root, _root));
+        Assert.Equal("relative", AsciiPaths.Remap("relative", root, _root));
+    }
 }

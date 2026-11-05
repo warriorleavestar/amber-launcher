@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Amber.Core.Content;
 using Amber.Core.Game;
+using Amber.Core.Net;
 
 namespace Amber.Core.Launch;
 
@@ -93,64 +94,74 @@ public static class Toolbox
     /// <summary>生成启动脚本，方便不开启动器直接跑。令牌会写进脚本，所以默认换成占位符。</summary>
     public static string WriteLaunchScript(string path, string javaPath, string workDir, IReadOnlyList<string> args, string accessToken)
     {
-        var builder = new StringBuilder();
-        if (OperatingSystem.IsWindows())
-        {
-            builder.AppendLine("@echo off").AppendLine("setlocal DisableDelayedExpansion").AppendLine("chcp 65001 >nul");
-            // 路径不能含双引号；其余 cmd 元字符留在引号内，百分号仍需按批处理规则加倍。
-            builder.AppendLine($"cd /d \"{workDir.Replace("%", "%%")}\"");
-            builder.Append($"\"{javaPath.Replace("%", "%%")}\"");
-        }
-        else
-        {
-            builder.AppendLine("#!/bin/sh");
-            builder.AppendLine($"cd {ShellQuote(workDir)}");
-            builder.Append(ShellQuote(javaPath));
-        }
-        foreach (var arg in args)
-        {
-            // 离线账号的“0”只是占位符，不能把内存大小、版本号和文件路径里的 0 也替换掉。
-            var value = accessToken.Length > 0 && accessToken != "0" ? arg.Replace(accessToken, "REPLACE_WITH_TOKEN") : arg;
-            builder.Append(' ').Append(OperatingSystem.IsWindows() ? WindowsBatchArgument(value) : ShellQuote(value));
-        }
-        builder.AppendLine();
-        File.WriteAllText(path, builder.ToString(), new UTF8Encoding(false));
+        var script = BuildLaunchScript(javaPath, workDir, args, accessToken, OperatingSystem.IsWindows());
+        File.WriteAllText(path, script, new UTF8Encoding(false));
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(path, File.GetUnixFileMode(path)
                 | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
         return path;
     }
 
+    internal static string BuildLaunchScript(string javaPath, string workDir, IReadOnlyList<string> args, string accessToken, bool windows)
+    {
+        // NUL 无法传给操作系统。
+        if (javaPath.Contains('\0') || workDir.Contains('\0') || args.Any(a => a.Contains('\0')))
+            throw new ArgumentException(L.T("core.launch.script.invaliddata"));
+        // 离线账号的“0”只是占位符，不能把内存大小、版本号和文件路径里的 0 也替换掉。
+        var values = args.Select(a => accessToken.Length > 0 && accessToken != "0"
+            ? a.Replace(accessToken, "REPLACE_WITH_TOKEN") : a).ToArray();
+        var builder = new StringBuilder();
+        if (windows)
+        {
+            // cmd 只执行固定引导代码；路径和参数作为 JSON 数据保存，不参与任何 shell 解析。
+            // 不使用 Java 参数文件，以兼容 Java 8；大 classpath 也不会挤占 cmd 的命令长度。
+            builder.AppendLine("@echo off").AppendLine("setlocal DisableDelayedExpansion");
+            builder.Append("rem ").AppendLine(L.T("core.launch.script.editnote"));
+            builder.AppendLine("set \"AMBER_LAUNCH_SCRIPT=%~f0\"");
+            builder.Append("\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoLogo -NoProfile -ExecutionPolicy Bypass -Command \"")
+                .Append(WindowsBootstrap.ReplaceLineEndings(" ")).AppendLine("\"");
+            builder.AppendLine("exit /b %errorlevel%");
+            builder.AppendLine("# AMBER_LAUNCH_DATA_V1");
+            builder.AppendLine(JsonSerializer.Serialize(new[] { javaPath, workDir }.Concat(values).ToArray(), AmberJsonContext.Default.StringArray));
+        }
+        else
+        {
+            builder.AppendLine("#!/bin/sh");
+            builder.Append("cd -- ").Append(ShellQuote(workDir)).AppendLine(" || exit 1");
+            builder.Append("exec ").Append(ShellQuote(javaPath));
+            foreach (var value in values) builder.Append(' ').Append(ShellQuote(value));
+            builder.AppendLine();
+        }
+        return builder.ToString();
+    }
+
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\"'\"'") + "'";
 
-    /// <summary>
-    /// 先按 Windows argv 规则处理内嵌引号和反斜杠，再转义 cmd 元字符（包括所有引号）。
-    /// cmd 去掉 caret 后，Java 收到的仍是完整的 Windows 引号表达式；百分号加倍，感叹号由脚本关闭延迟展开保护。
-    /// </summary>
-    private static string WindowsBatchArgument(string value)
-    {
-        var quoted = new StringBuilder().Append('"');
-        var slashes = 0;
-        foreach (var c in value)
-        {
-            if (c == '\\') { slashes++; continue; }
-            quoted.Append('\\', c == '"' ? slashes * 2 + 1 : slashes).Append(c);
-            slashes = 0;
-        }
-        quoted.Append('\\', slashes * 2).Append('"');
-
-        var batch = new StringBuilder();
-        foreach (var c in quoted.ToString())
-        {
-            if (c == '%') batch.Append("%%");
-            else
-            {
-                if (c is '^' or '&' or '|' or '<' or '>' or '(' or ')' or '"') batch.Append('^');
-                batch.Append(c);
-            }
-        }
-        return batch.ToString();
-    }
+    // 固定的 PowerShell 程序：逐项按 Win32/CRT 规则引用参数；正文绝不拼接实例数据。
+    private const string WindowsBootstrap = """
+        $ErrorActionPreference='Stop';
+        function Quote([string]$value){
+            $result=New-Object Text.StringBuilder;
+            [void]$result.Append([char]34);$slashes=0;
+            foreach($c in $value.ToCharArray()){
+                if($c -eq [char]92){$slashes++;continue};
+                if($c -eq [char]34){[void]$result.Append([char]92,(2*$slashes+1))}else{[void]$result.Append([char]92,$slashes)};
+                [void]$result.Append($c);$slashes=0;
+            };
+            [void]$result.Append([char]92,(2*$slashes));[void]$result.Append([char]34);return $result.ToString();
+        };
+        try{
+            $lines=[IO.File]::ReadAllLines($env:AMBER_LAUNCH_SCRIPT);
+            $i=[Array]::IndexOf($lines,'# AMBER_LAUNCH_DATA_V1');if($i -lt 0){throw 'Missing launch data'};
+            $data=ConvertFrom-Json -InputObject $lines[$i+1];if($data.Count -lt 2){throw 'Invalid launch data'};
+            foreach($item in $data){if($item -isnot [string] -or $item.Contains([char]0)){throw 'Invalid launch data'}};
+            $quoted=New-Object 'Collections.Generic.List[string]';
+            for($n=2;$n -lt $data.Count;$n++){$quoted.Add((Quote $data[$n]))};
+            $start=New-Object Diagnostics.ProcessStartInfo;$start.FileName=$data[0];$start.WorkingDirectory=$data[1];
+            $start.Arguments=[string]::Join(' ',$quoted);$start.UseShellExecute=$false;
+            $process=[Diagnostics.Process]::Start($start);$process.WaitForExit();exit $process.ExitCode;
+        }catch{[Console]::Error.WriteLine($_.Exception.Message);exit 1}
+        """;
 
     /// <summary>版本文件的大小统计，用于实例页显示。</summary>
     public static long InstanceSize(GameInstance instance) => SizeOf([instance.WorkDir]);
@@ -177,12 +188,21 @@ public sealed class UpdateChecker(HttpClient http)
         var tag = (root.TryGetProperty("tag_name", out var t) ? t.GetString() : root.TryGetProperty("version", out var v) ? v.GetString() : null)
                   ?? throw new InvalidDataException(L.T("core.launch.update.missingversion"));
         var url = root.TryGetProperty("html_url", out var u) ? u.GetString() : root.TryGetProperty("url", out var u2) ? u2.GetString() : null;
+        if (url is not null)
+        {
+            if (!TryGetSafeUpdateUrl(url, out var validated)) throw new InvalidDataException(L.T("tools.download.invalid_url"));
+            url = validated!.AbsoluteUri;
+        }
         var notes = root.TryGetProperty("body", out var b) ? b.GetString() : null;
         return IsNewer(tag, currentVersion) ? new UpdateInfo(tag.TrimStart('v'), url, notes) : null;
     }
 
     public static bool IsNewer(string candidate, string current) =>
         Version.TryParse(Normalize(candidate), out var a) && Version.TryParse(Normalize(current), out var b) && a > b;
+
+    /// <summary>更新页只允许无凭据和控制字符的绝对 HTTP(S) 地址，不把本机路径或自定义协议交给系统。</summary>
+    public static bool TryGetSafeUpdateUrl(string? value, out Uri? uri)
+        => WebLinks.TryGetHttpUrl(value, out uri);
 
     private static string Normalize(string v)
     {

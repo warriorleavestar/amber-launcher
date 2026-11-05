@@ -40,9 +40,13 @@ public sealed partial class OnboardingViewModel : ObservableObject
     private DateTime _lastProgress;
     private CancellationTokenSource? _installCts;
     private (string McVersion, LoaderKind? Loader, bool FallbackToVanilla)? _installing;
+    private PreparedGame? _preparedGame;
     private bool _restartAfterCancel;
     private bool _detected;
     private bool _loadingLatest;
+
+    // 只记本会话真正完成过的游戏阶段；Java 取消或失败后的重试不能再次安装并占用同一个 Forge 目录。
+    private sealed record PreparedGame(string Root, string McVersion, LoaderKind? Loader, bool FallbackToVanilla, string Id);
 
     /// <summary>找已有游戏目录时看哪些位置（自检里换成测试目录，不碰真实的 .minecraft）。</summary>
     public Func<IEnumerable<string>> Candidates { get; set; } = () =>
@@ -134,6 +138,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
     public void UseDirectory(string path)
     {
         if (IsInstalling) return;
+        _preparedGame = null;
         // 选了启动器所在的文件夹（里面才是 .minecraft）也认。
         var inner = Path.Combine(path, ".minecraft");
         if (!Directory.Exists(Path.Combine(path, "versions")) && Directory.Exists(Path.Combine(inner, "versions"))) path = inner;
@@ -308,38 +313,44 @@ public sealed partial class OnboardingViewModel : ObservableObject
         try
         {
             SetStage("onboarding.stage.game", 0, indeterminate: true);
-            string id;
-            LoaderVersion? chosen = null;
-            if (loader is { } kind)
+            var root = Path.TrimEndingDirectorySeparator(_service.Directory.Root);
+            var id = ResumePreparedGame(root, mcVersion, loader, fallbackToVanilla);
+            if (id is null)
             {
-                DetailText = L.T("download.status.fetching_versions");
-                var versions = await LoaderInstallers.Create(kind, _service.Loaders).ListAsync(mcVersion, ct);
-                chosen = versions.FirstOrDefault(v => v.Recommended) ?? versions.FirstOrDefault(v => v.Stable) ?? versions.FirstOrDefault();
-                if (chosen is null && !fallbackToVanilla) throw new LoaderUnavailableException(kind, mcVersion);
-                if (chosen is null) Message = StatusMessage.Warning("onboarding.install.no_loader", kind, mcVersion);
-            }
-            expectedId = chosen?.DefaultId ?? mcVersion;
-            try { _service.MarkInstallStarted(expectedId); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                LoaderVersion? chosen = null;
+                if (loader is { } kind)
+                {
+                    DetailText = L.T("download.status.fetching_versions");
+                    var versions = await LoaderInstallers.Create(kind, _service.Loaders).ListAsync(mcVersion, ct);
+                    chosen = versions.FirstOrDefault(v => v.Recommended) ?? versions.FirstOrDefault(v => v.Stable) ?? versions.FirstOrDefault();
+                    if (chosen is null && !fallbackToVanilla) throw new LoaderUnavailableException(kind, mcVersion);
+                    if (chosen is null) Message = StatusMessage.Warning("onboarding.install.no_loader", kind, mcVersion);
+                }
+                expectedId = chosen?.DefaultId ?? mcVersion;
 
-            if (chosen is not null)
-            {
-                id = await LoaderInstallers.Create(chosen.Kind, _service.Loaders).InstallAsync(chosen, null, new Progress<LoaderProgress>(p =>
+                if (chosen is not null)
                 {
-                    DetailText = p.Stage;
-                    if (p.Percent is { } percent) GameProgress(percent);
-                }), ct);
-            }
-            else
-            {
-                id = mcVersion;
-                await _service.Installer.InstallAsync(id, new Progress<InstallProgress>(p =>
+                    id = await _service.InstallLoaderAsync(chosen, null, new Progress<LoaderProgress>(p =>
+                    {
+                        DetailText = p.Stage;
+                        if (p.Percent is { } percent) GameProgress(percent);
+                    }), ct);
+                }
+                else
                 {
-                    if (p.Stage != InstallStage.Files || p.Files.TotalFiles == 0) return;
-                    DetailText = L.F("onboarding.stage.files", p.Files.CompletedFiles, p.Files.TotalFiles, p.Files.BytesDownloaded / 1024.0 / 1024);
-                    GameProgress(100.0 * p.Files.CompletedFiles / p.Files.TotalFiles);
-                }), ct);
+                    id = mcVersion;
+                    try { _service.MarkInstallStarted(id); }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                    await _service.Installer.InstallAsync(id, new Progress<InstallProgress>(p =>
+                    {
+                        if (p.Stage != InstallStage.Files || p.Files.TotalFiles == 0) return;
+                        DetailText = L.F("onboarding.stage.files", p.Files.CompletedFiles, p.Files.TotalFiles, p.Files.BytesDownloaded / 1024.0 / 1024);
+                        GameProgress(100.0 * p.Files.CompletedFiles / p.Files.TotalFiles);
+                    }), ct);
+                }
+                _preparedGame = new PreparedGame(root, mcVersion, loader, fallbackToVanilla, id);
             }
+            else expectedId = id;
 
             // Java 合并进同一条进度：没有合适的就在这里下好，第一次启动不用再等。
             SetStage("onboarding.stage.java", 90, indeterminate: true);
@@ -364,8 +375,10 @@ public sealed partial class OnboardingViewModel : ObservableObject
                 java.Status = null;
             }
 
+            ct.ThrowIfCancellationRequested();
             _service.MarkInstallFinished(id);
             if (id != expectedId) _service.MarkInstallFinished(expectedId);
+            _preparedGame = null;
             SetStage("onboarding.stage.done", 100, indeterminate: false);
             DetailText = "";
             Message ??= StatusMessage.Success("onboarding.install.done", id, (long)Math.Round(_waited.Elapsed.TotalSeconds));
@@ -390,7 +403,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
         }
         finally
         {
-            // 取消、失败时“安装未完成”标记留着：通知界面刷新标注。
+            // 刷新失败或取消后的状态；已回滚的目录不再保留标记，其余未完成安装仍显示标注。
             if (expectedId is not null) _service.NotifyInstanceStateChanged(expectedId);
             _clock.Stop();
             _waited.Stop();
@@ -407,6 +420,26 @@ public sealed partial class OnboardingViewModel : ObservableObject
             RefreshTexts();
             await InstallAsync(again.McVersion, again.Loader, again.FallbackToVanilla);
         }
+    }
+
+    private string? ResumePreparedGame(string root, string mcVersion, LoaderKind? loader, bool fallbackToVanilla)
+    {
+        var prepared = _preparedGame;
+        _preparedGame = null;
+        var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (prepared is null || !string.Equals(prepared.Root, root, pathComparison) || prepared.McVersion != mcVersion ||
+            prepared.Loader != loader || prepared.FallbackToVanilla != fallbackToVanilla) return null;
+        try
+        {
+            // 目标或继承的原版被移走、损坏时，不再把上次成功阶段当作可继续的安装。
+            _service.Directory.ResolveVersion(prepared.Id);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException or NotSupportedException)
+        {
+            return null;
+        }
+        _preparedGame = prepared;
+        return prepared.Id;
     }
 
     private void SetStage(string key, double progress, bool indeterminate)

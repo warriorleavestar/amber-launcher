@@ -147,32 +147,58 @@ public static class TestMatrix
 public sealed class SpeedTestServer : IAsyncDisposable
 {
     public const int Port = RoomChat.Port + 1;
-    private readonly List<TcpListener> _listeners = [];
-    private readonly CancellationTokenSource _cts = new();
-
-    public SpeedTestServer(int port = Port)
+    internal sealed record Limits(int Sessions, TimeSpan Handshake, TimeSpan Idle, TimeSpan Write, TimeSpan Total)
     {
-        var listener = new TcpListener(IPAddress.Loopback, port);
-        listener.Start();
-        _listeners.Add(listener);
-        _ = AcceptLoopAsync(listener);
+        internal static Limits Default { get; } = new(8, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30));
     }
 
-    public int BoundPort => ((IPEndPoint)_listeners[0].LocalEndpoint).Port;
+    private readonly object _gate = new();
+    private readonly List<TcpListener> _listeners = [];
+    private readonly List<Task> _acceptLoops = [];
+    private readonly HashSet<Task> _sessions = [];
+    private readonly CancellationTokenSource _cts = new();
+    private readonly SemaphoreSlim _slots;
+    private readonly Limits _limits;
+    private bool _disposed;
+    private Task? _disposeTask;
+
+    public SpeedTestServer(int port = Port) : this(port, Limits.Default) { }
+
+    internal SpeedTestServer(int port, Limits limits)
+    {
+        if (limits.Sessions <= 0 || new[] { limits.Handshake, limits.Idle, limits.Write, limits.Total }.Any(t => t <= TimeSpan.Zero))
+            throw new ArgumentOutOfRangeException(nameof(limits));
+        _limits = limits;
+        _slots = new SemaphoreSlim(limits.Sessions, limits.Sessions);
+        var listener = new TcpListener(IPAddress.Loopback, port);
+        listener.Start();
+        BoundPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+        _listeners.Add(listener);
+        _acceptLoops.Add(AcceptLoopAsync(listener));
+    }
+
+    public int BoundPort { get; }
+    internal int ActiveSessions { get { lock (_gate) return _sessions.Count; } }
 
     public bool TryAddListener(IPAddress address)
     {
-        try
+        lock (_gate)
         {
+            if (_disposed) return false;
             var listener = new TcpListener(address, BoundPort);
-            listener.Start();
-            _listeners.Add(listener);
-            _ = AcceptLoopAsync(listener);
-            return true;
-        }
-        catch (SocketException)
-        {
-            return false;
+            try
+            {
+                listener.Start();
+                _listeners.Add(listener);
+                _acceptLoops.Add(AcceptLoopAsync(listener));
+                return true;
+            }
+            catch (SocketException)
+            {
+                listener.Stop();
+                return false;
+            }
         }
     }
 
@@ -189,38 +215,79 @@ public sealed class SpeedTestServer : IAsyncDisposable
             {
                 return;
             }
-            _ = Task.Run(async () =>
+            lock (_gate)
             {
-                using (client)
+                // 所有监听地址共用预算；满额时立即关闭，不堆积等待任务。
+                if (_disposed || !_slots.Wait(0))
                 {
-                    try
-                    {
-                        var stream = client.GetStream();
-                        var header = new byte[8];
-                        await stream.ReadExactlyAsync(header, _cts.Token);
-                        var expected = BitConverter.ToInt64(header);
-                        if (expected is <= 0 or > 64 * 1024 * 1024) return;
-                        var buffer = new byte[64 * 1024];
-                        long received = 0;
-                        while (received < expected)
-                        {
-                            var n = await stream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, expected - received)), _cts.Token);
-                            if (n == 0) break;
-                            received += n;
-                        }
-                        await stream.WriteAsync(BitConverter.GetBytes(received), _cts.Token);
-                    }
-                    catch (Exception e) when (e is IOException or OperationCanceledException or SocketException or EndOfStreamException) { }
+                    client.Dispose();
+                    continue;
                 }
-            });
+                var task = HandleClientAsync(client);
+                _sessions.Add(task);
+                _ = task.ContinueWith(completed => { lock (_gate) _sessions.Remove(completed); },
+                    CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
         }
+    }
+
+    private async Task HandleClientAsync(TcpClient client)
+    {
+        try
+        {
+            using (client)
+            using (var total = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token))
+            {
+                total.CancelAfter(_limits.Total);
+                var stream = client.GetStream();
+                var header = new byte[8];
+                using (var handshake = Deadline(total.Token, _limits.Handshake))
+                    await stream.ReadExactlyAsync(header, handshake.Token);
+                var expected = BitConverter.ToInt64(header);
+                if (expected is <= 0 or > 64 * 1024 * 1024) return;
+                var buffer = new byte[64 * 1024];
+                long received = 0;
+                while (received < expected)
+                {
+                    using var idle = Deadline(total.Token, _limits.Idle);
+                    var n = await stream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, expected - received)), idle.Token);
+                    if (n == 0) break;
+                    received += n;
+                }
+                using var write = Deadline(total.Token, _limits.Write);
+                await stream.WriteAsync(BitConverter.GetBytes(received), write.Token);
+            }
+        }
+        catch (Exception e) when (e is IOException or OperationCanceledException or SocketException or ObjectDisposedException) { }
+        finally { _slots.Release(); }
+    }
+
+    private static CancellationTokenSource Deadline(CancellationToken ct, TimeSpan timeout)
+    {
+        var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(timeout);
+        return limit;
     }
 
     public ValueTask DisposeAsync()
     {
-        _cts.Cancel();
-        foreach (var l in _listeners) l.Stop();
-        return ValueTask.CompletedTask;
+        lock (_gate)
+        {
+            if (_disposeTask is not null) return new ValueTask(_disposeTask);
+            _disposed = true;
+            _cts.Cancel();
+            foreach (var listener in _listeners) listener.Stop();
+            _disposeTask = CompleteDisposeAsync(_acceptLoops.Concat(_sessions).ToArray());
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    private async Task CompleteDisposeAsync(Task[] pending)
+    {
+        await Task.WhenAll(pending);
+        lock (_gate) _sessions.Clear();
+        _cts.Dispose();
+        _slots.Dispose();
     }
 
     /// <summary>发 bytes 字节，返回 Mbps。连不上或数据不全时抛异常。</summary>

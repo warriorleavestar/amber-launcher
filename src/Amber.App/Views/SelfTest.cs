@@ -310,6 +310,9 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
 
     private async Task InstallModAsync()
     {
+        var openedUnsafePage = false;
+        var acceptedUnsafePage = ContentViewModel.TryOpenProjectPage("file:///invalid-project-page", _ => openedUnsafePage = true);
+        Check("项目网页拒绝非网页协议", !acceptedUnsafePage && !openedUnsafePage, "file 协议不会交给系统执行");
         var content = Page<ContentViewModel>();
         main.CurrentPage = content;
         await WaitAsync(() => content.Instances.Contains(FabricName), 5);
@@ -1044,6 +1047,13 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await content.ImportLocalPackAsync(renamed);
         var mods = Path.Combine(GameRoot(), "versions", PackName, "mods");
         Check("导入 mrpack", Directory.Exists(mods) && Directory.EnumerateFiles(mods, "sodium*").Any(), content.Status);
+
+        var importedVersion = new GameDirectory(GameRoot()).VersionJsonPath(PackName);
+        var beforeCollision = await File.ReadAllBytesAsync(importedVersion);
+        await content.ImportLocalPackAsync(renamed);
+        var afterCollision = await File.ReadAllBytesAsync(importedVersion);
+        Check("同名导入保留已有实例", content.Status.Contains(Amber.Core.Localization.L.T("core.install.targetexists"))
+            && beforeCollision.SequenceEqual(afterCollision) && Directory.Exists(mods), content.Status);
 
         // Prism / MultiMC 实例压缩包：套一层文件夹，带内存设置。
         var prism = Path.Combine(reportDir, "E2E-Prism.zip");

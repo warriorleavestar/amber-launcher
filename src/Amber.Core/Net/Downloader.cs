@@ -51,6 +51,9 @@ public sealed class Downloader
     public int MaxChunksPerFile { get; init; } = 8;
     public long MinChunkSize { get; init; } = 4 * 1024 * 1024;
 
+    /// <summary>单个文件最多下载 8 GiB；包含没有声明大小的响应。受信任的调用方可按需要调整。</summary>
+    public long MaxFileSizeBytes { get; init; } = 8L * 1024 * 1024 * 1024;
+
     /// <summary>这么久没收到数据就算卡住。</summary>
     public TimeSpan StallTimeout { get; init; } = TimeSpan.FromSeconds(20);
 
@@ -220,14 +223,24 @@ public sealed class Downloader
             var pending = new List<DownloadItem>();
             await Parallel.ForEachAsync(items, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(2, Environment.ProcessorCount), CancellationToken = ct }, async (item, token) =>
             {
-                if (await IsValidAsync(item, token))
+                try
                 {
-                    Interlocked.Increment(ref completed);
-                    Report(null, false);
+                    if (await IsValidAsync(item, token))
+                    {
+                        Interlocked.Increment(ref completed);
+                        Report(null, false);
+                    }
+                    else
+                    {
+                        lock (pending) pending.Add(item);
+                    }
                 }
-                else
+                catch (InvalidDataException e) when (!token.IsCancellationRequested)
                 {
-                    lock (pending) pending.Add(item);
+                    // 单项大小不合法也走批量失败汇总，不阻止其他正常文件完成。
+                    lock (failures) failures.Add((item, e));
+                    Interlocked.Increment(ref completed);
+                    Report(Path.GetFileName(item.LocalPath), false);
                 }
             });
             Hashes?.Save();
@@ -358,13 +371,17 @@ public sealed class Downloader
     /// <summary>把 url 的内容写到 temp。能分块就分块，已有进度就接着下。返回本次写入的字节数，整个文件一次下完时还带上它的 SHA1。</summary>
     private async Task<(long Written, string? Sha1)> FetchAsync(string url, DownloadItem item, string temp, string state, Action<long> onBytes, CancellationToken ct)
     {
+        var fileBudget = FileBudget(item);
         var existingChunks = ChunkState.Load(state);
         if (existingChunks is not null && File.Exists(temp))
+        {
+            existingChunks.Validate(item.Size, fileBudget, new FileInfo(temp).Length);
             return (await FetchChunkedAsync(url, temp, state, existingChunks, onBytes, ct), null);
+        }
         TryDelete(state);
 
         var resumeFrom = File.Exists(temp) ? new FileInfo(temp).Length : 0;
-        if (item.Size is { } knownSize && resumeFrom > knownSize) resumeFrom = 0;
+        if (resumeFrom > fileBudget) throw SizeLimit(fileBudget);
         if (resumeFrom > 0 && item.Size == resumeFrom) return (0, null);
 
         // 名额要在开始计时之前拿到，排队不算卡住。
@@ -393,13 +410,31 @@ public sealed class Downloader
             resumeFrom = 0;
             TryDelete(temp);
             response = await SendGetAsync(url, null, headerTimeout.Token);
+            useRange = false;
         }
         using var _ = response;
+        ThrowIfThrottled(url, response);
         response.EnsureSuccessStatusCode();
 
         var partial = response.StatusCode == HttpStatusCode.PartialContent;
-        var totalSize = partial ? response.Content.Headers.ContentRange?.Length : response.Content.Headers.ContentLength;
-        if (partial && resumeFrom == 0 && totalSize >= ChunkThreshold && totalSize is { } chunkTotal)
+        var append = partial && resumeFrom > 0;
+        var start = append ? resumeFrom : 0;
+        long? expected;
+        if (partial)
+        {
+            if (!useRange) throw InvalidRange();
+            expected = ValidateRange(response, resumeFrom, null, item.Size, fileBudget);
+        }
+        else
+        {
+            if (response.Content.Headers.ContentRange is not null) throw InvalidRange();
+            expected = response.Content.Headers.ContentLength;
+            if (expected > fileBudget) throw SizeLimit(fileBudget);
+            if (item.Size is { } size && expected is { } length && length != size)
+                throw new InvalidDataException(L.F("core.net.download.wrongsize", size, length));
+        }
+        // 只对已校验大小上限的声明项分块，服务器响应不能改变预分配大小。
+        if (partial && resumeFrom == 0 && item.Size is { } chunkTotal && chunkTotal >= ChunkThreshold)
         {
             response.Dispose();
             slot.Dispose();
@@ -411,7 +446,6 @@ public sealed class Downloader
         }
 
         await using var input = await response.Content.ReadAsStreamAsync(ct);
-        var append = partial && resumeFrom > 0;
         await using var output = new FileStream(temp, append ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.None, 0, true);
         // 续传时前半段不经过这里，算不出整个文件的哈希，留给校验时读文件。
         using var hash = item.Sha1 is not null && !append ? IncrementalHash.CreateHash(HashAlgorithmName.SHA1) : null;
@@ -419,10 +453,35 @@ public sealed class Downloader
         {
             hash?.AppendData(buffer.Span);
             return output.WriteAsync(buffer, token);
-        }, onBytes, ct);
-        if (response.Content.Headers.ContentLength is { } expected && written != expected)
-            throw new IOException(L.F("core.net.download.connectionended", written, expected));
+        }, onBytes, expected ?? fileBudget - start, ct);
+        if (expected is { } expectedLength && written != expectedLength)
+            throw new IOException(L.F("core.net.download.connectionended", written, expectedLength));
         return (written, hash is null ? null : Convert.ToHexStringLower(hash.GetHashAndReset()));
+    }
+
+    private long FileBudget(DownloadItem item)
+    {
+        if (MaxFileSizeBytes <= 0) throw new ArgumentOutOfRangeException(nameof(MaxFileSizeBytes));
+        if (item.Size is < 0 || item.Size > MaxFileSizeBytes) throw SizeLimit(MaxFileSizeBytes);
+        return item.Size ?? MaxFileSizeBytes;
+    }
+
+    private static InvalidDataException SizeLimit(long limit) => new(L.F("core.net.download.sizelimit", limit));
+
+    private static InvalidDataException InvalidRange() => new(L.T("core.net.download.invalidrange"));
+
+    /// <summary>范围必须与实际请求完全一致，且在声明的文件大小内；校验发生在打开输出文件之前。</summary>
+    private static long ValidateRange(HttpResponseMessage response, long start, long? end, long? expectedTotal, long limit)
+    {
+        var range = response.Content.Headers.ContentRange;
+        if (range is null || !range.Unit.Equals("bytes", StringComparison.OrdinalIgnoreCase) ||
+            range.From != start || range.To is not { } last || range.Length is not { } total ||
+            total <= 0 || last < start || last >= total || last != (end ?? total - 1)) throw InvalidRange();
+        if (total > limit) throw SizeLimit(limit);
+        if (expectedTotal is { } size && total != size) throw InvalidRange();
+        var length = last - start + 1;
+        if (response.Content.Headers.ContentLength is { } declared && declared != length) throw InvalidRange();
+        return length;
     }
 
     private static bool IsClientError(HttpStatusCode status) => (int)status is >= 400 and < 500 && status != HttpStatusCode.RequestTimeout;
@@ -461,6 +520,7 @@ public sealed class Downloader
                         response.EnsureSuccessStatusCode();
                     }
 
+                    var expected = ValidateRange(response, chunk.Start, chunk.End, state.Total, state.Total);
                     await using var input = await response.Content.ReadAsStreamAsync(token);
                     var position = chunk.Start;
                     await CopyWithStallCheckAsync(input, async (buffer, t) =>
@@ -471,7 +531,7 @@ public sealed class Downloader
                     {
                         received += delta;
                         onBytes(delta);
-                    }, token);
+                    }, expected, token);
                     if (position != chunk.End + 1) throw new IOException(L.T("core.net.download.chunkended"));
 
                     Interlocked.Add(ref written, received);
@@ -482,8 +542,9 @@ public sealed class Downloader
                     }
                     return;
                 }
-                catch (RangeNotSupportedException)
+                catch (Exception e) when (e is RangeNotSupportedException or InvalidDataException)
                 {
+                    onBytes(-received);
                     throw;
                 }
                 catch (Exception e) when (!token.IsCancellationRequested)
@@ -505,7 +566,7 @@ public sealed class Downloader
     }
 
     /// <summary>复制数据；超过 StallTimeout 没收到新数据就中断，换源而不是一直等。</summary>
-    private async Task<long> CopyWithStallCheckAsync(Stream input, Func<ReadOnlyMemory<byte>, CancellationToken, ValueTask> write, Action<long> onBytes, CancellationToken ct)
+    private async Task<long> CopyWithStallCheckAsync(Stream input, Func<ReadOnlyMemory<byte>, CancellationToken, ValueTask> write, Action<long> onBytes, long limit, CancellationToken ct)
     {
         using var stall = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var buffer = ArrayPool<byte>.Shared.Rent(CopyBufferSize);
@@ -518,13 +579,17 @@ public sealed class Downloader
                 int read;
                 try
                 {
-                    read = await input.ReadAsync(buffer, stall.Token);
+                    // 多读一个字节用于识别越界；这一字节绝不能进入输出文件。
+                    var remaining = limit - total;
+                    var count = remaining >= buffer.Length ? buffer.Length : (int)remaining + 1;
+                    read = await input.ReadAsync(buffer.AsMemory(0, count), stall.Token);
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
                     throw new IOException(L.P("core.net.download.stalled", (long)Math.Round(StallTimeout.TotalSeconds), StallTimeout.TotalSeconds));
                 }
                 if (read == 0) return total;
+                if (read > limit - total) throw SizeLimit(limit);
                 await write(buffer.AsMemory(0, read), ct);
                 total += read;
                 onBytes(read);
@@ -538,8 +603,10 @@ public sealed class Downloader
 
     private async Task<bool> IsValidAsync(DownloadItem item, CancellationToken ct)
     {
+        var limit = FileBudget(item);
         var info = new FileInfo(item.LocalPath);
         if (!info.Exists) return false;
+        if (info.Length > limit) return false;
         if (item.Size is { } size && info.Length != size) return false;
         if (item.Sha1 is null) return info.Length > 0;
         if (Hashes?.IsKnownGood(info, item.Sha1) == true) return true;
@@ -577,6 +644,8 @@ public sealed class Downloader
     /// <summary>分块进度，存在 .part.state 里，断点续传时读回来。</summary>
     internal sealed class ChunkState
     {
+        private const int MaxStateBytes = 64 * 1024;
+        private const int MaxSavedChunks = 1024;
         public long Total { get; set; }
         public List<Chunk> Chunks { get; set; } = [];
 
@@ -589,6 +658,8 @@ public sealed class Downloader
 
         public static ChunkState Create(long total, int maxChunks, long minChunkSize)
         {
+            if (total <= 0 || maxChunks is < 1 or > MaxSavedChunks || minChunkSize <= 0)
+                throw new ArgumentOutOfRangeException(nameof(total));
             var count = (int)Math.Clamp(total / minChunkSize, 1, maxChunks);
             var size = total / count;
             var state = new ChunkState { Total = total };
@@ -603,9 +674,37 @@ public sealed class Downloader
         public static ChunkState? Load(string path)
         {
             if (!File.Exists(path)) return null;
-            try { return JsonSerializer.Deserialize(File.ReadAllText(path), AmberJsonContext.Default.ChunkState); }
-            catch (JsonException) { return null; }
+            try
+            {
+                using var input = File.OpenRead(path);
+                if (input.Length > MaxStateBytes) throw InvalidState();
+                var data = new byte[MaxStateBytes + 1];
+                var read = 0;
+                int count;
+                while ((count = input.Read(data, read, data.Length - read)) > 0)
+                {
+                    read += count;
+                    if (read > MaxStateBytes) throw InvalidState();
+                }
+                return JsonSerializer.Deserialize(data.AsSpan(0, read), AmberJsonContext.Default.ChunkState) ?? throw InvalidState();
+            }
+            catch (JsonException) { throw InvalidState(); }
         }
+
+        public void Validate(long? expectedTotal, long limit, long fileLength)
+        {
+            if (Total <= 0 || Total > limit || expectedTotal is { } expected && expected != Total ||
+                fileLength != Total || Chunks is null || Chunks.Count is < 1 or > MaxSavedChunks) throw InvalidState();
+            long next = 0;
+            foreach (var chunk in Chunks)
+            {
+                if (chunk is null || chunk.Start != next || chunk.End < chunk.Start || chunk.End >= Total) throw InvalidState();
+                next = chunk.End + 1;
+            }
+            if (next != Total) throw InvalidState();
+        }
+
+        private static InvalidDataException InvalidState() => new(L.T("core.net.download.invalidstate"));
 
         public void Save(string path) => File.WriteAllText(path, JsonSerializer.Serialize(this, AmberJsonContext.Default.ChunkState));
     }

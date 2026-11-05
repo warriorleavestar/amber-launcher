@@ -200,7 +200,10 @@ public class SecurityReviewFixTests
                 var buf = new byte[5];
                 return await SecureStream.ReadExactAsync(server, buf, default) ? System.Text.Encoding.ASCII.GetString(buf) : null;
             });
-            await Task.Delay(700);
+            // 换钥循环在线程池繁忙时可能晚启动；等实际完成两轮，不能把固定延时当作调度保证。
+            var idleWait = System.Diagnostics.Stopwatch.StartNew();
+            while (client.Rekeys < 2 && idleWait.Elapsed < TimeSpan.FromSeconds(5))
+                await Task.Delay(25);
             Assert.True(client.Rekeys >= 2, $"空闲时换钥 {client.Rekeys} 次");
             await client.WriteAsync("after"u8.ToArray());
             Assert.Equal("after", await reader.WaitAsync(TimeSpan.FromSeconds(5)));

@@ -22,13 +22,28 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
     public abstract Task<IReadOnlyList<LoaderVersion>> ListAsync(string mcVersion, CancellationToken ct = default);
     protected abstract string InstallerUrl(LoaderVersion version);
 
-    public async Task<string> InstallAsync(LoaderVersion version, string? customId = null, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default)
+    public Task<string> InstallAsync(LoaderVersion version, string? customId = null, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default) =>
+        InstallAsync(version, customId, progress, ct, null);
+
+    /// <summary>目标目录已成功保留后才通知调用方开始安装，避免界面的状态标记预先创建目录或改动已有实例。</summary>
+    public async Task<string> InstallAsync(LoaderVersion version, string? customId, IProgress<LoaderProgress>? progress, CancellationToken ct, Action<string>? onStarted)
     {
         var id = string.IsNullOrWhiteSpace(customId) ? version.DefaultId : customId.Trim();
+        InstanceInstallDirectory.CheckBase(Ctx.Dir, id, version.McVersion);
+        using var target = InstanceInstallDirectory.Reserve(Ctx.Dir.VersionDir(id));
+        onStarted?.Invoke(id);
+        var installed = await InstallReservedAsync(version, id, target, progress, ct);
+        target.Complete();
+        return installed;
+    }
+
+    internal async Task<string> InstallReservedAsync(LoaderVersion version, string id, InstanceInstallDirectory target, IProgress<LoaderProgress>? progress, CancellationToken ct)
+    {
         var dir = Ctx.Dir;
+        if (!InstanceInstallDirectory.Same(target.Path, dir.VersionDir(id))) throw new InvalidOperationException();
         if (Kind == LoaderKind.Forge && LegacyForge.IsJarModEra(version.McVersion))
         {
-            await LegacyForge.InstallAsync(Ctx, version, id, progress, ct);
+            await LegacyForge.InstallReservedAsync(Ctx, version, id, target, progress, ct);
             await Ctx.Vanilla.CompleteAsync(id, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, L.T("core.install.forge.completefiles"), p)), ct);
             return id;
         }
@@ -61,12 +76,6 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
                 ExtractMaven(zip);
                 await RunProfileAsync(zip, profile, version.McVersion, work, installerPath, progress, ct);
             }
-        }
-        catch
-        {
-            // 半装好的版本不留在列表里。
-            TryDeleteDir(dir.VersionDir(id));
-            throw;
         }
         finally
         {

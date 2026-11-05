@@ -56,7 +56,17 @@ public static class LegacyForge
 
     public static async Task<string> InstallAsync(LoaderContext ctx, LoaderVersion version, string id, IProgress<LoaderProgress>? progress, CancellationToken ct)
     {
+        InstanceInstallDirectory.CheckBase(ctx.Dir, id, version.McVersion);
+        using var target = InstanceInstallDirectory.Reserve(ctx.Dir.VersionDir(id));
+        var installed = await InstallReservedAsync(ctx, version, id, target, progress, ct);
+        target.Complete();
+        return installed;
+    }
+
+    internal static async Task<string> InstallReservedAsync(LoaderContext ctx, LoaderVersion version, string id, InstanceInstallDirectory targetDirectory, IProgress<LoaderProgress>? progress, CancellationToken ct)
+    {
         var dir = ctx.Dir;
+        if (!InstanceInstallDirectory.Same(targetDirectory.Path, dir.VersionDir(id))) throw new InvalidOperationException();
         var mc = version.McVersion;
         progress?.Report(new(L.F("core.install.loader.installvanilla", mc)));
         await ctx.Vanilla.InstallAsync(mc, new Progress<InstallProgress>(p => LoaderInstallers.ReportFiles(progress, L.T("core.install.loader.downloadvanilla"), p)), ct);
@@ -102,11 +112,6 @@ public static class LegacyForge
                 ["amberLegacyLibs"] = new JsonArray(libs.Select(l => (JsonNode?)new JsonObject { ["name"] = l.Name, ["sha1"] = l.Sha1 }).ToArray()),
             };
             LoaderInstallers.WriteVersionJson(dir, id, json);
-        }
-        catch
-        {
-            try { if (Directory.Exists(dir.VersionDir(id))) Directory.Delete(dir.VersionDir(id), true); } catch (IOException) { }
-            throw;
         }
         finally
         {
