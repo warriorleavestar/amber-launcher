@@ -123,7 +123,7 @@
       <Grid RowDefinitions="Auto,*,Auto">
         <StackPanel Margin="20,18,20,12" Spacing="2">
           <TextBlock Text="Amber" FontSize="26" FontWeight="Bold" Foreground="{DynamicResource Accent}" />
-          <TextBlock Text="{l:T main.subtitle}" FontSize="12" Foreground="{DynamicResource SidebarTextMuted}" />
+          <TextBlock Text="{l:T main.subtitle}" FontSize="12" Foreground="{DynamicResource SidebarTextMuted}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{l:T main.subtitle}" />
         </StackPanel>
         <TextBlock Grid.Row="2" Text="{Binding VersionText}" FontSize="{StaticResource FontCaption}" Foreground="{DynamicResource SidebarTextMuted}" Margin="20,6,8,12"
                    TextWrapping="Wrap" />

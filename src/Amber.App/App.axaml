@@ -33,11 +33,13 @@
       <Setter Property="Margin" Value="0,0,0,12" />
     </Style>
     <Style Selector="TextBlock.h1">
+      <Setter Property="TextWrapping" Value="Wrap" />
       <Setter Property="FontSize" Value="{StaticResource FontTitle}" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Margin" Value="0,0,0,12" />
     </Style>
     <Style Selector="TextBlock.h2">
+      <Setter Property="TextWrapping" Value="Wrap" />
       <Setter Property="FontSize" Value="{StaticResource FontSubtitle}" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Margin" Value="0,0,0,10" />

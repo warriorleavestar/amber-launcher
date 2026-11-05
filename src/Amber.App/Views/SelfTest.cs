@@ -2,6 +2,7 @@ using System.IO.Compression;
 using Amber.App.ViewModels;
 using Amber.Core.Content;
 using Amber.Core.Game;
+using Amber.Core.Localization;
 using Amber.Core.Launch;
 using Avalonia;
 using Avalonia.Automation.Peers;
@@ -408,7 +409,8 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("删除世界进回收目录", !Directory.Exists(world) && TrashService.List(trashRoot).Any(e => Path.GetFullPath(e.OriginalPath) == Path.GetFullPath(world)), instance.Status);
         var undone = Services.Toasts.UndoLatest();
         await WaitAsync(() => instance.Worlds.Any(w => w.Name == "自检世界"), 5);
-        Check("撤销删除世界", undone && Directory.Exists(world) && instance.Worlds.Any(w => w.Name == "自检世界"), instance.Status);
+        Check("撤销删除世界", undone && Directory.Exists(world) && instance.Worlds.Any(w => w.Name == "自检世界")
+            && instance.StatusInfo is { Key: "trash.restored", Kind: StatusKind.Success }, instance.Status);
         instance.DeleteWorldCommand.Execute(instance.Worlds.First(w => w.Name == "自检世界"));
         Check("再次删除世界", !Directory.Exists(world), instance.Status);
 

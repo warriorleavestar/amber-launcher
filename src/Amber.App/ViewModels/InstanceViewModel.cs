@@ -257,17 +257,21 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         try
         {
             var entry = TrashService.MoveToTrash(path, _service.Directory.Root);
-            if (toast) Toasts.Deleted(entry, _ => afterRestore());
-            Status = L.F("trash.deleted", entry.Name);
+            if (toast) Toasts.Deleted(entry, restored =>
+            {
+                afterRestore();
+                SetStatus(StatusMessage.Success("trash.restored", Path.GetFileName(restored)));
+            });
+            SetStatus(StatusMessage.Success("trash.deleted", entry.Name));
             return true;
         }
         catch (TrashException e)
         {
-            Status = L.F("instance.status.delete_failed", Toasts.Describe(e));
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, Toasts.Describe(e)));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Status = L.F("instance.status.delete_failed", e.Message);
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, e.Message));
         }
         return false;
     }
