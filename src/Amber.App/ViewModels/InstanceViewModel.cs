@@ -337,9 +337,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private async Task CompleteFilesAsync()
     {
         if (Current is not { } c) return;
+        // 补全全程用开始时的游戏目录：中途换了目录也只补这个实例所在的目录。
+        var ctx = _service.Context;
         await RunWorkAsync(async ct =>
         {
-            await _service.Installer.CompleteAsync(c.Id, new Progress<InstallProgress>(p =>
+            await ctx.Installer.CompleteAsync(c.Id, new Progress<InstallProgress>(p =>
             {
                 if (p.Stage == InstallStage.Files && p.Files.TotalFiles > 0)
                 {
@@ -349,8 +351,8 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             }), ct);
             await Ui.FlushAsync();
             // 补全完了，上次没装完的实例也就装完了。
-            _service.MarkInstallFinished(c.Id);
-            UpdateInfoText();
+            _service.MarkInstallFinished(ctx, c.Id);
+            if (_service.IsCurrentDirectory(ctx)) UpdateInfoText();
             SetStatus(StatusMessage.Success("instance.files.complete_status"));
         });
     }
