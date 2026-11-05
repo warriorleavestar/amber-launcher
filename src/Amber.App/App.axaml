@@ -55,8 +55,8 @@
     <Style Selector="TextBlock.compat.problem">
       <Setter Property="Foreground" Value="{DynamicResource WarningText}" />
     </Style>
-    <!-- 表单：左边一列是标签，宽度按内容，太长就换行（英文、日文的标签比中文长） -->
-    <Style Selector="Grid.form > TextBlock">
+    <!-- 表单：左边一列是标签，宽度按内容，太长就换行（英文、日文的标签比中文长）；值那一列里的说明（hint）不受限，跟着列宽排 -->
+    <Style Selector="Grid.form > TextBlock:not(.hint)">
       <Setter Property="MaxWidth" Value="190" />
       <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
