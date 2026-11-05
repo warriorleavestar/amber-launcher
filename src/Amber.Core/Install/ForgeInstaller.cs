@@ -118,7 +118,7 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
         var profileVersion = new VersionJson { Libraries = profile["libraries"]?.Deserialize(Json.Options.Info<List<Library>>()) ?? [] };
         var items = LibraryResolver.Resolve(profileVersion, dir, RuleEvaluator.Current)
             .Where(l => !string.IsNullOrEmpty(l.Url))
-            .Select(l => new DownloadItem(l.Url!, l.LocalPath, l.Sha1, l.Size)).ToList();
+            .Select(l => new DownloadItem(l.Url!, l.LocalPath, l.Sha1, l.Size, Within: dir.LibrariesDir)).ToList();
         progress?.Report(new(L.T("core.install.forge.downloadprocessors")));
         await Ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.install.forge.processorprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
@@ -177,7 +177,8 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
             && outputIndex >= 0 && outputIndex + 1 < args.Count
             && vanilla.Downloads?.GetValueOrDefault("client_mappings") is { Url: { } mappingsUrl } mappings)
         {
-            await Ctx.Downloader.DownloadOneAsync(new DownloadItem(mappingsUrl, args[outputIndex + 1], mappings.Sha1, mappings.Size), ct);
+            // 输出路径来自安装器的配置（不可信）：必须在 libraries 里。
+            await Ctx.Downloader.DownloadOneAsync(new DownloadItem(mappingsUrl, Path.GetFullPath(args[outputIndex + 1]), mappings.Sha1, mappings.Size, Within: dir.LibrariesDir), ct);
             return;
         }
 

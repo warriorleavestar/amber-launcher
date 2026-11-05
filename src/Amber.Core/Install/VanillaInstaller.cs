@@ -51,27 +51,28 @@ public sealed class VanillaInstaller(Downloader downloader, GameDirectory dir)
         // 客户端 jar：加载器版本会通过 jar / inheritsFrom 指向原版的 jar。
         var jarId = version.Jar ?? versionId;
         if (version.Downloads?.GetValueOrDefault("client") is { Url: { } clientUrl } client)
-            items.Add(new DownloadItem(clientUrl, dir.VersionJarPath(jarId), client.Sha1, client.Size));
+            items.Add(new DownloadItem(clientUrl, dir.VersionJarPath(jarId), client.Sha1, client.Size, Within: dir.Root));
 
         foreach (var lib in LibraryResolver.Resolve(version, dir, Rules))
         {
             if (!string.IsNullOrEmpty(lib.Url))
-                items.Add(new DownloadItem(lib.Url, lib.LocalPath, lib.Sha1, lib.Size));
+                items.Add(new DownloadItem(lib.Url, lib.LocalPath, lib.Sha1, lib.Size, Within: dir.LibrariesDir));
         }
 
         if (version.Logging?.GetValueOrDefault("client")?.File is { Url: { } logUrl } logFile)
-            items.Add(new DownloadItem(logUrl, dir.LoggingConfigPath(logFile.Id), logFile.Sha1, logFile.Size));
+            items.Add(new DownloadItem(logUrl, dir.LoggingConfigPath(logFile.Id), logFile.Sha1, logFile.Size, Within: dir.AssetsDir));
 
         if (version.AssetIndex is { Url: { } indexUrl } indexRef)
         {
             progress?.Report(new(InstallStage.AssetIndex, default));
             var indexPath = dir.AssetIndexPath(indexRef.Id);
-            await downloader.DownloadOneAsync(new DownloadItem(indexUrl, indexPath, indexRef.Sha1, indexRef.Size), ct);
+            await downloader.DownloadOneAsync(new DownloadItem(indexUrl, indexPath, indexRef.Sha1, indexRef.Size, Within: dir.AssetsDir), ct);
             var index = await ReadAssetIndexAsync(indexPath, ct);
             foreach (var obj in index.Objects.Values.DistinctBy(o => o.Hash))
             {
+                var objectPath = dir.AssetObjectPath(obj.Hash);
                 var prefix = obj.Hash[..2];
-                items.Add(new DownloadItem($"{AssetBaseUrl}{prefix}/{obj.Hash}", dir.AssetObjectPath(obj.Hash), obj.Hash, obj.Size));
+                items.Add(new DownloadItem($"{AssetBaseUrl}{prefix}/{obj.Hash}", objectPath, obj.Hash, obj.Size, Within: dir.AssetsDir));
             }
         }
 

@@ -26,7 +26,8 @@ public sealed class AccountService(HttpClient http, AccountStore store, string d
     public MicrosoftAuth CreateMicrosoftAuth() =>
         new(http, MicrosoftClientId ?? throw new InvalidOperationException(L.T("core.auth.microsoft.missingclientid")));
 
-    public ExternalAuth External { get; } = new(http);
+    // 外置登录用自己的 HttpClient：不自动跟随跳转（见 ExternalAuth）。
+    public ExternalAuth External { get; } = new(ExternalAuth.CreateHttpClient());
 
     public Account AddOffline(string name)
     {
@@ -49,6 +50,8 @@ public sealed class AccountService(HttpClient http, AccountStore store, string d
                     new GameSession(account.Name, account.Uuid, account.AccessToken!, "msa", account.Xuid, MicrosoftClientId ?? ""), []);
 
             case AccountKind.External:
+                // 旧版本存下的 http 服务器：启动时说清楚原因和怎么办（不只在账号页提示）。
+                if (ExternalAuth.HasInsecureServer(account)) throw new InvalidOperationException(L.F("core.auth.external.insecure_saved", account.Name));
                 await External.EnsureValidAsync(account, ct);
                 Store.Save();
                 var metadata = await External.GetMetadataAsync(account.ServerUrl!, ct);
@@ -75,7 +78,8 @@ public sealed class AccountService(HttpClient http, AccountStore store, string d
             if (!File.Exists(path)) await File.WriteAllBytesAsync(path, await http.GetByteArrayAsync(url, ct), ct);
             return path;
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException && !ct.IsCancellationRequested)
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or InvalidOperationException
+                                       or FormatException or System.Text.Json.JsonException && !ct.IsCancellationRequested)
         {
             return null;
         }
