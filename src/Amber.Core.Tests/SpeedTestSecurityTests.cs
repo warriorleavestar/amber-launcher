@@ -57,7 +57,7 @@ public class SpeedTestSecurityTests
         var limits = new SpeedTestServer.Limits(2, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5),
             TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(10));
         await using var server = new SpeedTestServer(0, limits);
-        var secondAddress = IPAddress.Parse("127.0.0.2");
+        var secondAddress = IPAddress.IPv6Loopback;
         Assert.True(server.TryAddListener(secondAddress));
         using var first = await ConnectAsync(server.BoundPort);
         using var second = await ConnectAsync(server.BoundPort, secondAddress);
@@ -85,7 +85,7 @@ public class SpeedTestSecurityTests
         Assert.Equal(0, server.ActiveSessions);
         await AssertClosedAsync(first);
         await AssertClosedAsync(second);
-        Assert.False(server.TryAddListener(IPAddress.Parse("127.0.0.2")));
+        Assert.False(server.TryAddListener(IPAddress.IPv6Loopback));
         await server.DisposeAsync();
     }
 
