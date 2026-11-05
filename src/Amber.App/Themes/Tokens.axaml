@@ -1,0 +1,112 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!--
+    界面 token：页面和 C# 里不再写十六进制颜色，都从这里取（DynamicResource，跟着主题换）。
+    对比度按改版规格 6.1 节的表算过；改颜色时要重新核对。
+    旧名字（CardBackground、PageBackground、AmberAccent…）先留作别名，页面都换完后再删。
+  -->
+  <Color x:Key="SystemAccentColor">#D98A1E</Color>
+  <Color x:Key="SystemAccentColorLight1">#E79A2E</Color>
+  <Color x:Key="SystemAccentColorLight2">#F0AE4E</Color>
+  <Color x:Key="SystemAccentColorLight3">#F6C67C</Color>
+  <Color x:Key="SystemAccentColorDark1">#B97314</Color>
+  <Color x:Key="SystemAccentColorDark2">#985E10</Color>
+  <Color x:Key="SystemAccentColorDark3">#77490C</Color>
+
+  <!-- 间距 -->
+  <x:Double x:Key="Space1">4</x:Double>
+  <x:Double x:Key="Space2">8</x:Double>
+  <x:Double x:Key="Space3">12</x:Double>
+  <x:Double x:Key="Space4">16</x:Double>
+  <x:Double x:Key="Space5">24</x:Double>
+  <x:Double x:Key="Space6">32</x:Double>
+  <Thickness x:Key="CardPadding">16</Thickness>
+  <Thickness x:Key="PagePadding">24,20</Thickness>
+  <Thickness x:Key="PagePaddingCompact">16,12</Thickness>
+
+  <!-- 圆角 -->
+  <CornerRadius x:Key="RadiusSm">4</CornerRadius>
+  <CornerRadius x:Key="RadiusMd">6</CornerRadius>
+  <CornerRadius x:Key="RadiusLg">10</CornerRadius>
+  <CornerRadius x:Key="RadiusPill">999</CornerRadius>
+
+  <!-- 字号：最小 12；多行文字行高约 1.5 倍 -->
+  <x:Double x:Key="FontCaption">12</x:Double>
+  <x:Double x:Key="FontBodySmall">13</x:Double>
+  <x:Double x:Key="FontBody">14</x:Double>
+  <x:Double x:Key="FontSubtitle">16</x:Double>
+  <x:Double x:Key="FontTitle">20</x:Double>
+  <x:Double x:Key="FontDisplay">26</x:Double>
+  <!-- 字体：中文优先，按语言替换的工作在 i18n 那边（繁体、日文） -->
+  <FontFamily x:Key="UiFont">Microsoft YaHei UI, PingFang SC, Noto Sans CJK SC, Source Han Sans SC, Segoe UI</FontFamily>
+  <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas, monospace</FontFamily>
+
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Dark">
+      <SolidColorBrush x:Key="PageBg" Color="#1C1A18" />
+      <SolidColorBrush x:Key="Surface" Color="#2A2724" />
+      <SolidColorBrush x:Key="SurfaceRaised" Color="#322E2A" />
+      <SolidColorBrush x:Key="BorderSubtle" Color="#3D3731" />
+      <SolidColorBrush x:Key="SidebarBg" Color="#141210" />
+      <SolidColorBrush x:Key="TextPrimary" Color="#EDE6DC" />
+      <SolidColorBrush x:Key="TextSecondary" Color="#B0A89E" />
+      <SolidColorBrush x:Key="TextTertiary" Color="#A39A8F" />
+      <SolidColorBrush x:Key="Accent" Color="#E89B32" />
+      <SolidColorBrush x:Key="AccentHover" Color="#F0A93F" />
+      <SolidColorBrush x:Key="AccentPressed" Color="#C9801F" />
+      <SolidColorBrush x:Key="OnAccent" Color="#1C1408" />
+      <SolidColorBrush x:Key="AccentText" Color="#F0A93F" />
+      <SolidColorBrush x:Key="Success" Color="#4CC38A" />
+      <SolidColorBrush x:Key="SuccessText" Color="#4CC38A" />
+      <SolidColorBrush x:Key="Warning" Color="#EC8956" />
+      <SolidColorBrush x:Key="WarningText" Color="#EC8956" />
+      <SolidColorBrush x:Key="Danger" Color="#F07167" />
+      <SolidColorBrush x:Key="DangerText" Color="#F4877E" />
+      <SolidColorBrush x:Key="OnDanger" Color="#1C1408" />
+      <SolidColorBrush x:Key="DisabledFill" Color="#3A342E" />
+      <SolidColorBrush x:Key="DisabledText" Color="#A89C8C" />
+      <SolidColorBrush x:Key="SidebarText" Color="#EDE6DC" />
+      <SolidColorBrush x:Key="SidebarTextMuted" Color="#B0A89E" />
+      <SolidColorBrush x:Key="NavSelected" Color="#2E2924" />
+      <SolidColorBrush x:Key="NavHover" Color="#24201C" />
+      <!-- 色调底：对应颜色 15% 透明度 -->
+      <SolidColorBrush x:Key="AccentTint" Color="#26E89B32" />
+      <SolidColorBrush x:Key="SuccessTint" Color="#264CC38A" />
+      <SolidColorBrush x:Key="WarningTint" Color="#26EC8956" />
+      <SolidColorBrush x:Key="DangerTint" Color="#26F07167" />
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="Light">
+      <SolidColorBrush x:Key="PageBg" Color="#F4F1EC" />
+      <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="SurfaceRaised" Color="#FBF9F6" />
+      <SolidColorBrush x:Key="BorderSubtle" Color="#DDD5CA" />
+      <SolidColorBrush x:Key="SidebarBg" Color="#2B2622" />
+      <SolidColorBrush x:Key="TextPrimary" Color="#1F1B17" />
+      <SolidColorBrush x:Key="TextSecondary" Color="#5C544B" />
+      <SolidColorBrush x:Key="TextTertiary" Color="#756C62" />
+      <SolidColorBrush x:Key="Accent" Color="#D98A1E" />
+      <SolidColorBrush x:Key="AccentHover" Color="#E79A2E" />
+      <SolidColorBrush x:Key="AccentPressed" Color="#B97314" />
+      <SolidColorBrush x:Key="OnAccent" Color="#1C1408" />
+      <SolidColorBrush x:Key="AccentText" Color="#9A5200" />
+      <SolidColorBrush x:Key="Success" Color="#1A7F37" />
+      <SolidColorBrush x:Key="SuccessText" Color="#166E30" />
+      <SolidColorBrush x:Key="Warning" Color="#B54708" />
+      <SolidColorBrush x:Key="WarningText" Color="#9A3C06" />
+      <SolidColorBrush x:Key="Danger" Color="#B42318" />
+      <SolidColorBrush x:Key="DangerText" Color="#B42318" />
+      <SolidColorBrush x:Key="OnDanger" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="DisabledFill" Color="#E6E0D8" />
+      <SolidColorBrush x:Key="DisabledText" Color="#685F56" />
+      <!-- 侧栏两种主题下都是深色，文字也一样 -->
+      <SolidColorBrush x:Key="SidebarText" Color="#EDE6DC" />
+      <SolidColorBrush x:Key="SidebarTextMuted" Color="#B0A89E" />
+      <SolidColorBrush x:Key="NavSelected" Color="#3A322B" />
+      <SolidColorBrush x:Key="NavHover" Color="#332D27" />
+      <SolidColorBrush x:Key="AccentTint" Color="#26D98A1E" />
+      <SolidColorBrush x:Key="SuccessTint" Color="#261A7F37" />
+      <SolidColorBrush x:Key="WarningTint" Color="#26B54708" />
+      <SolidColorBrush x:Key="DangerTint" Color="#26B42318" />
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>
