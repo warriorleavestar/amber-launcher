@@ -166,17 +166,17 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     [RelayCommand]
     private async Task RefreshAsync()
     {
-        Status = L.T("download.status.fetching_versions");
+        SetStatus(StatusMessage.Info("download.status.fetching_versions"));
         try
         {
             var manifest = await _service.Installer.GetManifestAsync();
             _all = manifest.Versions;
             ApplyFilter();
-            Status = L.F("download.status.latest", manifest.Latest.GetValueOrDefault("release"), manifest.Latest.GetValueOrDefault("snapshot"));
+            SetStatus(StatusMessage.Success("download.status.latest", manifest.Latest.GetValueOrDefault("release"), manifest.Latest.GetValueOrDefault("snapshot")));
         }
         catch (Exception e)
         {
-            Status = L.F("download.status.fetch_failed", e.Message);
+            SetStatus(StatusMessage.Failure("download.status.fetch_failed", e, e.Message));
         }
     }
 
@@ -256,7 +256,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         var loader = SelectedLoader.Kind;
         if (loader is not null && SelectedLoaderVersion is null)
         {
-            Status = L.T("download.status.loader_required");
+            SetStatus(StatusMessage.Warning("download.status.loader_required"));
             return;
         }
 
@@ -270,7 +270,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             if (loader is { } kind)
             {
                 var chosen = SelectedLoaderVersion!;
-                Status = L.F("download.status.installing", chosen.DefaultId);
+                SetStatus(StatusMessage.Info("download.status.installing", chosen.DefaultId));
                 id = await LoaderInstallers.Create(kind, _service.Loaders).InstallAsync(chosen, CustomName, new Progress<LoaderProgress>(p =>
                 {
                     Status = p.Stage;
@@ -280,13 +280,13 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             else
             {
                 id = item.Id;
-                Status = L.F("download.status.installing", id);
+                SetStatus(StatusMessage.Info("download.status.installing", id));
                 await _service.Installer.InstallAsync(id, new Progress<InstallProgress>(p =>
                 {
                     if (p.Stage != InstallStage.Files || p.Files.TotalFiles == 0) return;
                     Progress = 100.0 * p.Files.CompletedFiles / p.Files.TotalFiles;
                     var mb = p.Files.BytesDownloaded / 1024.0 / 1024;
-                    Status = L.F("download.status.progress", id, p.Files.CompletedFiles, p.Files.TotalFiles, mb, mb / Math.Max(watch.Elapsed.TotalSeconds, 0.1));
+                    SetStatus(StatusMessage.Info("download.status.progress", id, p.Files.CompletedFiles, p.Files.TotalFiles, mb, mb / Math.Max(watch.Elapsed.TotalSeconds, 0.1)));
                 }), ct);
                 item.Installed = true;
             }
@@ -298,11 +298,11 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         }
         catch (OperationCanceledException)
         {
-            Status = L.T("download.status.cancelled");
+            SetStatus(StatusMessage.Warning("download.status.cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("common.install_failed", e.Message);
+            SetStatus(StatusMessage.Failure("common.install_failed", e, e.Message));
         }
         finally
         {

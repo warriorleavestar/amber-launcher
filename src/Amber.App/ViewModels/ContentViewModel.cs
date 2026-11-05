@@ -230,7 +230,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     {
         _searchCts?.Cancel();
         var cts = _searchCts = new CancellationTokenSource();
-        Status = L.T("content.search.searching");
+        SetStatus(StatusMessage.Info("content.search.searching"));
         Results.Clear();
         Selected = null;
         try
@@ -250,7 +250,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            Status = L.F("content.search.failed", e.Message);
+            SetStatus(StatusMessage.Failure("content.search.failed", e, e.Message));
         }
     }
 
@@ -321,14 +321,14 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             foreach (var f in files.Where(f => f.IsRelease || ShowUnstable)) Files.Add(new FileItem(f));
             SelectedFile = Files.FirstOrDefault();
             if (IsModpack) NewInstanceName = SafeName(selected.Title);
-            if (Files.Count == 0 && files.Count > 0) Status = L.T("content.files.only_unstable");
+            if (Files.Count == 0 && files.Count > 0) SetStatus(StatusMessage.Warning("content.files.only_unstable"));
             else if (files.Count == 0) Status = loaderNote ?? (instance is null ? L.T("content.files.empty") : L.F("content.files.no_matching", instance.McVersion, instance.Loader));
             else if (loaderNote is not null) Status = loaderNote;
         }
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            Status = L.F("content.files.fetch_failed", e.Message);
+            SetStatus(StatusMessage.Failure("content.files.fetch_failed", e, e.Message));
         }
     }
 
@@ -355,13 +355,13 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
         if (CurrentInstance() is not { } instance)
         {
-            Status = L.T("content.install.instance_required");
+            SetStatus(StatusMessage.Warning("content.install.instance_required"));
             return;
         }
         var world = TargetWorld;
         if (IsDatapack && world is null)
         {
-            Status = L.T("content.install.world_required");
+            SetStatus(StatusMessage.Warning("content.install.world_required"));
             return;
         }
 
@@ -373,7 +373,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             var plan = new InstallPlan([file], []);
             if (CurrentType == ContentType.Mod)
             {
-                Status = L.T("content.install.resolving");
+                SetStatus(StatusMessage.Info("content.install.resolving"));
                 if (_viaConnector)
                 {
                     var hasConnector = ConnectorInstaller.IsInstalled(new ModManager(instance.ModsDir).List().Where(m => m.Enabled).Select(m => m.Requirements));
@@ -388,7 +388,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             await _service.ContentInstaller.InstallAsync(plan, target, new Progress<DownloadProgress>(p =>
             {
                 Progress = 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles);
-                Status = L.F("content.install.progress", p.CompletedFiles, p.TotalFiles, p.CurrentFile);
+                SetStatus(StatusMessage.Info("content.install.progress", p.CompletedFiles, p.TotalFiles, p.CurrentFile));
             }), _workCts.Token);
 
             await Ui.FlushAsync();
@@ -396,16 +396,16 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             var problems = plan.Problems.Count > 0 ? L.F("content.install.problems", string.Join(L.T("common.list_separator"), plan.Problems)) : "";
             var noLoader = CurrentType == ContentType.Mod && instance.Loader is null ? L.T("content.install.no_loader") : "";
             var where = IsDatapack ? L.F("content.install.world_target", instance.Id, world!.Label) : instance.Id;
-            Status = L.F("content.install.completed", file.DisplayName, extra, where, problems, noLoader);
+            SetStatus(StatusMessage.Success("content.install.completed", file.DisplayName, extra, where, problems, noLoader));
             _service.NotifyContentChanged();
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
-            Status = L.T("common.cancelled");
+            SetStatus(StatusMessage.Warning("common.cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("common.install_failed", Describe(e));
+            SetStatus(StatusMessage.Error("common.install_failed", Describe(e)));
         }
         finally
         {
@@ -421,17 +421,17 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         var temp = Path.Combine(Path.GetTempPath(), "amber-pack-" + Guid.NewGuid().ToString("N"), ContentInstaller.SafeFileName(file.FileName));
         try
         {
-            Status = L.T("content.modpack.downloading");
+            SetStatus(StatusMessage.Info("content.modpack.downloading"));
             await _service.Downloader.DownloadOneAsync(ContentInstaller.ToItem(file, Path.GetDirectoryName(temp)!), _workCts.Token);
             await ImportCoreAsync(temp, NewInstanceName, _workCts.Token);
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
-            Status = L.T("common.cancelled");
+            SetStatus(StatusMessage.Warning("common.cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("common.install_failed", Describe(e));
+            SetStatus(StatusMessage.Error("common.install_failed", Describe(e)));
         }
         finally
         {
@@ -453,11 +453,11 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
-            Status = L.T("common.cancelled");
+            SetStatus(StatusMessage.Warning("common.cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("instance.worlds.import_failed", Describe(e));
+            SetStatus(StatusMessage.Error("instance.worlds.import_failed", Describe(e)));
         }
         finally
         {
@@ -476,7 +476,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }), ct);
         await Ui.FlushAsync();
         _service.ForceIsolated(id);
-        Status = L.F("content.modpack.installed", id);
+        SetStatus(StatusMessage.Success("content.modpack.installed", id));
         _service.NotifyInstalledChanged();
     }
 

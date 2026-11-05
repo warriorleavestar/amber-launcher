@@ -293,11 +293,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
                 if (p.Stage == InstallStage.Files && p.Files.TotalFiles > 0)
                 {
                     Progress = 100.0 * p.Files.CompletedFiles / p.Files.TotalFiles;
-                    Status = L.F("instance.files.progress", p.Files.CompletedFiles, p.Files.TotalFiles);
+                    SetStatus(StatusMessage.Info("instance.files.progress", p.Files.CompletedFiles, p.Files.TotalFiles));
                 }
             }), ct);
             await Ui.FlushAsync();
-            Status = L.T("instance.files.complete_status");
+            SetStatus(StatusMessage.Success("instance.files.complete_status"));
         });
     }
 
@@ -318,12 +318,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         try
         {
             await Task.Run(() => System.IO.Directory.Delete(dir, recursive: true));
-            Status = L.F("instance.delete.done", c.Id);
+            SetStatus(StatusMessage.Success("instance.delete.done", c.Id));
             _service.NotifyInstalledChanged();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Status = L.F("instance.status.delete_failed", e.Message);
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, e.Message));
         }
     }
 
@@ -386,19 +386,19 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (_service.IsRunningIn(c.WorkDir))
         {
             // 同一个目录同时跑两个游戏，两边的 Connector 会一起写缓存。
-            Status = L.T("instance.connector.running");
+            SetStatus(StatusMessage.Info("instance.connector.running"));
             return;
         }
         await RunWorkAsync(async ct =>
         {
             using var running = _service.MarkRunning(c.WorkDir);
-            Status = L.T("home.status.checking_game_files");
+            SetStatus(StatusMessage.Info("home.status.checking_game_files"));
             await _service.Installer.CompleteAsync(c.Id, null, ct);
-            Status = L.T("instance.connector.starting");
+            SetStatus(StatusMessage.Info("instance.connector.starting"));
             var options = await OfflineLaunchOptionsAsync(c, ct);
             var result = await ConnectorWarmup.RunAsync(new GameLauncher(_service.Directory), options,
                 new Progress<string>(p => Status = p), TimeSpan.FromMinutes(15), ct);
-            Status = result.Done ? L.F("instance.connector.done", result.Detail) : L.F("instance.connector.incomplete", result.Detail);
+            SetStatus(result.Done ? StatusMessage.Success("instance.connector.done", result.Detail) : StatusMessage.Warning("instance.connector.incomplete", result.Detail));
         });
         RecheckCompat();
     }
@@ -412,7 +412,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             var (launcher, options) = new GameLauncher(_service.Directory).ForCurrentCodePage(await OfflineLaunchOptionsAsync(c, ct));
             var args = launcher.BuildArguments(options);
             Toolbox.WriteLaunchScript(path, options.JavaPath, options.WorkingDirectory ?? launcher.GameDir.Root, args, options.Session.AccessToken);
-            Status = L.F("instance.export.script_saved", path);
+            SetStatus(StatusMessage.Success("instance.export.script_saved", path));
         });
     }
 
@@ -427,15 +427,15 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (OperationCanceledException) when (_workCts.IsCancellationRequested)
         {
-            Status = L.T("common.cancelled");
+            SetStatus(StatusMessage.Warning("common.cancelled"));
         }
         catch (OperationCanceledException)
         {
-            Status = L.T("instance.status.timeout");
+            SetStatus(StatusMessage.Error("instance.status.timeout"));
         }
         catch (Exception e)
         {
-            Status = L.F("instance.status.failed", e.Message);
+            SetStatus(StatusMessage.Failure("instance.status.failed", e, e.Message));
         }
         finally
         {
@@ -523,7 +523,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         s.Save(_service.Directory, c.Id);
         var id = c.Id;
         OnSelectedIdChanged(id);
-        Status = L.F("instance.settings.saved", id);
+        SetStatus(StatusMessage.Success("instance.settings.saved", id));
     }
 
     private static string? NullIfBlank(string text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
@@ -603,11 +603,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c) return;
         await RunWorkAsync(async ct =>
         {
-            Status = L.T("instance.connector.searching");
+            SetStatus(StatusMessage.Info("instance.connector.searching"));
             var plan = await ConnectorInstaller.PlanAsync(c, _service.Modrinth, _service.ContentInstaller, null, ct)
                        ?? throw new InvalidOperationException(L.F("instance.connector.not_found", c.McVersion, c.Loader));
             await _service.ContentInstaller.InstallAsync(plan, c.ModsDir, null, ct);
-            Status = L.F("instance.connector.installed", string.Join(L.T("common.list_separator"), plan.Files.Select(f => f.DisplayName)));
+            SetStatus(StatusMessage.Success("instance.connector.installed", string.Join(L.T("common.list_separator"), plan.Files.Select(f => f.DisplayName))));
         });
         await LoadModsAsync();
     }
@@ -618,7 +618,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c || item is null) return;
         await RunWorkAsync(async ct =>
         {
-            Status = L.F("instance.mods.finding_matching", item.Name);
+            SetStatus(StatusMessage.Info("instance.mods.finding_matching", item.Name));
             var file = await ConnectorInstaller.FindMatchingVersionAsync(item.Mod.Path, c, _service.Modrinth, ct);
             if (file is null)
             {
@@ -630,7 +630,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             await _service.ContentInstaller.InstallAsync(new InstallPlan([file], []), c.ModsDir, null, ct);
             // 换下来的旧文件也进回收目录（不弹撤销），以后能在“最近删除”里找回。
             if (Trash(item.Mod.Path, () => { }, toast: false))
-                Status = L.F("instance.mods.replaced", item.Name, file.FileName);
+                SetStatus(StatusMessage.Success("instance.mods.replaced", item.Name, file.FileName));
         });
         await LoadModsAsync();
     }
@@ -669,11 +669,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c) return;
         await RunWorkAsync(async ct =>
         {
-            Status = L.T("instance.mods.checking_updates");
+            SetStatus(StatusMessage.Info("instance.mods.checking_updates"));
             var mods = Mods.Select(m => m.Mod).ToList();
             var updates = await ModManager.CheckUpdatesAsync(mods, _service.Modrinth, _service.CurseForgeIfConfigured, c.McVersion, c.Loader, ct);
             foreach (var item in Mods) item.Update = updates.FirstOrDefault(u => u.LocalPath == item.Mod.Path);
-            Status = updates.Count == 0 ? L.T("instance.mods.up_to_date") : L.P("instance.mods.updates_available", updates.Count, updates.Count);
+            SetStatus(updates.Count == 0 ? StatusMessage.Success("instance.mods.up_to_date") : new StatusMessage("instance.mods.updates_available", [updates.Count]) { Count = updates.Count });
         });
     }
 
@@ -686,11 +686,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             var done = 0;
             foreach (var item in pending)
             {
-                Status = L.F("instance.mods.updating", item.Name);
+                SetStatus(StatusMessage.Info("instance.mods.updating", item.Name));
                 await ModManager.ApplyUpdateAsync(item.Update!, _service.Downloader, ct);
                 Progress = 100.0 * ++done / pending.Count;
             }
-            Status = pending.Count == 0 ? L.T("instance.mods.check_first") : L.P("instance.mods.updated_count", done, done);
+            SetStatus(pending.Count == 0 ? StatusMessage.Info("instance.mods.check_first") : new StatusMessage("instance.mods.updated_count", [done], StatusKind.Success) { Count = done });
         });
         await LoadModsAsync();
     }
@@ -702,7 +702,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         await RunWorkAsync(async ct =>
         {
             await ModManager.ApplyUpdateAsync(update, _service.Downloader, ct);
-            Status = L.F("instance.mods.updated", item.Name);
+            SetStatus(StatusMessage.Success("instance.mods.updated", item.Name));
         });
         await LoadModsAsync();
     }
@@ -768,9 +768,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         if (Current is not { } c || item is null) return;
         await RunWorkAsync(async _ =>
         {
-            Status = L.F("instance.worlds.backing_up", item.Name);
+            SetStatus(StatusMessage.Info("instance.worlds.backing_up", item.Name));
             var target = await Task.Run(() => WorldManager.Backup(item.World, Path.Combine(c.WorkDir, "backups")));
-            Status = L.F("instance.worlds.backed_up", target);
+            SetStatus(StatusMessage.Success("instance.worlds.backed_up", target));
         });
     }
 
@@ -796,12 +796,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         {
             System.IO.Directory.CreateDirectory(c.SavesDir);
             var folder = WorldManager.Import(zipPath, c.SavesDir);
-            Status = L.F("instance.worlds.imported", folder);
+            SetStatus(StatusMessage.Success("instance.worlds.imported", folder));
             LoadWorlds();
         }
         catch (Exception e) when (e is IOException or InvalidDataException)
         {
-            Status = L.F("instance.worlds.import_failed", e.Message);
+            SetStatus(StatusMessage.Failure("instance.worlds.import_failed", e, e.Message));
         }
     }
 
@@ -1058,12 +1058,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         await RunWorkAsync(async ct =>
         {
             var include = ExportOptions.Where(o => o.Include).Select(o => o.Name).ToList();
-            Status = L.T("instance.export.packing");
+            SetStatus(StatusMessage.Info("instance.export.packing"));
             if (ExportFormatIndex == 0)
                 await _service.Modpacks.ExportMrpackAsync(c, path, ExportName, ExportVersion, include, ct);
             else
                 await _service.Modpacks.ExportCurseForgeAsync(c, path, ExportName, ExportVersion, Environment.UserName, include, ct);
-            Status = L.F("instance.export.saved", path, new FileInfo(path).Length / 1024);
+            SetStatus(StatusMessage.Success("instance.export.saved", path, new FileInfo(path).Length / 1024));
         });
     }
 

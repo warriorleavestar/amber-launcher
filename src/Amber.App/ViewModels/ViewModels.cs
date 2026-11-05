@@ -297,7 +297,7 @@ public sealed partial class SettingsViewModel : PageViewModel
         App.ApplyTheme(s.Theme);
         s.Save();
         _service.Reload();
-        Status = dirChanged ? L.T("settings.saved_directory_changed") : L.T("common.saved");
+        SetStatus(StatusMessage.Success(dirChanged ? "settings.saved_directory_changed" : "common.saved"));
         if (dirChanged) _ = LoadJavaAsync(true);
     }
 }

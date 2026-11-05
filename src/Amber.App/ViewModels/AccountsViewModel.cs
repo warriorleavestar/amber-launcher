@@ -153,7 +153,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     {
         if (item is null) return;
         _service.Accounts.Store.Remove(item.Account);
-        Status = L.F("accounts.status.removed", item.Name);
+        SetStatus(StatusMessage.Success("accounts.status.removed", item.Name));
         Changed();
     }
 
@@ -163,12 +163,12 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         var name = OfflineName.Trim();
         if (!IsValidOfflineName(name))
         {
-            Status = L.T("accounts.status.invalid_offline_name");
+            SetStatus(StatusMessage.Error("accounts.status.invalid_offline_name"));
             return;
         }
         _service.Accounts.AddOffline(name);
         OfflineName = "";
-        Status = L.F("accounts.status.offline_added", name);
+        SetStatus(StatusMessage.Success("accounts.status.offline_added", name));
         Changed();
     }
 
@@ -181,7 +181,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         _service.Settings.MicrosoftClientId = string.IsNullOrWhiteSpace(ClientIdInput) ? null : ClientIdInput.Trim();
         _service.Settings.Save();
         OnPropertyChanged(nameof(MicrosoftMissingClientId));
-        Status = L.T("accounts.status.client_id_saved");
+        SetStatus(StatusMessage.Success("accounts.status.client_id_saved"));
     }
 
     [RelayCommand]
@@ -190,7 +190,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         SaveClientId();
         if (_service.Accounts.MicrosoftClientId is null)
         {
-            Status = L.T("accounts.status.client_id_missing");
+            SetStatus(StatusMessage.Warning("accounts.status.client_id_missing"));
             return;
         }
 
@@ -199,23 +199,23 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         try
         {
             var auth = _service.Accounts.CreateMicrosoftAuth();
-            Status = L.T("accounts.status.requesting_device_code");
+            SetStatus(StatusMessage.Info("accounts.status.requesting_device_code"));
             var code = await auth.BeginDeviceCodeAsync(_loginCts.Token);
             DeviceCode = code.UserCode;
             DeviceUri = code.VerificationUri;
-            Status = L.T("accounts.status.awaiting_device_login");
+            SetStatus(StatusMessage.Info("accounts.status.awaiting_device_login"));
             var account = await auth.CompleteDeviceCodeAsync(code, new Progress<string>(s => Status = s), _loginCts.Token);
             _service.Accounts.Store.AddOrUpdate(account);
-            Status = L.F("accounts.status.logged_in", account.Name);
+            SetStatus(StatusMessage.Success("accounts.status.logged_in", account.Name));
             Changed();
         }
         catch (OperationCanceledException)
         {
-            Status = L.T("accounts.status.login_cancelled");
+            SetStatus(StatusMessage.Warning("accounts.status.login_cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("accounts.status.login_failed", e.Message);
+            SetStatus(StatusMessage.Failure("accounts.status.login_failed", e, e.Message));
         }
         finally
         {
@@ -239,7 +239,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     {
         if (string.IsNullOrWhiteSpace(ServerUrl) || string.IsNullOrWhiteSpace(ExternalUser) || string.IsNullOrEmpty(ExternalPassword))
         {
-            Status = L.T("accounts.status.external_credentials_required");
+            SetStatus(StatusMessage.Warning("accounts.status.external_credentials_required"));
             return;
         }
         _loginCts = new CancellationTokenSource();
@@ -248,7 +248,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         ExternalPassword = "";
         try
         {
-            Status = L.T("accounts.status.connecting_external");
+            SetStatus(StatusMessage.Info("accounts.status.connecting_external"));
             var auth = _service.Accounts.External;
             var api = await auth.ResolveApiRootAsync(ServerUrl, _loginCts.Token);
             var result = await auth.LoginAsync(api, ExternalUser.Trim(), password, _loginCts.Token);
@@ -258,18 +258,18 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
                 foreach (var p in result.Profiles) ExternalProfiles.Add(p);
                 SelectedProfile = ExternalProfiles[0];
                 PendingExternal = result.Account;
-                Status = L.T("accounts.status.choose_profile");
+                SetStatus(StatusMessage.Info("accounts.status.choose_profile"));
                 return;
             }
             FinishExternal(result.Account);
         }
         catch (OperationCanceledException)
         {
-            Status = L.T("accounts.status.login_cancelled");
+            SetStatus(StatusMessage.Warning("accounts.status.login_cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("accounts.status.login_failed", e.Message);
+            SetStatus(StatusMessage.Failure("accounts.status.login_failed", e, e.Message));
         }
         finally
         {
@@ -290,7 +290,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
         }
         catch (Exception e)
         {
-            Status = L.F("accounts.status.profile_selection_failed", e.Message);
+            SetStatus(StatusMessage.Failure("accounts.status.profile_selection_failed", e, e.Message));
         }
         finally
         {
@@ -301,7 +301,7 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     private void FinishExternal(Account account)
     {
         _service.Accounts.Store.AddOrUpdate(account);
-        Status = L.F("accounts.status.external_logged_in", account.Name, account.ServerName);
+        SetStatus(StatusMessage.Success("accounts.status.external_logged_in", account.Name, account.ServerName));
         Changed();
     }
 

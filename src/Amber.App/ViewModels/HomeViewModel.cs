@@ -198,7 +198,7 @@ public sealed partial class HomeViewModel : PageViewModel
         if (IsBusy) return;
         if (SelectedAccount is not { } account)
         {
-            Status = L.T("home.status.account_required");
+            SetStatus(StatusMessage.Warning("home.status.account_required"));
             return;
         }
         var id = request.VersionId;
@@ -216,7 +216,7 @@ public sealed partial class HomeViewModel : PageViewModel
         try
         {
             var settings = _service.EffectiveSettings(id);
-            Status = L.T("home.status.checking_game_files");
+            SetStatus(StatusMessage.Info("home.status.checking_game_files"));
             await _service.Installer.CompleteAsync(id, new Progress<InstallProgress>(p =>
             {
                 if (p.Stage == InstallStage.Files && p.Files.TotalFiles > 0)
@@ -236,7 +236,7 @@ public sealed partial class HomeViewModel : PageViewModel
                 javaPath = await _service.Java.ForVersionAsync(version, _cts.Token);
             }
 
-            Status = L.T("home.status.verifying_account");
+            SetStatus(StatusMessage.Info("home.status.verifying_account"));
             var session = await _service.Accounts.ResolveAsync(account, _cts.Token);
 
             var options = _service.BaseLaunchOptions(id, javaPath, session.Session, session.ExtraJvmArgs) with
@@ -252,11 +252,11 @@ public sealed partial class HomeViewModel : PageViewModel
 
             if (!string.IsNullOrWhiteSpace(settings.PreLaunchCommand))
             {
-                Status = L.T("home.status.pre_launch_command");
+                SetStatus(StatusMessage.Info("home.status.pre_launch_command"));
                 await RunUserCommandAsync(settings.PreLaunchCommand, id, workDir, _cts.Token);
             }
 
-            Status = L.T("home.status.launching");
+            SetStatus(StatusMessage.Info("home.status.launching"));
             Progress = 100;
             _log.Clear();
             _recentOutput.Clear();
@@ -277,22 +277,22 @@ public sealed partial class HomeViewModel : PageViewModel
                 _service.NotifyGameOutput(id, line);
             });
             IsRunning = true;
-            Status = L.F("home.status.running", id, memory);
+            SetStatus(StatusMessage.Info("home.status.running", id, memory));
             await _game.WaitForExitAsync();
             IsRunning = false;
 
             var code = _game.ExitCode;
             if (_stoppedByUser)
             {
-                Status = L.T("home.status.stopped");
+                SetStatus(StatusMessage.Info("home.status.stopped"));
             }
             else if (code == 0)
             {
-                Status = L.T("home.status.exited");
+                SetStatus(StatusMessage.Info("home.status.exited"));
             }
             else
             {
-                Status = L.F("home.status.crashed", code);
+                SetStatus(StatusMessage.Error("home.status.crashed", code));
                 string[] output;
                 lock (parser) output = _recentOutput.ToArray();
                 var analysis = await Task.Run(() => CrashAnalyzer.AnalyzeRun(workDir, started, output));
@@ -308,11 +308,11 @@ public sealed partial class HomeViewModel : PageViewModel
         }
         catch (OperationCanceledException)
         {
-            Status = L.T("common.cancelled");
+            SetStatus(StatusMessage.Warning("common.cancelled"));
         }
         catch (Exception e)
         {
-            Status = L.F("home.status.launch_failed", e.Message);
+            SetStatus(StatusMessage.Failure("home.status.launch_failed", e, e.Message));
             _log.AddRaw("[Amber] " + e);
         }
         finally
@@ -361,7 +361,7 @@ public sealed partial class HomeViewModel : PageViewModel
     public void ExportCrashBundle(string zipPath)
     {
         CrashAnalyzer.ExportBundle(zipPath, _lastRunFiles, _recentOutput);
-        Status = L.F("home.status.report_exported", zipPath);
+        SetStatus(StatusMessage.Success("home.status.report_exported", zipPath));
     }
 
     [RelayCommand]
