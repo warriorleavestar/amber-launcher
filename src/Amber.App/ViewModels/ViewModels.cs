@@ -460,7 +460,7 @@ public sealed partial class LogViewModel : PageViewModel
     public void AddRaw(RunLog? run, string message)
     {
         var level = LogLevelParser.Parse(message);
-        Post(run, new LogEntry(DateTimeOffset.Now, level == GameLogLevel.Info ? "AMBER" : level.ToString().ToUpperInvariant(), message, level));
+        Post(run, new LogEntry(DateTimeOffset.Now, level == GameLogLevel.Info ? "JAY" : level.ToString().ToUpperInvariant(), message, level));
     }
 
     /// <summary>清空正在看的那次启动的日志（别的启动的不动）。</summary>

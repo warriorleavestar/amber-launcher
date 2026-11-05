@@ -14,28 +14,28 @@
 
 简体中文 | [English](README.en.md)
 
-![Amber 启动页](docs/images/home.png)
+![Jay 启动页](docs/images/jay-home.png)
 
 </div>
 
-本项目现名 **Jay**，仓库地址已更新。已发布的程序和截图仍可能使用 Amber 名称；应用内品牌将逐步迁移。详见[改名与兼容说明](docs/announcements/2026-11-06-jay-rename.md)。
+本项目现名 **Jay**。当前源码及新构建已使用 Jay 名称与羽毛图标；此前发布的程序仍可能显示 Amber。旧账号、设置与房间协议保持兼容，详见[改名与兼容说明](docs/announcements/2026-11-06-jay-rename.md)。
 
 ## 下载安装
 
-到 [Releases](https://github.com/warriorleavestar/jay-launcher/releases/latest) 下载与你的电脑对应的包：
+到 [Releases](https://github.com/warriorleavestar/jay-launcher/releases/latest) 下载与你的电脑对应的包。下表使用新构建的名称；此前版本仍使用 `Amber-` 包名前缀和 `Amber.exe` / `./Amber`。
 
 | 系统 | 文件 | 运行方式 |
 |---|---|---|
-| Windows 10+ x64 | `Amber-win-x64-aot.zip`（推荐） | 解压后双击 `Amber.exe` |
-| macOS Apple 芯片 | `Amber-osx-arm64.tar.gz` | 解压后在终端运行 `./Amber` |
-| macOS Intel | `Amber-osx-x64.tar.gz` | 解压后在终端运行 `./Amber` |
-| Linux x64 | `Amber-linux-x64.tar.gz` | 解压后运行 `./Amber` |
-| Linux ARM64 | `Amber-linux-arm64.tar.gz` | 解压后运行 `./Amber`，并使用系统安装的 Java |
+| Windows 10+ x64 | `Jay-win-x64-aot.zip`（推荐） | 解压后双击 `Jay.exe` |
+| macOS Apple 芯片 | `Jay-osx-arm64.tar.gz` | 解压后在终端运行 `./Jay` |
+| macOS Intel | `Jay-osx-x64.tar.gz` | 解压后在终端运行 `./Jay` |
+| Linux x64 | `Jay-linux-x64.tar.gz` | 解压后运行 `./Jay` |
+| Linux ARM64 | `Jay-linux-arm64.tar.gz` | 解压后运行 `./Jay`，并使用系统安装的 Java |
 
 推荐的 zip 是预先编译成本机代码的版本（Native AOT），启动更快（窗口约 0.3 秒打开）、占内存更少，解压后是 4 个文件，要放在同一个文件夹里。
-同一个发布里还有单个文件的 `Amber.exe`，下载即可运行，适合只想要一个文件的情况，启动稍慢一些。两个版本功能和数据完全相同，可以随时换用。
+同一个发布里还有单个文件的 `Jay.exe`，下载即可运行，适合只想要一个文件的情况，启动稍慢一些。两个版本功能和数据完全相同，可以随时换用。
 
-发布包自带 .NET，不用安装。Amber 会按游戏版本选择本机 Java，并在 Mojang 提供对应平台运行时时自动下载；Linux ARM64 需要先安装合适版本的 64 位 Java。
+发布包自带 .NET，不用安装。Jay 会按游戏版本选择本机 Java，并在 Mojang 提供对应平台运行时时自动下载；Linux ARM64 需要先安装合适版本的 64 位 Java。
 
 macOS/Linux 版本目前没有代码签名。macOS 第一次运行若被 Gatekeeper 拦截，可在“系统设置 → 隐私与安全性”中确认打开。完整局域网和出口节点模式仍只支持 Windows；普通房间、直连、聊天和仅游戏转发可跨平台使用。
 
@@ -100,7 +100,7 @@ macOS/Linux 版本目前没有代码签名。macOS 第一次运行若被 Gatekee
 - **没有远程控制**：功能不受任何远程开关或云端配置影响。时区只用来选默认下载源。
 - **更新由你决定**：默认不检查更新；在设置里填了更新地址才会检查，而且只提示，不会自动下载或替换。
 - **联网只为了完成你要做的事**：登录、获取版本列表、下载和搜索。会用到的服务有微软和 Xbox 登录、你添加的皮肤站、Mojang 游戏文件服务器、你选择的下载源、各加载器的下载地址（OptiFine 通过 BMCLAPI，authlib-injector 通过其官方地址或 BMCLAPI），以及 Modrinth 和 CurseForge。
-- **联机只连你自己添加的节点**：只有在联机页创建或加入房间时才会连接，连的是你在“联机节点”里添加的节点和房间里的其他玩家。Amber 不内置节点、不从网上拉节点列表，房间码在你的电脑上随机生成，不经过 Amber 的服务器（Amber 没有服务器）。联机组件 EasyTier 从 `github.com/EasyTier/EasyTier` 的发布页下载。直连房间会向你设置的 STUN 服务器（默认 `stun.miwifi.com`、`stun.chat.bilibili.com`、`stun.cloudflare.com`，可改可清空）询问你的外部地址，它们只回答地址、不经过游戏数据；也会请你的路由器临时映射一个端口，结束联机时删掉。
+- **联机只连你自己添加的节点**：只有在联机页创建或加入房间时才会连接，连的是你在“联机节点”里添加的节点和房间里的其他玩家。Jay 不内置节点、不从网上拉节点列表，房间码在你的电脑上随机生成，不经过 Jay 的服务器（Jay 没有服务器）。联机组件 EasyTier 从 `github.com/EasyTier/EasyTier` 的发布页下载。直连房间会向你设置的 STUN 服务器（默认 `stun.miwifi.com`、`stun.chat.bilibili.com`、`stun.cloudflare.com`，可改可清空）询问你的外部地址，它们只回答地址、不经过游戏数据；也会请你的路由器临时映射一个端口，结束联机时删掉。
 
 代码完全开源，欢迎自行查看。
 
@@ -140,7 +140,7 @@ dotnet publish Amber.App -c Release -r osx-arm64 --self-contained -p:PublishSing
 ## 常见问题
 
 **Windows 提示“已保护你的电脑”怎么办？**
-Amber 的程序没有代码签名，所以 SmartScreen 可能会拦截。确认文件是从本项目的 Releases 下载的，点“更多信息”→“仍要运行”即可。
+Jay 的程序没有代码签名，所以 SmartScreen 可能会拦截。确认文件是从本项目的 Releases 下载的，点“更多信息”→“仍要运行”即可。
 
 **exe 为什么这么大？**
 .NET 运行时和界面库都打包在里面，所以不用另外安装任何东西。
@@ -161,14 +161,14 @@ CurseForge 的接口需要 API Key，见上面的[配置](#配置)。Modrinth �
 支持 macOS Intel/Apple 芯片和 Linux x64/ARM64。完整局域网、出口节点和极端加密仍受 Windows 系统能力限制；其他主要功能可跨平台使用。
 
 **有哪些做不到的？**
-在 Fabric / Quilt 上运行 Forge 模组：目前没有可靠的兼容层，Amber 会直接说明。
+在 Fabric / Quilt 上运行 Forge 模组：目前没有可靠的兼容层，Jay 会直接说明。
 
 ## 许可证
 
 [MIT](LICENSE)
 
-联机功能使用的 EasyTier 是独立的开源项目（LGPL-3.0），Amber 不内置它，在你第一次使用联机时单独下载。
+联机功能使用的 EasyTier 是独立的开源项目（LGPL-3.0），Jay 不内置它，在你第一次使用联机时单独下载。
 
 ---
 
-Amber 不是 Minecraft 官方产品，与 Mojang 和 Microsoft 没有关联。
+Jay 不是 Minecraft 官方产品，与 Mojang 和 Microsoft 没有关联。

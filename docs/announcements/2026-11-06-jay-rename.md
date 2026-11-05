@@ -19,7 +19,7 @@ git remote set-url origin https://github.com/warriorleavestar/jay-launcher.git
 
 ## Logo 方向与素材
 
-图标只使用**一根羽毛**，保留灰蓝色主体，加入少量琥珀色花纹。不加入猫、字母或文字。当前素材为带透明通道的 PNG，作为后续应用图标接入的源图。
+图标只使用**一根羽毛**，保留灰蓝色主体，加入少量琥珀色花纹。不加入猫、字母或文字。源图为带透明通道的 PNG；应用侧栏使用缩放后的 PNG，窗口与 Windows 可执行文件使用同源多尺寸 ICO。
 
 ![Jay 单羽毛 Logo](../brand/jay-feather-amber-v1.png)
 
@@ -30,7 +30,11 @@ git remote set-url origin https://github.com/warriorleavestar/jay-launcher.git
 
 本次完成仓库名称调整，更新 README、克隆命令和节点部署文档中的仓库链接，并存档 Logo 与本说明。
 
-现有发布包、应用窗口名称、可执行文件、项目目录和命名空间仍可能显示 `Amber`。应用内显示名称、ICO、平台图标和发布产物的正式切换应由相应 UI/发布工作线在后续改动中完成，验证小尺寸显示及各平台打包后再发布。本说明不代表已发布更名版安装包。
+PR #17 已合并。本次应用改名将四种语言的窗口标题和文案、侧栏 Logo、窗口图标、Windows 可执行文件图标及产品元信息统一为 **Jay**。新构建输出 `Jay.exe`（Windows）或 `Jay`（macOS/Linux），发布包前缀为 `Jay-`，GitHub Actions artifact 前缀为 `jay-`。开发脚本中的可执行文件路径同步更新。
+
+此前发布的二进制和历史截图仍可能显示 Amber。本说明不代表已发布新的 Release。macOS/Linux 继续使用原有裸可执行文件打包方式，本次未新增 macOS `.app` 或 Linux `.desktop` 安装集成。
+
+源码目录、命名空间、已有数据位置和协议继续保留原名。图标可在 Windows 上运行 `tools/export-brand-icons.ps1` 从已批准源图重新导出；只做透明等比缩放，不重绘图案。
 
 ## 兼容要求
 

@@ -14,28 +14,28 @@ No telemetry, no remote switches. Download, unzip, run.
 
 [简体中文](README.md) | English
 
-![Amber home page](docs/images/home.png)
+![Jay home page](docs/images/jay-home.png)
 
 </div>
 
-The project is now named **Jay** and the repository URL has changed. Existing releases and screenshots may still use Amber while the application branding is migrated. See the [rename and compatibility notice](docs/announcements/2026-11-06-jay-rename.md) (Chinese).
+The project is now named **Jay**. Current source and new builds use Jay and the feather icon; earlier releases may still display Amber. Existing accounts, settings and room protocols remain compatible. See the [rename and compatibility notice](docs/announcements/2026-11-06-jay-rename.md) (Chinese).
 
 ## Download
 
-Get the package for your computer from [Releases](https://github.com/warriorleavestar/jay-launcher/releases/latest):
+Get the package for your computer from [Releases](https://github.com/warriorleavestar/jay-launcher/releases/latest). The table uses the new build names; earlier releases still use the `Amber-` archive prefix and `Amber.exe` / `./Amber`.
 
 | System | File | Run |
 |---|---|---|
-| Windows 10+ x64 | `Amber-win-x64-aot.zip` (recommended) | Unzip and run `Amber.exe` |
-| Apple silicon Mac | `Amber-osx-arm64.tar.gz` | Extract and run `./Amber` in Terminal |
-| Intel Mac | `Amber-osx-x64.tar.gz` | Extract and run `./Amber` in Terminal |
-| Linux x64 | `Amber-linux-x64.tar.gz` | Extract and run `./Amber` |
-| Linux ARM64 | `Amber-linux-arm64.tar.gz` | Extract and run `./Amber`; install Java through your distribution |
+| Windows 10+ x64 | `Jay-win-x64-aot.zip` (recommended) | Unzip and run `Jay.exe` |
+| Apple silicon Mac | `Jay-osx-arm64.tar.gz` | Extract and run `./Jay` in Terminal |
+| Intel Mac | `Jay-osx-x64.tar.gz` | Extract and run `./Jay` in Terminal |
+| Linux x64 | `Jay-linux-x64.tar.gz` | Extract and run `./Jay` |
+| Linux ARM64 | `Jay-linux-arm64.tar.gz` | Extract and run `./Jay`; install Java through your distribution |
 
 The recommended zip is compiled ahead of time to native code (Native AOT): the window opens in about 0.3 seconds and it uses less memory. It unzips to 4 files that must stay in the same folder.
-Each release also has a single-file `Amber.exe` that runs straight after download if you prefer one file; it starts a little slower. Both builds have the same features and share the same data, so you can switch at any time.
+Each release also has a single-file `Jay.exe` that runs straight after download if you prefer one file; it starts a little slower. Both builds have the same features and share the same data, so you can switch at any time.
 
-The packages include .NET. Amber selects a suitable local Java for each game version and downloads one when Mojang publishes a runtime for that platform. Linux ARM64 needs a compatible 64-bit Java installed through the system.
+The packages include .NET. Jay selects a suitable local Java for each game version and downloads one when Mojang publishes a runtime for that platform. Linux ARM64 needs a compatible 64-bit Java installed through the system.
 
 The macOS and Linux builds are currently unsigned. If Gatekeeper blocks the first macOS launch, approve it under System Settings → Privacy & Security. Full-LAN and exit-node modes remain Windows-only; ordinary rooms, direct connections, chat and game-only forwarding work across platforms.
 
@@ -76,7 +76,7 @@ The macOS and Linux builds are currently unsigned. If Gatekeeper blocks the firs
 - Play together without being on the same LAN: the host opens the world to LAN, creates a room and shares the room code; friends paste the code to join
 - Built on the open-source networking tool [EasyTier](https://github.com/EasyTier/EasyTier), downloaded from its GitHub releases and verified on first use; the default mode needs no admin rights and installs no driver
 - Room chat: peer-to-peer, no server in between, with messages additionally encrypted with the room secret
-- Direct rooms (no relay node): swap one invite / reply code, then Amber tries IPv6, router port mapping (UPnP / NAT-PMP) and IPv4 hole punching (with port prediction and spraying for strict NATs); with more players, a reachable member relays; a node is used only if all of that fails and you added one. "Check my network" tells you beforehand how easy you are to reach
+- Direct rooms (no relay node): swap one invite / reply code, then Jay tries IPv6, router port mapping (UPnP / NAT-PMP) and IPv4 hole punching (with port prediction and spraying for strict NATs); with more players, a reachable member relays; a node is used only if all of that fails and you added one. "Check my network" tells you beforehand how easy you are to reach
 - Multiplayer debug mode with a diagnostic report (room secrets removed, public IPs masked by default), plus a one-click full test matrix that switches both sides through every path and mode and records connectivity, time, latency, throughput and failure reasons
 - Optional full-LAN mode: everyone gets a virtual IP and games' LAN broadcasts are forwarded, so other LAN games and apps work too (needs admin rights); members can also route their internet traffic through one member's PC (exit node, opt-in on both sides)
 - You add the relay nodes yourself: the [node folder](node/README.md) has one-step scripts for Linux, Docker and Windows, and a share code to send to friends
@@ -96,11 +96,11 @@ The macOS and Linux builds are currently unsigned. If Gatekeeper blocks the firs
 
 ## Privacy
 
-- **No telemetry:** Amber collects no usage data and creates no device ID.
-- **No remote control:** no remote switch or cloud config can change what Amber does. The time zone is only used to pick the default download source.
-- **Updates are up to you:** Amber doesn't check for updates unless you set an update URL, and even then it only tells you. It never downloads or replaces anything by itself.
+- **No telemetry:** Jay collects no usage data and creates no device ID.
+- **No remote control:** no remote switch or cloud config can change what Jay does. The time zone is only used to pick the default download source.
+- **Updates are up to you:** Jay doesn't check for updates unless you set an update URL, and even then it only tells you. It never downloads or replaces anything by itself.
 - **Network access only for what you're doing:** signing in, fetching version lists, downloading and searching. The services involved are Microsoft and Xbox sign-in, any skin site you add, Mojang's game file servers, your chosen download source, loader download sites (OptiFine via BMCLAPI, authlib-injector via its official site or BMCLAPI), Modrinth and CurseForge.
-- **Multiplayer only connects to nodes you added:** only while you host or join a room on the Multiplayer page, Amber connects to the relay nodes you added there and to the other players in the room. Amber ships no nodes and fetches no node list; room codes are generated randomly on your computer and never pass through an Amber server (Amber has none). The EasyTier component is downloaded from the releases page of `github.com/EasyTier/EasyTier`. Direct rooms ask the STUN servers you set (by default `stun.miwifi.com`, `stun.chat.bilibili.com`, `stun.cloudflare.com`; editable or empty) for your external address; they only answer that and carry no game data. They may also ask your router for a temporary port mapping, removed when the session ends.
+- **Multiplayer only connects to nodes you added:** only while you host or join a room on the Multiplayer page, Jay connects to the relay nodes you added there and to the other players in the room. Jay ships no nodes and fetches no node list; room codes are generated randomly on your computer and never pass through an Jay server (Jay has none). The EasyTier component is downloaded from the releases page of `github.com/EasyTier/EasyTier`. Direct rooms ask the STUN servers you set (by default `stun.miwifi.com`, `stun.chat.bilibili.com`, `stun.cloudflare.com`; editable or empty) for your external address; they only answer that and carry no game data. They may also ask your router for a temporary port mapping, removed when the session ends.
 
 The code is open source, so you can check all of this yourself.
 
@@ -135,12 +135,12 @@ dotnet publish Amber.App -c Release -r osx-arm64 --self-contained -p:PublishSing
 
 There is also a command-line version, for example `dotnet run --project Amber.Cli -- list-remote`.
 
-Amber is built with C#, .NET 10 and [Avalonia](https://avaloniaui.net/).
+Jay is built with C#, .NET 10 and [Avalonia](https://avaloniaui.net/).
 
 ## FAQ
 
 **Windows says it protected my PC. What should I do?**
-Amber isn't code-signed, so SmartScreen may block it. Make sure you downloaded it from this project's Releases, then choose "More info" → "Run anyway".
+Jay isn't code-signed, so SmartScreen may block it. Make sure you downloaded it from this project's Releases, then choose "More info" → "Run anyway".
 
 **Why is the exe so large?**
 It includes the .NET runtime and UI libraries, so you don't have to install anything else.
@@ -161,14 +161,14 @@ Switch the download source on the Settings page and try the official source or t
 Yes: Intel and Apple silicon Macs, plus Linux x64 and ARM64. Full-LAN, exit-node and Extreme encryption modes still depend on Windows system capabilities; the other main features are cross-platform.
 
 **What can't it do?**
-Run Forge mods on Fabric / Quilt: there is no reliable compatibility layer, and Amber says so plainly.
+Run Forge mods on Fabric / Quilt: there is no reliable compatibility layer, and Jay says so plainly.
 
 ## License
 
 [MIT](LICENSE)
 
-The multiplayer feature uses EasyTier, a separate open-source project (LGPL-3.0). Amber does not bundle it; it is downloaded separately the first time you use multiplayer.
+The multiplayer feature uses EasyTier, a separate open-source project (LGPL-3.0). Jay does not bundle it; it is downloaded separately the first time you use multiplayer.
 
 ---
 
-Amber is not an official Minecraft product and is not affiliated with Mojang or Microsoft.
+Jay is not an official Minecraft product and is not affiliated with Mojang or Microsoft.

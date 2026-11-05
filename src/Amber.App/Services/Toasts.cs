@@ -159,7 +159,7 @@ public static class Toasts
         }
         // 已经恢复了：刷新界面出错不能报成“恢复失败”，也不能让程序崩掉。
         try { item.AfterUndo?.Invoke(); }
-        catch (Exception e) { System.Diagnostics.Trace.WriteLine("Amber: refresh after undo failed: " + e); }
+        catch (Exception e) { System.Diagnostics.Trace.WriteLine("Jay: refresh after undo failed: " + e); }
         Show(L.F("trash.restored", name), NotificationType.Success);
     }
 

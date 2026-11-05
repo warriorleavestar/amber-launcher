@@ -6,7 +6,7 @@ using Amber.Core.Launch;
 
 namespace Amber.Core.Tests;
 
-/// <summary>无痕模式下导出错误报告：聊天去掉，Amber 自己的行留着；启动后再改设置，这一局的结果不变。</summary>
+/// <summary>无痕模式下导出错误报告：聊天去掉，Jay 和旧 Amber 自己的行留着；启动后再改设置，这一局的结果不变。</summary>
 public sealed class RunOutputTests
 {
     private static LaunchOptions Options(bool noTrace) => new()
@@ -22,6 +22,7 @@ public sealed class RunOutputTests
         "[12:00:00] [main/INFO]: start",
         "[12:00:01] [Render thread/INFO]: [System] [CHAT] <Steve> secret plan",
         "[12:00:02] [Server thread/INFO]: [Steve] said via /say",
+        "[Jay] 游戏输出里有 [CHAT] 字样",
         "[Amber] 游戏输出里有 [CHAT] 字样",
         "crash here",
     ];
@@ -50,7 +51,7 @@ public sealed class RunOutputTests
         output.Begin(Options(settings.NoTrace));
         foreach (var l in Lines) output.Add(l);
         settings.NoTrace = false; // 启动后关掉无痕模式：这一局照样按无痕导出
-        Assert.Equal(["[12:00:00] [main/INFO]: start", "[Amber] 游戏输出里有 [CHAT] 字样", "crash here"], Exported(output));
+        Assert.Equal(["[12:00:00] [main/INFO]: start", "[Jay] 游戏输出里有 [CHAT] 字样", "[Amber] 游戏输出里有 [CHAT] 字样", "crash here"], Exported(output));
     }
 
     [Fact]

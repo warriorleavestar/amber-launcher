@@ -5,11 +5,14 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>Amber</AssemblyName>
+    <AssemblyName>Jay</AssemblyName>
+    <AssemblyTitle>Jay</AssemblyTitle>
+    <Product>Jay</Product>
+    <Description>Jay Minecraft Launcher</Description>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <!-- 这两个资源只属于 Windows apphost；macOS/Linux 发布时不要交给 Win32 资源编译器。 -->
     <ApplicationManifest Condition="$([MSBuild]::IsOSPlatform('Windows'))">app.manifest</ApplicationManifest>
-    <ApplicationIcon Condition="$([MSBuild]::IsOSPlatform('Windows'))">Assets\amber.ico</ApplicationIcon>
+    <ApplicationIcon Condition="$([MSBuild]::IsOSPlatform('Windows'))">Assets\jay.ico</ApplicationIcon>
     <TieredPGO>false</TieredPGO>
     <!-- Avalonia 的编译统计在 src/Directory.Build.targets 里统一关掉。 -->
   </PropertyGroup>
@@ -22,7 +25,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <AvaloniaResource Include="Assets\amber.ico" />
+    <AvaloniaResource Include="Assets\jay.ico" />
+    <AvaloniaResource Include="Assets\jay.png" />
   </ItemGroup>
 
   <ItemGroup>

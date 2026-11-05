@@ -42,14 +42,18 @@ public sealed class App : Application
             desktop.MainWindow = new MainWindow(settings) { DataContext = viewModel };
             StartupTrace.Mark("window");
             desktop.Exit += (_, _) => service.Dispose();
-            // 回收目录里过期的条目放到后台清，不拖慢启动。
-            _ = Task.Run(() =>
+            // 开发截图只查看界面，不清理游戏回收目录或真实用户的无痕配置。
+            if (Environment.GetEnvironmentVariable("AMBER_SNAPSHOT_DIR") is not { Length: > 0 })
             {
-                try { service.PurgeTrash(); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            });
-            // 清掉以前留下的无痕模式临时配置（Amber 没等到游戏退出就关了、崩溃了之类）。
-            _ = Task.Run(() => Amber.Core.Launch.GameLauncher.SweepNoTrace());
+                // 回收目录里过期的条目放到后台清，不拖慢启动。
+                _ = Task.Run(() =>
+                {
+                    try { service.PurgeTrash(); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                });
+                // 清掉以前留下的无痕模式临时配置（Amber 没等到游戏退出就关了、崩溃了之类）。
+                _ = Task.Run(() => Amber.Core.Launch.GameLauncher.SweepNoTrace());
+            }
         }
         base.OnFrameworkInitializationCompleted();
     }

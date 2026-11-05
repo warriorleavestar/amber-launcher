@@ -103,7 +103,7 @@ public static partial class PortMapping
 
         var args = $"<NewRemoteHost></NewRemoteHost><NewExternalPort>{localPort}</NewExternalPort><NewProtocol>UDP</NewProtocol>" +
                    $"<NewInternalPort>{localPort}</NewInternalPort><NewInternalClient>{localIp}</NewInternalClient><NewEnabled>1</NewEnabled>" +
-                   $"<NewPortMappingDescription>Amber</NewPortMappingDescription><NewLeaseDuration>7200</NewLeaseDuration>";
+                   $"<NewPortMappingDescription>Jay</NewPortMappingDescription><NewLeaseDuration>7200</NewLeaseDuration>";
         await SoapAsync(http, control!, type, "AddPortMapping", args, ct);
         log(L.F("core.mp.upnp.mapped", localPort, localIp, localPort));
         return new PortMappingResult("UPnP", new IPEndPoint(externalIp, localPort), async () =>
