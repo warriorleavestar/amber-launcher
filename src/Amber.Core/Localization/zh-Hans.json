@@ -1153,5 +1153,6 @@
   "onboarding.source.official": "官方",
   "onboarding.source.switch": "切换",
   "onboarding.slow": "下载很慢？试试切换下载源",
-  "accounts.status.offline_added_not_ascii": "已添加离线账号 {0}。名字里有英文字母、数字和下划线以外的字符，进部分服务器会被拒绝"
+  "accounts.status.offline_added_not_ascii": "已添加离线账号 {0}。名字里有英文字母、数字和下划线以外的字符，进部分服务器会被拒绝",
+  "trash.failure.target_exists": "原位置已经有一个叫“{0}”的了。先把它改名或删掉，再撤销"
 }

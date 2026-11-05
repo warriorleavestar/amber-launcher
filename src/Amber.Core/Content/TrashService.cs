@@ -21,6 +21,8 @@ public enum TrashFailure
     EntryMissing,
     /// <summary>原来所在的文件夹（比如实例）已经不在了：不恢复，免得凭空建出一个看不见的实例文件夹。</summary>
     ParentMissing,
+    /// <summary>原位置已经有同名的东西，而这一项不能改名放回（比如实例：文件夹名要和里面的版本文件对得上）。</summary>
+    TargetExists,
 }
 
 /// <summary>回收目录操作失败（文件被占用这类系统错误照常抛 IOException）。</summary>
@@ -120,8 +122,9 @@ public static class TrashService
 
     /// <summary>
     /// 恢复到原位置。原位置已经有同名的东西时，在名字后面加“ (1)”“ (2)”……（扩展名保留），返回实际恢复到的路径。
+    /// keepName 时不改名，有同名的就抛 TargetExists（实例文件夹改了名，里面的 json 和 jar 就对不上了，会变成打不开的“A (1)”）。
     /// </summary>
-    public static string Restore(TrashEntry entry)
+    public static string Restore(TrashEntry entry, bool keepName = false)
     {
         var owner = Path.GetDirectoryName(Path.GetFullPath(entry.TrashRoot))!;
         var original = Path.GetFullPath(entry.OriginalPath);
@@ -134,6 +137,8 @@ public static class TrashService
         if (!Directory.Exists(parent) && !string.Equals(parent, owner, StringComparison.OrdinalIgnoreCase)
             && Path.GetDirectoryName(parent) is { } grand && !Directory.Exists(grand))
             throw new TrashException(TrashFailure.ParentMissing, parent);
+        if (keepName && (File.Exists(original) || Directory.Exists(original)))
+            throw new TrashException(TrashFailure.TargetExists, original);
         Directory.CreateDirectory(parent);
         var target = FreeName(original);
         if (isDir) Directory.Move(stored, target);

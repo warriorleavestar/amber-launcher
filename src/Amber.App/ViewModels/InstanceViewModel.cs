@@ -276,7 +276,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         }
         catch (TrashException e)
         {
-            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, Toasts.Describe(e)));
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, Toasts.Reason(e)));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -339,11 +339,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             var entry = await Task.Run(() => TrashService.MoveToTrash(dir, _service.Directory.Root));
             SetStatus(StatusMessage.Success("instance.delete.done", c.Id));
             _service.NotifyInstalledChanged();
-            Toasts.Deleted(entry, _ => _service.NotifyInstalledChanged());
+            // 同名实例已经存在（比如删完又装了一个）时不恢复，免得多出一个打不开的“A (1)”；记录留着，删掉或改名新的以后还能撤销。
+            Toasts.Deleted(entry, _ => _service.NotifyInstalledChanged(), keepName: true);
         }
         catch (TrashException e)
         {
-            SetStatus(StatusMessage.Error("instance.status.delete_failed", Toasts.Describe(e)));
+            SetStatus(StatusMessage.Failure("instance.status.delete_failed", e, Toasts.Reason(e)));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

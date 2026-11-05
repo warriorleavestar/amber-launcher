@@ -119,7 +119,7 @@ public static class ServerList
             var root = Nbt.ReadFile(path);
             if (root.GetValueOrDefault("servers") is not Nbt.NbtList list) return [];
             return list.Items.OfType<Dictionary<string, object>>()
-                .Select(s => new ServerEntry(s.GetValueOrDefault("name") as string ?? "Minecraft Server", s.GetValueOrDefault("ip") as string ?? ""))
+                .Select(s => new ServerEntry(DisplayName(s), Address(s)))
                 .Where(s => s.Address.Length > 0).ToList();
         }
         catch (Exception e) when (e is InvalidDataException or ArgumentException or IndexOutOfRangeException)
@@ -127,6 +127,11 @@ public static class ServerList
             return [];
         }
     }
+
+    /// <summary>游戏允许没有名字的条目，界面上显示成“Minecraft Server”（和游戏自己一样）。</summary>
+    private static string DisplayName(Dictionary<string, object> server) => server.GetValueOrDefault("name") as string ?? "Minecraft Server";
+
+    private static string Address(Dictionary<string, object> server) => server.GetValueOrDefault("ip") as string ?? "";
 
     public static void Add(string workDir, ServerEntry server)
     {
@@ -138,15 +143,18 @@ public static class ServerList
 
     /// <summary>
     /// 删掉一条服务器，返回删掉的原始条目和位置（撤销时原样放回，图标等字段不丢）；找不到返回 null。
-    /// 只删点的那一条：优先用列表里的位置（名字和地址都对得上时），否则删第一条名字和地址都一样的，
-    /// 没给名字时删第一条地址一样的。同地址的其他条目不动。
+    /// 只删点的那一条：index 是 Read 返回的列表里的位置，那一条名字和地址都对得上就删它；否则删第一条名字和地址都一样的，
+    /// 没给名字时删第一条地址一样的。名字按界面上显示的比（没名字的条目显示成“Minecraft Server”）。同地址的其他条目不动。
     /// </summary>
     public static RemovedServer? Remove(string workDir, string address, string? name = null, int? index = null)
     {
         var (root, list) = Load(workDir);
-        bool Matches(object item, bool checkName) => item is Dictionary<string, object> d && (d.GetValueOrDefault("ip") as string) == address
-            && (!checkName || (d.GetValueOrDefault("name") as string ?? "") == name);
-        var at = index is { } i && i >= 0 && i < list.Items.Count && Matches(list.Items[i], name is not null) ? i
+        bool Matches(object item, bool checkName) => item is Dictionary<string, object> d && Address(d) == address
+            && (!checkName || DisplayName(d) == name);
+        // Read 跳过了不是条目或没有地址的，界面上的位置要换算回文件里的位置。
+        var shown = list.Items.Select((item, raw) => (item, raw))
+            .Where(x => x.item is Dictionary<string, object> d && Address(d).Length > 0).Select(x => x.raw).ToList();
+        var at = index is { } i && i >= 0 && i < shown.Count && Matches(list.Items[shown[i]], name is not null) ? shown[i]
             : list.Items.FindIndex(item => Matches(item, name is not null));
         if (at < 0) return null;
         var removed = new RemovedServer(at, (Dictionary<string, object>)list.Items[at]);

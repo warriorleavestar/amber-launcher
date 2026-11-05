@@ -24,8 +24,10 @@ public class BuildSettingsTests
         var projects = AvaloniaProjects();
         Assert.Contains(projects, p => p.EndsWith("Amber.App.csproj", StringComparison.Ordinal));
         Assert.Contains(projects, p => p.EndsWith("Amber.Core.Tests.csproj", StringComparison.Ordinal));
+        // 找不到 dotnet（比如只拿到编译好的测试程序集）时只做上面的静态检查。xunit 2 不能运行时跳过，就直接结束。
+        if (DotnetPath() is not { } dotnet) return;
         foreach (var project in projects)
-            Assert.True(EvaluatedProperty(project, "UsedAvaloniaProducts").Length == 0, $"{Path.GetFileName(project)} 的 UsedAvaloniaProducts 不是空的");
+            Assert.True(EvaluatedProperty(dotnet, project, "UsedAvaloniaProducts").Length == 0, $"{Path.GetFileName(project)} 的 UsedAvaloniaProducts 不是空的");
     }
 
     /// <summary>直接引用 Avalonia 包，或者经项目引用间接用到它的项目。</summary>
@@ -50,16 +52,40 @@ public class BuildSettingsTests
         return [.. result];
     }
 
-    private static string EvaluatedProperty(string project, string name)
+    /// <summary>dotnet 的位置：dotnet test 会设 DOTNET_HOST_PATH，否则在 PATH 里找；找不到返回 null。</summary>
+    internal static string? DotnetPath()
     {
-        var info = new System.Diagnostics.ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        if (Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") is { Length: > 0 } host && File.Exists(host)) return host;
+        var exe = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                var candidate = Path.Combine(dir.Trim('"'), exe);
+                if (File.Exists(candidate)) return candidate;
+            }
+            catch (ArgumentException) { }
+        }
+        return null;
+    }
+
+    /// <summary>MSBuild 求出来的属性值。stdout 和 stderr 同时读（只读一个时另一个写满缓冲会卡住），最多等两分钟。</summary>
+    private static string EvaluatedProperty(string dotnet, string project, string name)
+    {
+        var info = new System.Diagnostics.ProcessStartInfo(dotnet) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
         foreach (var a in new[] { "msbuild", project, "-getProperty:" + name, "-nologo" }) info.ArgumentList.Add(a);
         info.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         using var process = System.Diagnostics.Process.Start(info)!;
-        var output = process.StandardOutput.ReadToEnd();
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(TimeSpan.FromMinutes(2)))
+        {
+            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            Assert.Fail($"dotnet msbuild {Path.GetFileName(project)} 两分钟没结束");
+        }
         process.WaitForExit();
-        Assert.Equal(0, process.ExitCode);
-        return output.Trim();
+        Assert.True(process.ExitCode == 0, $"dotnet msbuild {Path.GetFileName(project)} 退出码 {process.ExitCode}：{error.Result}");
+        return output.Result.Trim();
     }
 
     /// <summary>

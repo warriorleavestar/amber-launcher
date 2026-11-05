@@ -43,7 +43,7 @@
               <ScrollViewer>
                 <SelectableTextBlock x:Name="DetailText" TextWrapping="Wrap" FontFamily="{StaticResource MonoFont}" FontSize="{StaticResource FontBodySmall}" />
               </ScrollViewer>
-              <Button x:Name="CopyButton" Grid.Row="1" Classes="secondary" HorizontalAlignment="Right" Margin="0,8,0,0" Content="{l:T common.copy}" />
+              <Button x:Name="CopyButton" Grid.Row="1" Classes="secondary" HorizontalAlignment="Right" Margin="0,8,0,0" />
             </Grid>
           </Flyout>
         </Button.Flyout>

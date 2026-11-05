@@ -1184,5 +1184,6 @@
   "onboarding.source.official": "Official",
   "onboarding.source.switch": "Switch",
   "onboarding.slow": "Download slow? Try switching the download source",
-  "accounts.status.offline_added_not_ascii": "Added offline account {0}. The name has characters other than English letters, digits and underscores, so some servers will refuse it"
+  "accounts.status.offline_added_not_ascii": "Added offline account {0}. The name has characters other than English letters, digits and underscores, so some servers will refuse it",
+  "trash.failure.target_exists": "Something named \"{0}\" is already there. Rename or delete it first, then undo again"
 }

@@ -20,6 +20,10 @@ public partial class StatusBar : UserControl
     private StatusMessage? _dismissed;
     private bool _isShowing;
 
+    /// <summary>复制按钮现在显示什么：自己记着，按语言写字（不覆盖绑定，换语言后也对）。</summary>
+    private string _copyKey = "common.copy";
+    private int _copyVersion;
+
     /// <summary>现在有没有显示消息（没消息或者被 ✕ 关掉时为 false）：外面只装着状态条的卡片跟着收起。</summary>
     public static readonly DirectProperty<StatusBar, bool> IsShowingProperty =
         AvaloniaProperty.RegisterDirect<StatusBar, bool>(nameof(IsShowing), o => o.IsShowing);
@@ -53,20 +57,23 @@ public partial class StatusBar : UserControl
         {
             if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard && Message?.Detail is { } detail)
             {
+                var version = ++_copyVersion;
                 try
                 {
                     await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(clipboard, detail);
-                    CopyButton.Content = L.T("common.copied");
+                    SetCopyState("common.copied");
                 }
                 catch (Exception e) when (e is System.Runtime.InteropServices.COMException or InvalidOperationException or TimeoutException or UnauthorizedAccessException)
                 {
                     // 剪贴板被别的程序占着：只在按钮上说一声，不让程序崩掉。
-                    CopyButton.Content = L.T("common.copy_failed");
+                    SetCopyState("common.copy_failed");
                 }
                 await Task.Delay(1500);
-                CopyButton.Content = L.T("common.copy");
+                // 这期间又点了一次：让后一次自己恢复。
+                if (version == _copyVersion) SetCopyState("common.copy");
             }
         };
+        SetCopyState("common.copy");
         AutomationProperties.SetName(CloseButton, L.T("common.close"));
         ToolTip.SetTip(CloseButton, L.T("common.close"));
     }
@@ -99,8 +106,18 @@ public partial class StatusBar : UserControl
     {
         AutomationProperties.SetName(CloseButton, L.T("common.close"));
         ToolTip.SetTip(CloseButton, L.T("common.close"));
+        SetCopyState(_copyKey);
         Render(restartTimer: false);
     });
+
+    private void SetCopyState(string key)
+    {
+        _copyKey = key;
+        CopyButton.Content = L.T(key);
+    }
+
+    /// <summary>复制按钮现在的状态键（测试用）。</summary>
+    internal string CopyStateKey => _copyKey;
 
     private void Render(bool restartTimer = true)
     {

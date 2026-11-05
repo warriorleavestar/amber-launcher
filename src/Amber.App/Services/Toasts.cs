@@ -26,6 +26,9 @@ public static class Toasts
     {
         /// <summary>正在撤销（按钮和 Ctrl+Z 同时来时只做一次）。</summary>
         public bool Running { get; set; }
+
+        /// <summary>上次撤销失败了：Ctrl+Z 先跳过它去撤销更早的，Toast 上的按钮还能再试。</summary>
+        public bool Failed { get; set; }
     }
 
     /// <summary>撤销记录：最近的在最后。</summary>
@@ -56,13 +59,16 @@ public static class Toasts
             _manager.Show(content, NotificationType.Success, UndoDuration);
         });
 
-    /// <summary>文件进回收目录后调用：记下撤销信息并显示 Toast。restored 收到实际恢复到的路径。</summary>
-    public static void Deleted(TrashEntry entry, Action<string> restored)
+    /// <summary>
+    /// 文件进回收目录后调用：记下撤销信息并显示 Toast。restored 收到实际恢复到的路径。
+    /// keepName：原位置有同名的就不恢复（实例），而不是改名放回。
+    /// </summary>
+    public static void Deleted(TrashEntry entry, Action<string> restored, bool keepName = false)
     {
         string? path = null;
         Add(new UndoItem(entry.Name, () =>
         {
-            path = TrashService.Restore(entry);
+            path = TrashService.Restore(entry, keepName);
             return Path.GetFileName(path);
         }, () => restored(path!)));
     }
@@ -102,11 +108,15 @@ public static class Toasts
         });
     }
 
-    /// <summary>撤销最近一次删除（Ctrl+Z）。没有可撤销的返回 false。</summary>
+    /// <summary>
+    /// 撤销最近一次删除（Ctrl+Z）。没有可撤销的返回 false。
+    /// 最近的那条撤销失败过（比如文件被占用）就先撤销更早的，不让一条坏的挡住后面所有的；都失败过才再试最近的。
+    /// </summary>
     public static bool UndoLatest()
     {
         UndoItem? item;
-        lock (History) item = History.Count > 0 ? History[^1] : null;
+        lock (History)
+            item = History.LastOrDefault(i => !i.Running && !i.Failed) ?? History.LastOrDefault(i => !i.Running);
         if (item is null) return false;
         Undo(item);
         return true;
@@ -114,7 +124,8 @@ public static class Toasts
 
     /// <summary>
     /// 撤销一条记录。成功后才从记录里拿掉；失败（比如文件被占用）时留着，可以再试。
-    /// 回收目录里已经没有这一项、或者原来的实例不在了，再试也没用，才一起拿掉。
+    /// 回收目录里已经没有这一项、或者不允许放回原处，再试也没用，才一起拿掉。
+    /// 原来的实例不在了（ParentMissing）留着：把实例装回来以后还能再撤销。
     /// </summary>
     private static void Undo(UndoItem item)
     {
@@ -124,23 +135,28 @@ public static class Toasts
             item.Running = true;
         }
         string name;
+        var remove = false;
         try
         {
             name = item.Undo();
+            remove = true;
         }
         catch (TrashException e)
         {
-            Finish(item, remove: e.Reason is TrashFailure.EntryMissing or TrashFailure.ParentMissing or TrashFailure.OriginalOutsideOwner);
+            remove = e.Reason is TrashFailure.EntryMissing or TrashFailure.OriginalOutsideOwner;
             Show(L.F("trash.restore_failed", Describe(e)), NotificationType.Error);
             return;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Finish(item, remove: false);
             Show(L.F("trash.restore_failed", ErrorText.Describe(e)), NotificationType.Error);
             return;
         }
-        Finish(item, remove: true);
+        finally
+        {
+            // 不管撤销成功、失败还是抛了别的异常，Running 都要放开，不然这一条就再也撤销不了。
+            Finish(item, remove);
+        }
         // 已经恢复了：刷新界面出错不能报成“恢复失败”，也不能让程序崩掉。
         try { item.AfterUndo?.Invoke(); }
         catch (Exception e) { System.Diagnostics.Trace.WriteLine("Amber: refresh after undo failed: " + e); }
@@ -172,8 +188,17 @@ public static class Toasts
         lock (History)
         {
             item.Running = false;
+            item.Failed = !remove;
             if (remove) History.Remove(item);
         }
+    }
+
+    /// <summary>放进状态栏消息参数里的原因：显示时才翻译，换语言后跟着变。</summary>
+    public static object Reason(TrashException e) => new DeferredReason(e);
+
+    private sealed record DeferredReason(TrashException Error)
+    {
+        public override string ToString() => Describe(Error);
     }
 
     /// <summary>回收目录出错的原因写成当前语言的话。</summary>
@@ -186,6 +211,7 @@ public static class Toasts
         TrashFailure.OriginalOutsideOwner => L.T("trash.failure.outside_owner"),
         TrashFailure.EntryMissing => L.T("trash.failure.entry_missing"),
         TrashFailure.ParentMissing => L.T("trash.failure.parent_missing"),
+        TrashFailure.TargetExists => L.F("trash.failure.target_exists", Path.GetFileName(e.PathInvolved)),
         _ => e.Message,
     };
 }

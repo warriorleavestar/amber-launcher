@@ -84,7 +84,10 @@ public sealed class AppSettings
         TypeInfoResolver = AmberJson.WithReflectionFallback(AppJsonContext.Default),
     };
 
-    public static string DataDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Amber");
+    /// <summary>Amber 自己的数据目录。单元测试用 AMBER_DATA_DIR 指到临时目录，免得读写真实的设置和账号。</summary>
+    public static string DataDir => Environment.GetEnvironmentVariable("AMBER_DATA_DIR") is { Length: > 0 } dir
+        ? dir
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Amber");
     public static string FilePath => Path.Combine(DataDir, "settings.json");
 
     public InstanceSettings ToGlobalInstanceSettings() => new()

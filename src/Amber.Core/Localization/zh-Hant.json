@@ -1153,5 +1153,6 @@
   "onboarding.source.official": "官方",
   "onboarding.source.switch": "切換",
   "onboarding.slow": "下載很慢？試試切換下載來源",
-  "accounts.status.offline_added_not_ascii": "已新增離線帳號 {0}。名稱裡有英文字母、數字和底線以外的字元，進入部分伺服器會被拒絕"
+  "accounts.status.offline_added_not_ascii": "已新增離線帳號 {0}。名稱裡有英文字母、數字和底線以外的字元，進入部分伺服器會被拒絕",
+  "trash.failure.target_exists": "原位置已經有一個叫「{0}」的了。先把它改名或刪除，再復原"
 }
