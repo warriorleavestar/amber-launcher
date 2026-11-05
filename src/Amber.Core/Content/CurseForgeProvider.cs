@@ -129,7 +129,7 @@ public sealed class CurseForgeProvider(HttpClient http, Func<string?> apiKey, st
             authors,
             icon,
             m.TryGetProperty("downloadCount", out var d) ? (long)d.GetDouble() : 0,
-            url);
+            Net.WebLinks.TryGetHttpUrl(url, out var pageUri) ? pageUri!.AbsoluteUri : null);
     }
 
     private ContentFile ParseFile(JsonElement f)

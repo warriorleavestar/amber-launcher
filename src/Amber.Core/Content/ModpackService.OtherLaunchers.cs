@@ -160,7 +160,7 @@ public sealed partial class ModpackService
     private static Dictionary<string, string> ReadInstanceCfg(ZipArchiveEntry entry)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
-        using var reader = new StreamReader(entry.Open());
+        using var reader = new StringReader(ArchiveMetadata.ReadText(entry));
         while (reader.ReadLine() is { } line)
         {
             if (line.StartsWith('[') || line.StartsWith('#')) continue;

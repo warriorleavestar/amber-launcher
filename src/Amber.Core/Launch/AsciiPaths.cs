@@ -1,5 +1,4 @@
 using Amber.Core.Localization;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -39,7 +38,7 @@ public static class AsciiPaths
     /// <summary>需要的话返回一个纯英文的联接路径指向 directory；不需要或者建不了时返回 directory 本身。</summary>
     public static string AliasIfNeeded(string directory, Action<string>? log = null)
     {
-        var full = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar);
+        var full = FullDirectoryPath(directory);
         if (!OperatingSystem.IsWindows() || Representable(full)) return full;
         var name = "a" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(full.ToLowerInvariant())))[..10];
         foreach (var parent in LinkParents(full))
@@ -51,19 +50,13 @@ public static class AsciiPaths
                 var info = new DirectoryInfo(link);
                 if (info.Exists)
                 {
-                    if (info.LinkTarget is { } target && Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar).Equals(full, StringComparison.OrdinalIgnoreCase))
+                    if (info.LinkTarget is { } target && FullDirectoryPath(target).Equals(full, StringComparison.OrdinalIgnoreCase))
                         return link;
                     continue;
                 }
-                var psi = new ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-                foreach (var a in new[] { "/d", "/c", "mklink", "/J", link, full }) psi.ArgumentList.Add(a);
-                using var p = Process.Start(psi)!;
-                p.WaitForExit(10000);
-                if (Directory.Exists(link))
-                {
-                    log?.Invoke(L.F("core.launch.paths.junctionfallback", link, full));
-                    return link;
-                }
+                WindowsJunction.Create(link, full);
+                log?.Invoke(L.F("core.launch.paths.junctionfallback", link, full));
+                return link;
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { }
         }
@@ -79,7 +72,7 @@ public static class AsciiPaths
     public static string? LegacyHome(string workDir, Action<string>? log = null)
     {
         if (!OperatingSystem.IsWindows()) return null;
-        var full = Path.GetFullPath(workDir).TrimEnd(Path.DirectorySeparatorChar);
+        var full = FullDirectoryPath(workDir);
         var name = "h" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(full.ToLowerInvariant())))[..10];
         var parent = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Amber", "legacyhome", name);
         if (!Representable(parent)) parent = Path.Combine(Environment.GetEnvironmentVariable("PUBLIC") ?? @"C:\Users\Public", "AmberLegacyHome", name);
@@ -88,15 +81,16 @@ public static class AsciiPaths
         {
             Directory.CreateDirectory(parent);
             var info = new DirectoryInfo(link);
-            if (info.Exists && info.LinkTarget is { } target && Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar).Equals(full, StringComparison.OrdinalIgnoreCase))
+            if (info.Exists && info.LinkTarget is { } target && FullDirectoryPath(target).Equals(full, StringComparison.OrdinalIgnoreCase))
                 return parent;
             if (info.Exists)
             {
-                // 旧联接指向别处（实例搬家了）：只删联接本身，不碰里面的东西；是真文件夹就不动。
+                // 只移除旧联接本身，不碰目标和普通目录；新联接仍由原生接口独占创建。
                 if (info.LinkTarget is null) return null;
                 info.Delete();
             }
-            if (CreateJunction(link, full)) return parent;
+            WindowsJunction.Create(link, full);
+            return parent;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
@@ -105,13 +99,12 @@ public static class AsciiPaths
         return null;
     }
 
-    private static bool CreateJunction(string link, string target)
+    private static string FullDirectoryPath(string directory)
     {
-        var psi = new ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var a in new[] { "/d", "/c", "mklink", "/J", link, target }) psi.ArgumentList.Add(a);
-        using var p = Process.Start(psi)!;
-        p.WaitForExit(10000);
-        return Directory.Exists(link);
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        // 本机磁盘的扩展路径与普通路径使用同一个联接缓存键和比较形式；UNC 保持原样。
+        return OperatingSystem.IsWindows() && full.StartsWith(@"\\?\", StringComparison.Ordinal) && full.Length >= 7 &&
+            char.IsAsciiLetter(full[4]) && full[5] == ':' && full[6] == '\\' ? full[4..] : full;
     }
 
     /// <summary>放联接的地方：先 Amber 的本地数据目录，再公共目录，最后目标所在盘的根目录。要求本身是纯英文。</summary>
@@ -142,7 +135,7 @@ public static class AsciiPaths
         if (File.Exists(path)) (dir, rest) = (Path.GetDirectoryName(path)!, Path.DirectorySeparatorChar + Path.GetFileName(path));
         else if (Directory.Exists(path)) (dir, rest) = (path, "");
         else return arg;
-        var mapped = alias(dir.TrimEnd(Path.DirectorySeparatorChar));
+        var mapped = alias(Path.TrimEndingDirectorySeparator(dir));
         if (rest.Length > 0)
         {
             // 测试、远程配置和跨平台工具可能在 Unix 上处理 Windows 路径；
@@ -174,8 +167,12 @@ public static class AsciiPaths
     public static string Remap(string path, string from, string to)
     {
         var prefix = from.TrimEnd('/', '\\');
+        // 两种分隔符都可作为路径边界，但不能把系统根目录裁成空串或 C:。
+        var root = Path.GetPathRoot(from);
+        if (root is not null && prefix.Length < root.Length) prefix = root;
         if (from == to || !path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return path;
         var rest = path[prefix.Length..];
+        if (Path.EndsInDirectorySeparator(prefix)) return rest.Length == 0 ? to : Path.Combine(to, rest.TrimStart('/', '\\'));
         return rest.Length == 0 || rest[0] is '/' or '\\' ? to + rest : path;
     }
 }

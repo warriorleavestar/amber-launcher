@@ -319,12 +319,16 @@ public class DownloaderTests : IDisposable
         _server.Hang.Add("hang.bin");
         var cachePath = Local("hashes");
         var downloader = Make(cache: new HashCache(cachePath));
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => downloader.DownloadAllAsync([
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var download = downloader.DownloadAllAsync([
             new(_server.Root + "good.bin", Local("good.bin"), Sha1(good), good.Length),
             new(hangUrl, Local("hang.bin"), Sha1(hang), hang.Length),
-        ], null, cts.Token));
+        ], null, cts.Token);
+        // 等待进入下载阶段再取消，避免繁忙机器在校验 good.bin 前就耗尽固定的 500 ms。
+        while (Volatile.Read(ref _server.Requests) == 0 && !download.IsCompleted)
+            await Task.Delay(10, cts.Token);
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
 
         Assert.Contains("good.bin", await File.ReadAllTextAsync(cachePath));
     }

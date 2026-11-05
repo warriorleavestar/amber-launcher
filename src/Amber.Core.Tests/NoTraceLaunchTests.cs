@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Text.Json;
 using Amber.Core.Auth;
 using Amber.Core.Game;
 using Amber.Core.Launch;
@@ -55,6 +56,26 @@ public sealed class NoTraceLaunchTests : IDisposable
 
     private static List<string> GameDirFiles(string root, string pattern) =>
         Directory.EnumerateFiles(root, pattern, SearchOption.AllDirectories).ToList();
+
+    private static void AssertExportedNoTraceConfig(string script, string config)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Contains(config, File.ReadAllText(script));
+            return;
+        }
+
+        // Windows 的路径是固定引导代码读取的 JSON 数据；验证解码后的完整参数，不能只匹配转义后的片段。
+        var lines = File.ReadAllLines(script);
+        var marker = Array.IndexOf(lines, "# AMBER_LAUNCH_DATA_V1");
+        Assert.InRange(marker, 0, lines.Length - 2);
+        var data = JsonSerializer.Deserialize<string[]>(lines[marker + 1]);
+        Assert.NotNull(data);
+        Assert.True(data.Length >= 2);
+        const string prefix = "-Dlog4j.configurationFile=";
+        var argument = Assert.Single(data.Skip(2), a => a.StartsWith(prefix, StringComparison.Ordinal));
+        Assert.Equal(prefix + config, argument);
+    }
 
     /// <summary>原版的日志配置：过滤后的配置写到 Amber 自己的临时目录，游戏目录（可能是真的 .minecraft）里不多出文件；用完能删。</summary>
     [Fact]
@@ -134,7 +155,7 @@ public sealed class NoTraceLaunchTests : IDisposable
         var launcher = Launcher();
         launcher.WriteLaunchScript(script, options);
         var config = Assert.Single(Directory.GetFiles(script + ".amber", "*.amber-notrace.xml"));
-        Assert.Contains(config, File.ReadAllText(script));
+        AssertExportedNoTraceConfig(script, config);
         Assert.Contains("RegexFilter", File.ReadAllText(config));
 
         // 普通启动仍使用临时配置；它被清理不能影响已经导出的脚本。
@@ -143,13 +164,13 @@ public sealed class NoTraceLaunchTests : IDisposable
         Assert.Equal(1, NoTraceDirs.Sweep(_temp, DateTime.UtcNow.AddDays(1)));
         Assert.False(Directory.Exists(temporary));
         Assert.True(File.Exists(config));
-        Assert.Contains(config, File.ReadAllText(script));
+        AssertExportedNoTraceConfig(script, config);
 
         // 再次导出只更新自己的配置，不依赖上一次生成的临时目录。
         launcher.WriteLaunchScript(script, options);
         Assert.Equal(config, Assert.Single(Directory.GetFiles(script + ".amber", "*.amber-notrace.xml")));
         Assert.True(File.Exists(config));
-        Assert.Contains(config, File.ReadAllText(script));
+        AssertExportedNoTraceConfig(script, config);
     }
 
     [Fact]
@@ -166,14 +187,14 @@ public sealed class NoTraceLaunchTests : IDisposable
         Assert.DoesNotContain("amber-notrace.xml", File.ReadAllText(script));
     }
 
-    /// <summary>脚本自己的合法文件名可带 cmd 元字符；生成的无痕配置路径必须经过批处理引用。</summary>
+    /// <summary>脚本自己的合法文件名可带 cmd 元字符；无痕配置路径必须作为完整参数保存在 JSON 中。</summary>
     [Fact]
     public void WindowsScriptEscapesSidecarPathFromExportName()
     {
         if (!OperatingSystem.IsWindows()) return;
         Library("net.minecraftforge", "fmlloader", "1.20.1-47.2.0", Log4j2);
         Version("v", "net.minecraftforge:fmlloader:1.20.1-47.2.0");
-        var script = Path.Combine(_game, "run0 & (100%) !PATH!.bat");
+        var script = Path.Combine(_game, "run0 & (100%) %PATH% !PATH! ^ '.bat");
         Launcher().WriteLaunchScript(script, new LaunchOptions
         {
             VersionId = "v", JavaPath = "java", Session = new GameSession("Tester", Guid.Empty, "0", "legacy"), NoTrace = true,
@@ -182,8 +203,8 @@ public sealed class NoTraceLaunchTests : IDisposable
         Assert.Contains("RegexFilter", File.ReadAllText(config));
         var text = File.ReadAllText(script);
         Assert.Contains("setlocal DisableDelayedExpansion", text);
-        Assert.Contains("run0 ^& ^(100%%^) !PATH!.bat.amber", text);
-        Assert.Contains("-Dlog4j.configurationFile=", text);
+        Assert.Contains("set \"AMBER_LAUNCH_SCRIPT=%~f0\"", text);
+        AssertExportedNoTraceConfig(script, config);
     }
 
     /// <summary>启动时的清理：用它的游戏已经不在了的删掉；游戏还在运行的、刚建好还没有 owner 的留着。</summary>
