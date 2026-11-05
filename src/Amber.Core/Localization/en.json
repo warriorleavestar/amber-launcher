@@ -1086,5 +1086,7 @@
   "core.game.directory.unsafepath": "Rejected an unsafe path in the version file: {0}",
   "core.mp.punch.controlerror": "Dropped a control packet that couldn't be handled ({0})",
   "core.auth.external.insecure": "The external login server must use https (your password and tokens go through it): {0}",
-  "core.auth.external.redirected": "The external login server redirected the request to another address ({0}). Stopped for safety"
+  "core.auth.external.redirected": "The external login server redirected the request to another address ({0}). Stopped for safety",
+  "core.content.modpack.skipped": "Skipped a modpack file with a suspicious name or one that belongs to the launcher: {0}",
+  "core.net.download.unsafetarget": "The download target isn't safe, so the download was stopped: {0}"
 }

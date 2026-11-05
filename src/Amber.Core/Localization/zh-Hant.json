@@ -1058,5 +1058,7 @@
   "core.game.directory.unsafepath": "版本檔案中的路徑不安全，已拒絕：{0}",
   "core.mp.punch.controlerror": "丟棄一個無法處理的控制封包（{0}）",
   "core.auth.external.insecure": "外置登入伺服器必須使用 https（密碼和權杖會經由它傳送）：{0}",
-  "core.auth.external.redirected": "外置登入伺服器把請求轉址到別的位址（{0}），為了安全沒有繼續"
+  "core.auth.external.redirected": "外置登入伺服器把請求轉址到別的位址（{0}），為了安全沒有繼續",
+  "core.content.modpack.skipped": "略過整合包裡名稱可疑或屬於啟動器的檔案：{0}",
+  "core.net.download.unsafetarget": "下載目標位置不安全，已停止：{0}"
 }

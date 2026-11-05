@@ -36,13 +36,52 @@ public sealed class PackTargetTests
     [InlineData("versions/Pack/natives/a.dll")]
     public void LauncherFilesAreSkippedInSharedDir(string relative) => Assert.Null(Shared.Resolve(relative));
 
+    /// <summary>
+    /// 可疑的名字跳过这个文件（并通知），不让整个导入失败：备用数据流、8.3 短名（包括结尾带点或空格、Windows 会去掉的写法）、
+    /// 设备名、路径中间某一段是启动器文件。
+    /// </summary>
     [Theory]
     [InlineData("amber-instance.json::$DATA")]
     [InlineData("amber-instance.json:hidden")]
     [InlineData("AMBER-~1.JSO")]
+    [InlineData("AMBER-~1.JSO.")]
+    [InlineData("AMBER-~1.JSO ")]
+    [InlineData("AMBER-~1.JSO. . ")]
     [InlineData("config/PACK~1.JSO")]
+    [InlineData("PACK~1.JSO ")]
+    [InlineData("PACK~1.JSO.")]
+    [InlineData("amber-instance.json/x")]
+    [InlineData("config/amber-instance.json/x")]
+    [InlineData("Pack.json/x")]
+    [InlineData("Pack.json./x")]
+    [InlineData("CON")]
+    [InlineData("config/nul.txt")]
+    [InlineData("mods/COM1.jar")]
+    [InlineData("lpt\u00b9")]
+    [InlineData("C:\\Windows\\evil.dll")]
+    [InlineData("mods/a?.jar")]
+    [InlineData("...")]
+    public void TrickyNamesAreSkipped(string relative)
+    {
+        var skipped = new List<string>();
+        var target = Isolated with { OnSkip = skipped.Add };
+        Assert.Null(target.Resolve(relative));
+        Assert.Equal([relative], skipped);
+    }
+
+    /// <summary>真正跳出目录的路径才抛异常。</summary>
+    [Theory]
     [InlineData("../evil.txt")]
-    public void TrickyNamesAreRejected(string relative) => Assert.Throws<InvalidDataException>(() => Isolated.Resolve(relative));
+    [InlineData("mods/../../evil.txt")]
+    [InlineData("/etc/passwd")]
+    [InlineData("\\\\server\\share\\x")]
+    [InlineData("\\evil.txt")]
+    public void EscapesAreRejected(string relative) => Assert.Throws<InvalidDataException>(() => Isolated.Resolve(relative));
+
+    /// <summary>规范化以后和 Windows 实际写到的位置一致：结尾的点和空格去掉。</summary>
+    [Fact]
+    public void TrailingDotsAndSpacesAreNormalized() =>
+        Assert.Equal(Path.Combine(VersionDir, "config", "a.txt"), Isolated.Resolve("config. /a.txt.. "));
 
     [Theory]
     [InlineData("mods/a.jar")]

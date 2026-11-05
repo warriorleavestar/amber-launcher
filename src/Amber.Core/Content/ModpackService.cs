@@ -53,7 +53,8 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         Directory.CreateDirectory(workDir);
 
         using var zip = ZipFile.OpenRead(packPath);
-        var target = new PackTarget(workDir, ctx.Dir.VersionDir(id), id);
+        // 可疑的文件名（像 8.3 短名、带冒号、设备名）跳过这一个文件并说一声，不让整个导入失败。
+        var target = new PackTarget(workDir, ctx.Dir.VersionDir(id), id) { OnSkip = path => progress?.Report(new LoaderProgress(L.F("core.content.modpack.skipped", path))) };
         switch (info.Format)
         {
             case "Modrinth": await ImportMrpackFilesAsync(zip, target, progress, ct); break;
@@ -331,41 +332,84 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
     /// <summary>
     /// 整合包文件释放到哪里。启动器自己的文件整合包不能提供，直接跳过：
     /// 任何位置的 amber-instance.json（实例设置，里面有启动前后执行的命令、Java 路径和 JVM 参数），
-    /// 以及版本目录根上的 &lt;id&gt;.json、&lt;id&gt;.jar 和 natives/。大小写不敏感，按规范化后的完整路径判断。
+    /// 以及版本目录根上的 &lt;id&gt;.json、&lt;id&gt;.jar 和 natives/。大小写不敏感，路径里的每一段都查（“amber-instance.json/x”也算）。
     /// </summary>
     internal sealed record PackTarget(string WorkDir, string VersionDir, string Id)
     {
-        /// <summary>能释放时返回完整路径；启动器自己的文件返回 null；跳出目录的路径抛异常。</summary>
+        /// <summary>跳过了一个可疑或属于启动器的文件（参数：整合包里的原路径）。</summary>
+        public Action<string>? OnSkip { get; init; }
+
+        /// <summary>
+        /// 能释放时返回完整路径；启动器自己的文件、可疑的名字返回 null（并通知 OnSkip）；真正跳出目录的路径抛异常。
+        /// 每一段先按 Windows 的规则规范化（去掉结尾的点和空格），再做短名、设备名和启动器文件的判断：
+        /// 不然“AMBER-~1.JSO.”这种名字检查时不像短名，写文件时却被 Windows 当成 amber-instance.json 的短名。
+        /// </summary>
         public string? Resolve(string relative)
         {
-            var full = SafeJoin(WorkDir, relative);
-            return IsLauncherOwned(full) ? null : full;
+            // 以斜杠开头（绝对路径、\\server\share）是真的越界，不是可疑名字。
+            if (relative.StartsWith('/') || relative.StartsWith('\\'))
+                throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
+            if (NormalizeSegments(relative) is not { } segments) return Skip(relative);
+            var full = SafeJoin(WorkDir, string.Join('/', segments));
+            return IsLauncherOwned(full) ? Skip(relative) : full;
+        }
+
+        private string? Skip(string relative)
+        {
+            OnSkip?.Invoke(relative);
+            return null;
         }
 
         private bool IsLauncherOwned(string full)
         {
-            if (Path.GetFileName(full).Equals(Launch.InstanceSettings.FileName, StringComparison.OrdinalIgnoreCase)) return true;
+            var workDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(WorkDir));
+            var inWorkDir = Path.GetRelativePath(workDir, full).Split(Path.DirectorySeparatorChar);
+            if (inWorkDir.Any(s => s.Equals(Launch.InstanceSettings.FileName, StringComparison.OrdinalIgnoreCase))) return true;
             var versionDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(VersionDir));
-            var parent = Path.GetDirectoryName(full) ?? "";
-            if (parent.Equals(versionDir, StringComparison.OrdinalIgnoreCase))
-            {
-                var name = Path.GetFileName(full);
-                if (name.Equals(Id + ".json", StringComparison.OrdinalIgnoreCase) || name.Equals(Id + ".jar", StringComparison.OrdinalIgnoreCase)) return true;
-            }
-            var natives = Path.Combine(versionDir, "natives") + Path.DirectorySeparatorChar;
-            return full.StartsWith(natives, StringComparison.OrdinalIgnoreCase);
+            if (!full.StartsWith(versionDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
+            var first = Path.GetRelativePath(versionDir, full).Split(Path.DirectorySeparatorChar)[0];
+            return first.Equals(Id + ".json", StringComparison.OrdinalIgnoreCase) || first.Equals(Id + ".jar", StringComparison.OrdinalIgnoreCase)
+                   || first.Equals("natives", StringComparison.OrdinalIgnoreCase);
         }
     }
 
     /// <summary>
-    /// 整合包里的路径不可信：拒绝任何能跳出目标目录的路径。
-    /// 也拒绝带冒号（Windows 的备用数据流，“x::$DATA”就是 x 本身）和像 8.3 短文件名（“AMBER-~1.JSO”）的段：它们能绕开按名字的判断。
+    /// 把整合包里的路径按段规范化：去掉空段和“.”，每段去掉结尾的点和空格（Windows 打开文件时也会这么做）。
+    /// 有可疑的段时返回 null：带冒号（备用数据流，“x::$DATA”就是 x 本身）、设备名（CON、NUL、COM1…）、
+    /// 像 8.3 短文件名（“AMBER-~1.JSO”）、含非法字符、规范化后成了空的。“..”原样保留，交给 SafeJoin 判断有没有跳出目录。
     /// </summary>
+    internal static List<string>? NormalizeSegments(string relative)
+    {
+        var result = new List<string>();
+        foreach (var raw in relative.Split('/', '\\'))
+        {
+            if (raw is "" or ".") continue;
+            if (raw == "..") { result.Add(raw); continue; }
+            var segment = raw.TrimEnd('.', ' ');
+            if (segment.Length == 0 || segment.Contains(':') || segment.IndexOfAny(InvalidNameChars) >= 0
+                || IsDeviceName(segment) || ShortName().IsMatch(segment)) return null;
+            result.Add(segment);
+        }
+        return result.Count == 0 ? null : result;
+    }
+
+    private static readonly char[] InvalidNameChars = Path.GetInvalidFileNameChars();
+
+    private static readonly HashSet<string> DeviceNames = new(
+        ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+         "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM\u00b9", "COM\u00b2", "COM\u00b3",
+         "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT\u00b9", "LPT\u00b2", "LPT\u00b3"],
+        StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Windows 的设备名（带不带扩展名都算，“nul.txt”也是 NUL）。</summary>
+    internal static bool IsDeviceName(string segment) => DeviceNames.Contains(segment.Split('.')[0].TrimEnd(' '));
+
+    /// <summary>整合包里的路径不可信：拒绝任何能跳出目标目录的路径（真正的越界，抛异常）。</summary>
     public static string SafeJoin(string root, string relative)
     {
-        if (relative.Contains(':') || relative.Split('/', '\\').Any(s => ShortName().IsMatch(s)))
-            throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
         var rootFull = Path.GetFullPath(root);
+        if (Path.IsPathRooted(relative) || relative.Contains(':'))
+            throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
         var full = Path.GetFullPath(Path.Combine(rootFull, relative.Replace('/', Path.DirectorySeparatorChar)));
         var prefix = rootFull.EndsWith(Path.DirectorySeparatorChar) ? rootFull : rootFull + Path.DirectorySeparatorChar;
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))

@@ -116,10 +116,82 @@ public sealed class VersionPathTests : IDisposable
     [Fact]
     public void DownloaderChecksFinalTarget()
     {
-        var inside = Path.Combine(_game, "libraries", "a.jar");
-        Downloader.CheckTarget(new DownloadItem("https://x", inside, Within: Path.Combine(_game, "libraries")));
-        Assert.Throws<InvalidDataException>(() => Downloader.CheckTarget(new DownloadItem("https://x", _sentinel, Within: Path.Combine(_game, "libraries"))));
-        Assert.Throws<InvalidDataException>(() => Downloader.CheckTarget(new DownloadItem("https://x", Path.Combine(_game, "libraries", "..", "..", "sentinel.txt"))));
-        Assert.Throws<InvalidDataException>(() => Downloader.CheckTarget(new DownloadItem("https://x", "relative.jar")));
+        var libraries = Path.Combine(_game, "libraries");
+        var inside = Path.Combine(libraries, "a.jar");
+        Downloader.CheckTarget(new DownloadItem("https://x", inside, Within: libraries));
+        Assert.Throws<InvalidDataException>(() => Downloader.CheckTarget(new DownloadItem("https://x", _sentinel, Within: libraries)));
+        Assert.Throws<InvalidDataException>(() => Downloader.CheckTarget(new DownloadItem("https://x", Path.Combine(libraries, "..", "..", "sentinel.txt"), Within: libraries)));
+        Assert.Throws<InvalidDataException>(() => Downloader.CheckTarget(new DownloadItem("https://x", "relative.jar", Within: libraries)));
+        // 没设 Within：用户自己选的位置（工具箱里手打的文件夹，可能不是规范写法）照原样用。
+        Downloader.CheckTarget(new DownloadItem("https://x", Path.Combine(_game, "tools", "..", "tools", "x.zip")));
+        Downloader.CheckTarget(new DownloadItem("https://x", _game + Path.DirectorySeparatorChar + Path.DirectorySeparatorChar + "x.zip"));
+    }
+
+    /// <summary>1.5.2 以前的 Forge：版本文件里的 amberLegacyLibs 名字带路径时不复制，lib/ 外面的文件原封不动。</summary>
+    [Theory]
+    [InlineData("../../../sentinel.txt")]
+    [InlineData("..\\..\\..\\sentinel.txt")]
+    [InlineData("C:\\sentinel.txt")]
+    [InlineData("sub/x.jar")]
+    [InlineData("..")]
+    public void LegacyForgeLibNamesCannotEscape(string name)
+    {
+        var cache = LegacyForge.FmlCacheDir(_game);
+        Directory.CreateDirectory(cache);
+        File.WriteAllText(Path.Combine(cache, "evil.jar"), "evil");
+        var work = Path.Combine(_game, "versions", "old");
+        Assert.Throws<InvalidDataException>(() => LegacyForge.EnsureLibraries(_game, work, [new FmlLibrary(name, Sha)], null));
+        Assert.Equal("keep", File.ReadAllText(_sentinel));
+    }
+
+    /// <summary>旧版资源索引（virtual / map_to_resources）里的名字跳出目录：不复制，直接报错。</summary>
+    [Theory]
+    [InlineData(false, "../../../../sentinel.txt")]
+    [InlineData(true, "../../sentinel.txt")]
+    [InlineData(true, "C:/sentinel.txt")]
+    [InlineData(false, "/sentinel.txt")]
+    public void LegacyAssetNamesCannotEscape(bool mapToResources, string name)
+    {
+        var dir = new GameDirectory(_game);
+        var obj = dir.AssetObjectPath(Sha);
+        Directory.CreateDirectory(Path.GetDirectoryName(obj)!);
+        File.WriteAllText(obj, "evil");
+        Directory.CreateDirectory(Path.GetDirectoryName(dir.AssetIndexPath("legacy"))!);
+        File.WriteAllText(dir.AssetIndexPath("legacy"),
+            $$$$"""{"{{{{(mapToResources ? "map_to_resources" : "virtual")}}}}":true,"objects":{"{{{{name}}}}":{"hash":"{{{{Sha}}}}","size":4}}}""");
+        Version("old", """{"id":"old","type":"release","mainClass":"x","libraries":[],"assets":"legacy"}""");
+        var launcher = new Amber.Core.Launch.GameLauncher(dir);
+        var work = Path.Combine(_game, "versions", "old");
+        Assert.Throws<InvalidDataException>(() => launcher.PrepareLegacyAssets(dir.ResolveVersion("old"), work));
+        Assert.Equal("keep", File.ReadAllText(_sentinel));
+        Assert.Single(Directory.EnumerateFiles(_base));
+    }
+
+    /// <summary>natives 包里的条目名带反斜杠的“..”：只取文件名平铺进 natives；带盘符的直接拒绝。</summary>
+    [Fact]
+    public void NativeEntriesStayInNativesDir()
+    {
+        var dir = new GameDirectory(_game);
+        var jar = dir.LibraryPath("a/b/1/b-1-natives-windows.jar");
+        Directory.CreateDirectory(Path.GetDirectoryName(jar)!);
+        void Pack(params string[] names)
+        {
+            File.Delete(jar);
+            using var zip = System.IO.Compression.ZipFile.Open(jar, System.IO.Compression.ZipArchiveMode.Create);
+            foreach (var n in names)
+                using (var w = new StreamWriter(zip.CreateEntry(n).Open())) w.Write("dll");
+        }
+        Version("n", """{"id":"n","type":"release","mainClass":"x","libraries":[{"name":"a:b:1:natives-windows"}]}""");
+        var launcher = new Amber.Core.Launch.GameLauncher(dir) { BaseRules = new RuleEvaluator { OsName = "windows", Arch = "x86_64", OsVersion = "10.0" } };
+
+        Pack("..\\..\\..\\..\\..\\evil.dll", "sub/../../ok.dll");
+        launcher.ExtractNatives("n", dir.ResolveVersion("n"));
+        Assert.True(File.Exists(Path.Combine(dir.NativesDir("n"), "evil.dll")));
+        Assert.True(File.Exists(Path.Combine(dir.NativesDir("n"), "ok.dll")));
+        Assert.Single(Directory.EnumerateFiles(_base));
+        Assert.Empty(Directory.EnumerateFiles(_game, "*.dll", SearchOption.TopDirectoryOnly));
+
+        Pack("C:\\evil.dll");
+        Assert.Throws<InvalidDataException>(() => launcher.ExtractNatives("n", dir.ResolveVersion("n")));
     }
 }

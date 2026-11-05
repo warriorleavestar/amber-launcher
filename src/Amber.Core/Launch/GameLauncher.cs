@@ -243,7 +243,7 @@ public sealed class GameLauncher(GameDirectory dir)
         version.AmberForge is not null
         || DateTimeOffset.TryParse(version.ReleaseTime, out var released) && released < new DateTimeOffset(2013, 6, 25, 0, 0, 0, TimeSpan.Zero);
 
-    private void ExtractNatives(string versionId, VersionJson version)
+    internal void ExtractNatives(string versionId, VersionJson version)
     {
         var nativesDir = dir.NativesDir(versionId);
         Directory.CreateDirectory(nativesDir);
@@ -254,10 +254,15 @@ public sealed class GameLauncher(GameDirectory dir)
             {
                 if (entry.FullName.EndsWith('/') || entry.FullName.StartsWith("META-INF/", StringComparison.OrdinalIgnoreCase)) continue;
                 if (lib.ExtractExclude.Any(ex => entry.FullName.StartsWith(ex, StringComparison.OrdinalIgnoreCase))) continue;
-                if (!IsNativeFile(entry.Name)) continue;
+                // ZipArchiveEntry.Name 只按“/”拆（Windows 打的包里“..\..\x.dll”“C:\x.dll”会原样留着）：自己按两种斜杠取文件名，
+                // 带盘符或冒号的条目直接拒绝。
+                if (Path.IsPathRooted(entry.FullName) || entry.FullName.Contains(':'))
+                    throw new InvalidDataException(L.F("core.game.directory.unsafepath", entry.FullName));
+                var name = Path.GetFileName(entry.FullName.Replace('\\', '/'));
+                if (!IsNativeFile(name)) continue;
 
                 // natives 统一平铺到一个目录，LWJGL 只在 java.library.path 根目录查找。
-                var target = Path.Combine(nativesDir, entry.Name);
+                var target = GameDirectory.Contained(nativesDir, name);
                 if (File.Exists(target) && new FileInfo(target).Length == entry.Length) continue;
                 try { entry.ExtractToFile(target, true); }
                 catch (IOException) { /* 文件被上一次运行的游戏占用，沿用旧文件 */ }
@@ -275,7 +280,7 @@ public sealed class GameLauncher(GameDirectory dir)
         indexName is "pre-1.6" ? Path.Combine(workDir, "resources") : Path.Combine(dir.AssetsDir, "virtual", indexName);
 
     /// <summary>1.7.2 及更早的版本要求资源按原始文件名平铺。</summary>
-    private void PrepareLegacyAssets(VersionJson version, string workDir)
+    internal void PrepareLegacyAssets(VersionJson version, string workDir)
     {
         var id = version.AssetIndex?.Id ?? version.Assets;
         if (id is null) return;
@@ -290,7 +295,8 @@ public sealed class GameLauncher(GameDirectory dir)
         foreach (var (name, obj) in index.Objects)
         {
             var source = dir.AssetObjectPath(obj.Hash);
-            var target = Path.Combine(targetRoot, name.Replace('/', Path.DirectorySeparatorChar));
+            // 资源索引里的名字不可信：拼出来必须还在 resources 或 virtual 目录里。
+            var target = GameDirectory.Contained(targetRoot, name);
             if (!File.Exists(source) || File.Exists(target)) continue;
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(source, target);
