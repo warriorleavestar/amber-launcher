@@ -74,6 +74,13 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Amber.Core.Localization.L.SetLanguage(Amber.Core.Localization.L.Source);
         try
         {
+            if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "game")
+            {
+                await GameLifecycleAsync();
+                Log("DONE");
+                window.Close();
+                return;
+            }
             // 必须在布局检查遍历所有页面之前验证，免得漏掉首次进入资源页的空列表。
             await ContentAutoLoadAsync();
             if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "content")
@@ -276,6 +283,64 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         invoke.Invoke();
         return true;
     });
+
+    /// <summary>在独立测试目录里，验证主按钮启动、退出，以及已保存世界的再次进入和保存。</summary>
+    private async Task GameLifecycleAsync()
+    {
+        var id = Environment.GetEnvironmentVariable("AMBER_SELFTEST_VERSION") ?? "1.21.1";
+        var home = Page<HomeViewModel>();
+        var log = Page<LogViewModel>();
+        main.CurrentPage = home;
+        home.SelectedVersion = id;
+        var launching = home.PrimaryCommand.ExecuteAsync(null);
+        try
+        {
+            Check("准备期间主按钮仍可取消", home.PrimaryCommand.CanExecute(null));
+            var reached = await WaitAsync(() => home.IsRunning && log.Lines.Any(l =>
+                l.Message.Contains("Sound engine started") || l.Message.Contains("OpenAL initialized")), 180);
+            Check("主按钮启动游戏到主界面", reached, home.Status);
+            if (!reached) throw new InvalidOperationException(home.Status);
+            if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_EXPECT_LANGUAGE") is { Length: > 0 } expectedLanguage)
+            {
+                var optionsPath = Path.Combine(home.Service.WorkDirFor(id), "options.txt");
+                Check("游戏已应用系统语言预设", File.ReadAllLines(optionsPath).Contains("lang:" + expectedLanguage), expectedLanguage);
+            }
+            await ShotAsync("主按钮运行中");
+            Check("运行期间主按钮仍可退出", home.PrimaryCommand.CanExecute(null));
+            await home.PrimaryCommand.ExecuteAsync(null);
+            Check("主按钮正常退出游戏", await WaitAsync(() => home.RunCount == 0, 60), home.Status);
+            await launching.WaitAsync(TimeSpan.FromSeconds(5));
+            Check("用户退出不显示崩溃", !home.HasCrash, home.Status);
+
+            var instance = Page<InstanceViewModel>();
+            main.CurrentPage = instance;
+            instance.SelectedId = id;
+            instance.TabIndex = 2;
+            if (!await WaitAsync(() => instance.Worlds.Count > 0, 20))
+                throw new InvalidOperationException("测试目录里没有已保存的世界");
+            var world = instance.Worlds[0];
+            var level = Path.Combine(world.World.Path, "level.dat");
+            var savedBefore = File.GetLastWriteTimeUtc(level);
+            instance.JoinWorldCommand.Execute(world);
+            var joined = await WaitAsync(() => home.IsRunning && log.Lines.Any(l =>
+                l.Message.Contains("logged in with entity id")), 180);
+            Check("从实例页重新进入已保存世界", joined, home.Status);
+            if (!joined) throw new InvalidOperationException(home.Status);
+            main.CurrentPage = home;
+            await ShotAsync("已进入存档");
+            await home.PrimaryCommand.ExecuteAsync(null);
+            Check("世界内主按钮正常退出", await WaitAsync(() => home.RunCount == 0, 60), home.Status);
+            log.Flush();
+            Check("退出时保存存档", File.GetLastWriteTimeUtc(level) > savedBefore
+                && log.Lines.Any(l => l.Message.Contains("All dimensions are saved")));
+            Check("保存退出不显示崩溃", !home.HasCrash, home.Status);
+        }
+        finally
+        {
+            File.WriteAllLines(Path.Combine(reportDir, "game-log.txt"), log.Lines.Select(l => l.Message));
+            if (home.RunCount > 0) home.CancelCommand.Execute(null);
+        }
+    }
 
     /// <summary>下载页全程操作控件：搜索框输入、点“安装…”、在下拉框选 Fabric、改名字、点“开始安装”。</summary>
     private async Task InstallLoaderAsync()
