@@ -2,6 +2,8 @@ using Amber.Core.Localization;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Nodes;
 
 namespace Amber.Core.Multiplayer;
@@ -209,25 +211,37 @@ public sealed class DirectSession : IAsyncDisposable
         if (!IsHost && Bridge is not null && _gathered is not null)
         {
             // 告诉房主自己的地址（房主能被直接连上时，加入方不用贴回复码，房主靠这条消息拿到加入方地址）。
-            _ = Bridge.SendControlAsync(peer, new JsonObject
-            {
-                ["op"] = "hello",
-                ["code"] = LocalCode?.Encode(),
-            });
+            if (LocalCode is { } code) _ = Bridge.SendControlAsync(peer, Hello(code));
         }
         StateChanged?.Invoke();
     }
+
+    /// <summary>
+    /// 加入方连上后发给房主的 hello：只有会话 id、NAT 类型和地址。
+    /// 直连通道的控制消息只认证不加密，所以不带房间码；能通过 HMAC 校验本身就说明对方知道房间密钥。
+    /// </summary>
+    internal static JsonObject Hello(DirectCode code)
+    {
+        var hello = code.Addresses();
+        hello["op"] = "hello";
+        return hello;
+    }
+
+    /// <summary>房主：解析 hello，会话 id 要和自己的一致（别的房间或旧会话的 hello 不认）。</summary>
+    internal static bool TryParseHello(JsonObject message, string expectedSession, out NatKind nat, out List<Candidate> candidates) =>
+        DirectCode.TryParseAddresses(message, out var session, out nat, out candidates)
+        && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(session), Encoding.UTF8.GetBytes(expectedSession));
 
     private void OnControl(DirectPeer peer, JsonObject message)
     {
         switch (message["op"]?.GetValue<string>())
         {
             case "hello" when IsHost:
-                if (DirectCode.TryParse(message["code"]?.GetValue<string>(), out var code, out _) && code.Room == Room)
+                if (LocalCode is { } local && TryParseHello(message, local.Session, out var nat, out var candidates))
                 {
-                    _guestCandidates = code.Candidates;
-                    _guestNat = code.Nat;
-                    Log(L.T("core.mp.session.guestaddresses") + string.Join(L.T("core.mp.format.listseparator"), code.Candidates));
+                    _guestCandidates = candidates;
+                    _guestNat = nat;
+                    Log(L.T("core.mp.session.guestaddresses") + string.Join(L.T("core.mp.format.listseparator"), candidates));
                 }
                 break;
             case "step" when !IsHost:

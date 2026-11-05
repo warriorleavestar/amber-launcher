@@ -67,15 +67,48 @@ public sealed record DirectCode(bool IsReply, RoomCode Room, string Session, Nat
 
     public string Encode()
     {
-        var json = new JsonObject
-        {
-            ["r"] = Room.ToString(),
-            ["s"] = Session,
-            ["n"] = Nat.ToString(),
-            ["c"] = new JsonArray(Candidates.Select(c => (JsonNode?)new JsonArray(c.Kind.ToString(), c.EndPoint.ToString())).ToArray()),
-        };
+        var json = Addresses();
+        json["r"] = Room.ToString();
         var body = Convert.ToBase64String(Encoding.UTF8.GetBytes(json.ToJsonString())).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         return $"{(IsReply ? ReplyPrefix : InvitePrefix)}{Version}-{body}";
+    }
+
+    /// <summary>
+    /// 只有会话 id、NAT 类型和地址，没有房间码：经直连通道发的 hello 用它。
+    /// 直连通道的控制消息只有 HMAC 认证、没有加密，路上的人看得到内容，所以绝不能带房间码（所有密钥都由它派生）。
+    /// </summary>
+    public JsonObject Addresses() => new()
+    {
+        ["s"] = Session,
+        ["n"] = Nat.ToString(),
+        ["c"] = new JsonArray(Candidates.Select(c => (JsonNode?)new JsonArray(c.Kind.ToString(), c.EndPoint.ToString())).ToArray()),
+    };
+
+    /// <summary>解析 <see cref="Addresses"/> 的内容（对方的 hello）。会话 id 长度不对时返回 false。</summary>
+    public static bool TryParseAddresses(JsonObject? json, out string session, out NatKind nat, out List<Candidate> candidates)
+    {
+        session = "";
+        nat = NatKind.Unknown;
+        candidates = [];
+        if (json is null) return false;
+        try
+        {
+            session = (json["s"] as JsonValue)?.TryGetValue<string>(out var s) == true ? s : "";
+            if (session.Length is < 8 or > 64) return false;
+            nat = (json["n"] as JsonValue)?.TryGetValue<string>(out var n) == true && Enum.TryParse<NatKind>(n, out var kind) && Enum.IsDefined(kind) ? kind : NatKind.Unknown;
+            foreach (var item in json["c"] as JsonArray ?? [])
+            {
+                if (item is not JsonArray pair || pair.Count != 2) continue;
+                if ((pair[0] as JsonValue)?.TryGetValue<string>(out var k) == true && Enum.TryParse<PathKind>(k, out var path) && Enum.IsDefined(path)
+                    && (pair[1] as JsonValue)?.TryGetValue<string>(out var e) == true && IPEndPoint.TryParse(e, out var ep) && ep.Port > 0)
+                    candidates.Add(new Candidate(path, ep));
+            }
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     /// <summary>解析粘贴的文字。版本不对时 error 说明原因。</summary>
