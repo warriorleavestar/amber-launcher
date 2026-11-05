@@ -1076,5 +1076,6 @@
   "multiplayer.matrix.stop_test": "停止测试",
   "core.mp.punch.peerevicted": "{0} 太久没有回应，已移除",
   "core.mp.matrix.requestexpired": "房主的测试请求太久没有回答，已作废",
-  "multiplayer.matrix.request_gone": "这次测试请求已经作废（超时或房主已取消），没有开始测试"
+  "multiplayer.matrix.request_gone": "这次测试请求已经作废（超时或房主已取消），没有开始测试",
+  "content.modpack.installed_skipped": "整合包已安装为 {0}。跳过了 {1} 个可疑或属于启动器的文件：{2}"
 }

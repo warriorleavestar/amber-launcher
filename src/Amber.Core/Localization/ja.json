@@ -1076,5 +1076,6 @@
   "multiplayer.matrix.stop_test": "テストを停止",
   "core.mp.punch.peerevicted": "{0} から長時間応答がないため削除しました",
   "core.mp.matrix.requestexpired": "ホストのテスト要求に長時間応答がなかったため、無効になりました",
-  "multiplayer.matrix.request_gone": "このテスト要求は無効になりました（タイムアウトまたはホストが取り消し）。テストは開始されていません"
+  "multiplayer.matrix.request_gone": "このテスト要求は無効になりました（タイムアウトまたはホストが取り消し）。テストは開始されていません",
+  "content.modpack.installed_skipped": "Modpack を {0} としてインストールしました。不審なファイルまたはランチャー専用のファイル {1} 件をスキップしました：{2}"
 }

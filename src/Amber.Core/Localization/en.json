@@ -1104,5 +1104,6 @@
   "multiplayer.matrix.stop_test": "Stop test",
   "core.mp.punch.peerevicted": "{0} stopped responding and was removed",
   "core.mp.matrix.requestexpired": "The host's test request went unanswered for too long and has expired",
-  "multiplayer.matrix.request_gone": "This test request is no longer valid (it timed out or the host cancelled it). No test was started."
+  "multiplayer.matrix.request_gone": "This test request is no longer valid (it timed out or the host cancelled it). No test was started.",
+  "content.modpack.installed_skipped": "Modpack installed as {0}. Skipped {1} suspicious or launcher-owned files: {2}"
 }

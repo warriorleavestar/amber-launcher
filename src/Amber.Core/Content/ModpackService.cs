@@ -42,7 +42,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
     }
 
     /// <summary>安装整合包：先装加载器（版本名字用 name），再下载文件、释放 overrides 到版本隔离目录。</summary>
-    public async Task<string> ImportAsync(string packPath, string name, Func<string, string> workDirForVersion, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default)
+    /// <param name="onSkip">跳过了一个文件（整合包里的原路径）。进度消息会被后面的覆盖，界面要在导入完成后汇总时用这个。</param>
+    public async Task<string> ImportAsync(string packPath, string name, Func<string, string> workDirForVersion, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default,
+        Action<string>? onSkip = null)
     {
         var info = Inspect(packPath);
         name = name.Trim();
@@ -54,7 +56,11 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
 
         using var zip = ZipFile.OpenRead(packPath);
         // 可疑的文件名（像 8.3 短名、带冒号、设备名）跳过这一个文件并说一声，不让整个导入失败。
-        var target = new PackTarget(workDir, ctx.Dir.VersionDir(id), id) { OnSkip = path => progress?.Report(new LoaderProgress(L.F("core.content.modpack.skipped", path))) };
+        var target = new PackTarget(workDir, ctx.Dir.VersionDir(id), id) { OnSkip = path =>
+        {
+            progress?.Report(new LoaderProgress(L.F("core.content.modpack.skipped", path)));
+            onSkip?.Invoke(path);
+        } };
         switch (info.Format)
         {
             case "Modrinth": await ImportMrpackFilesAsync(zip, target, progress, ct); break;
@@ -321,7 +327,8 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         foreach (var entry in zip.Entries)
         {
             if (!entry.FullName.StartsWith(prefix, StringComparison.Ordinal) || entry.FullName.EndsWith('/')) continue;
-            var relative = entry.FullName[prefix.Length..];
+            // 前缀后面多出来的斜杠（“overrides//mods/x.jar”）只是多余的分隔符，不是绝对路径：去掉再判断。
+            var relative = entry.FullName[prefix.Length..].TrimStart('/', '\\');
             if (skip?.Contains(relative) == true) continue;
             if (target.Resolve(relative) is not { } path) continue;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -367,8 +374,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
             if (inWorkDir.Any(s => s.Equals(Launch.InstanceSettings.FileName, StringComparison.OrdinalIgnoreCase))) return true;
             var versionDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(VersionDir));
             if (!full.StartsWith(versionDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
-            var first = Path.GetRelativePath(versionDir, full).Split(Path.DirectorySeparatorChar)[0];
-            return first.Equals(Id + ".json", StringComparison.OrdinalIgnoreCase) || first.Equals(Id + ".jar", StringComparison.OrdinalIgnoreCase)
+            var first = Path.GetRelativePath(versionDir, full).Split(Path.DirectorySeparatorChar)[0].Normalize(System.Text.NormalizationForm.FormC);
+            var id = Id.Normalize(System.Text.NormalizationForm.FormC);
+            return first.Equals(id + ".json", StringComparison.OrdinalIgnoreCase) || first.Equals(id + ".jar", StringComparison.OrdinalIgnoreCase)
                    || first.Equals("natives", StringComparison.OrdinalIgnoreCase);
         }
     }
@@ -381,10 +389,12 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
     internal static List<string>? NormalizeSegments(string relative)
     {
         var result = new List<string>();
-        foreach (var raw in relative.Split('/', '\\'))
+        foreach (var piece in relative.Split('/', '\\'))
         {
-            if (raw is "" or ".") continue;
-            if (raw == "..") { result.Add(raw); continue; }
+            if (piece is "" or ".") continue;
+            if (piece == "..") { result.Add(piece); continue; }
+            // 统一成 NFC：macOS 的文件系统把 NFC 和 NFD 当成同一个名字，不统一的话启动器文件的检查可能被绕过。
+            var raw = piece.IsNormalized(System.Text.NormalizationForm.FormC) ? piece : piece.Normalize(System.Text.NormalizationForm.FormC);
             var segment = raw.TrimEnd('.', ' ');
             if (segment.Length == 0 || segment.Contains(':') || segment.IndexOfAny(InvalidNameChars) >= 0
                 || IsDeviceName(segment) || ShortName().IsMatch(segment)) return null;
@@ -393,7 +403,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         return result.Count == 0 ? null : result;
     }
 
-    private static readonly char[] InvalidNameChars = Path.GetInvalidFileNameChars();
+    // 按 Windows 的规则判断（别的系统上 GetInvalidFileNameChars 只有 \0 和 /）：整合包要在哪都能装、导出后在 Windows 上也能用。
+    private static readonly char[] InvalidNameChars =
+        [.. Enumerable.Range(0, 32).Select(i => (char)i), '"', '<', '>', '|', '?', '*', ':', '/', '\\'];
 
     private static readonly HashSet<string> DeviceNames = new(
         ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",

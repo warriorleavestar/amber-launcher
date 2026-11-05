@@ -474,14 +474,19 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     private async Task ImportCoreAsync(string path, string name, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException(L.T("content.modpack.name_required"));
+        var skipped = new List<string>();
         var id = await _service.Modpacks.ImportAsync(path, name, _service.Directory.VersionDir, new Progress<LoaderProgress>(p =>
         {
             Status = p.Stage;
             if (p.Percent is { } percent) Progress = percent;
-        }), ct);
+        }), ct, onSkip: file => { lock (skipped) skipped.Add(file); });
         await Ui.FlushAsync();
         _service.ForceIsolated(id);
-        Status = L.F("content.modpack.installed", id);
+        // 跳过的文件在进度里一闪而过，完成时再汇总说一次。
+        lock (skipped)
+            Status = skipped.Count == 0
+                ? L.F("content.modpack.installed", id)
+                : L.F("content.modpack.installed_skipped", id, skipped.Count, string.Join(L.T("core.mp.format.listseparator"), skipped.Take(5)) + (skipped.Count > 5 ? "…" : ""));
         _service.NotifyInstalledChanged();
     }
 
