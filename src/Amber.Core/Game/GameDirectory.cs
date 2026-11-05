@@ -63,7 +63,7 @@ public sealed class GameDirectory(string root)
         return full.Length > prefix.Length && full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>默认目录：Windows 为 %APPDATA%\.minecraft。</summary>
+    /// <summary>当前系统的 Minecraft 官方默认目录。</summary>
     public static string DefaultRoot() =>
         OperatingSystem.IsWindows()
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft")

@@ -230,7 +230,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
 
     public string ComponentText => IsComponentReady
         ? L.F("multiplayer.component.ready", EasyTierRelease.Version)
-        : L.F("multiplayer.component.required", EasyTierRelease.Version, EasyTierRelease.Size / 1024 / 1024);
+        : L.F("multiplayer.component.required", EasyTierRelease.Version, EasyTierRelease.Current.Size / 1024 / 1024);
 
     public string LicenseText =>
         L.F("multiplayer.component.license", EasyTierRelease.License, EasyTierRelease.ProjectUrl);
@@ -313,7 +313,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             Status = L.T("multiplayer.component.downloading");
             await _service.EasyTier.EnsureAsync(new Progress<DownloadProgress>(p =>
             {
-                DownloadPercent = Math.Min(100, 100.0 * p.BytesDownloaded / EasyTierRelease.Size);
+                DownloadPercent = Math.Min(100, 100.0 * p.BytesDownloaded / EasyTierRelease.Current.Size);
             }), _downloadCts.Token);
             IsComponentReady = true;
             Status = L.T("multiplayer.component.downloaded");

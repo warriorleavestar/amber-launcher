@@ -143,6 +143,13 @@ public static class AsciiPaths
         else if (Directory.Exists(path)) (dir, rest) = (path, "");
         else return arg;
         var mapped = alias(dir.TrimEnd(Path.DirectorySeparatorChar));
+        if (rest.Length > 0)
+        {
+            // 测试、远程配置和跨平台工具可能在 Unix 上处理 Windows 路径；
+            // 别把 C:\alias\file 拼成 C:\alias/file。
+            var separator = mapped.Contains('\\') && !mapped.Contains('/') ? '\\' : Path.DirectorySeparatorChar;
+            rest = separator + rest.TrimStart('/', '\\');
+        }
         return prefix + mapped + rest + suffix;
     }
 
@@ -166,9 +173,9 @@ public static class AsciiPaths
     /// <summary>把 path 里 from 开头的部分换成 to。</summary>
     public static string Remap(string path, string from, string to)
     {
-        var prefix = from.TrimEnd(Path.DirectorySeparatorChar);
+        var prefix = from.TrimEnd('/', '\\');
         if (from == to || !path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return path;
         var rest = path[prefix.Length..];
-        return rest.Length == 0 || rest[0] == Path.DirectorySeparatorChar ? to + rest : path;
+        return rest.Length == 0 || rest[0] is '/' or '\\' ? to + rest : path;
     }
 }

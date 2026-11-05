@@ -419,10 +419,15 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
     /// <summary>整合包里的路径不可信：拒绝任何能跳出目标目录的路径（真正的越界，抛异常）。</summary>
     public static string SafeJoin(string root, string relative)
     {
+        // ZIP 条目的分隔符不受当前系统影响；Unix 上也必须拒绝 Windows 绝对路径和反斜杠穿越。
+        if (string.IsNullOrWhiteSpace(relative) || relative[0] is '/' or '\\' ||
+            (relative.Length >= 2 && char.IsAsciiLetter(relative[0]) && relative[1] == ':'))
+            throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
         var rootFull = Path.GetFullPath(root);
         if (Path.IsPathRooted(relative) || relative.Contains(':'))
             throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
-        var full = Path.GetFullPath(Path.Combine(rootFull, relative.Replace('/', Path.DirectorySeparatorChar)));
+        var normalized = relative.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+        var full = Path.GetFullPath(Path.Combine(rootFull, normalized));
         var prefix = rootFull.EndsWith(Path.DirectorySeparatorChar) ? rootFull : rootFull + Path.DirectorySeparatorChar;
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));

@@ -265,13 +265,36 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             else if (File.Exists(path))
                 Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
         }
-        else if (System.IO.Directory.Exists(path))
-        {
-            System.IO.Directory.Delete(path, true);
-        }
         else
         {
-            File.Delete(path);
+            MoveToUnixTrash(path);
+        }
+    }
+
+    private static void MoveToUnixTrash(string path)
+    {
+        if (!System.IO.Directory.Exists(path) && !File.Exists(path)) return;
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var files = OperatingSystem.IsMacOS()
+            ? Path.Combine(home, ".Trash")
+            : Path.Combine(Environment.GetEnvironmentVariable("XDG_DATA_HOME") ?? Path.Combine(home, ".local", "share"), "Trash", "files");
+        var info = OperatingSystem.IsMacOS() ? null : Path.Combine(Path.GetDirectoryName(files)!, "info");
+        System.IO.Directory.CreateDirectory(files);
+        if (info is not null) System.IO.Directory.CreateDirectory(info);
+
+        var name = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        var target = Path.Combine(files, name);
+        for (var i = 2; File.Exists(target) || System.IO.Directory.Exists(target); i++)
+            target = Path.Combine(files, $"{name}.{i}");
+
+        if (System.IO.Directory.Exists(path)) System.IO.Directory.Move(path, target);
+        else File.Move(path, target);
+
+        if (info is not null)
+        {
+            var original = new Uri(Path.GetFullPath(path)).AbsolutePath;
+            File.WriteAllText(Path.Combine(info, Path.GetFileName(target) + ".trashinfo"),
+                $"[Trash Info]\nPath={original}\nDeletionDate={DateTime.Now:yyyy-MM-ddTHH:mm:ss}\n");
         }
     }
 
