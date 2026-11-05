@@ -218,7 +218,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     [ObservableProperty] public partial string? TargetInstance { get; set; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsIdle), nameof(IsHosting), nameof(IsJoined))]
+    [NotifyPropertyChangedFor(nameof(IsIdle), nameof(IsHosting), nameof(IsJoined), nameof(IsDirectHost))]
     public partial string Mode { get; set; } = "";
 
     public bool IsIdle => Mode == "";
