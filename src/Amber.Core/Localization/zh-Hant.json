@@ -400,6 +400,7 @@
   "core.mp.diagnostics.visibleips": "未遮蔽（使用者選擇包含）",
   "core.mp.exit.failure_log": "[轉發] {0}",
   "core.mp.exit.invalid_virtual_ip": "轉發出口必須是房間內成員的虛擬 IP：{0}",
+  "core.mp.exit.local_scan_failed": "讀取本機網路卡資訊失敗（{0}），為了避免其他人透過你連到你的電腦和家中的裝置，暫時不轉發。稍後會自動重試。",
   "core.mp.exit.public_ip_ready": "[轉發] 已查到公網 IP，開始轉發",
   "core.mp.exit.public_ip_unavailable": "查不到你的公網 IP（無法連上 STUN 伺服器，可能是 UDP 被封鎖），為了避免其他人透過你連到你的路由器，暫時不轉發。網路恢復後會自動重試。",
   "core.mp.failure.symmetric": "雙方都是對稱 NAT（嚴格），幾乎無法直連。可請其中一方改用家用寬頻、開啟路由器 UPnP，或新增連線節點",

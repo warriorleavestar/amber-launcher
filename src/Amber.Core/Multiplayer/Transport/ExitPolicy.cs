@@ -69,6 +69,9 @@ public sealed partial class ExitPolicy : IDisposable
     /// <summary>已经查到本机公网地址，可以开始转发。没查到之前所有连接都拒绝（宁可不转，也不放过自己的公网地址）。</summary>
     public bool IsReady => _ready;
 
+    /// <summary>现在能不能转发：准备好了，而且公网 IP 没有旧到 <see cref="Allows"/> 会一律拒绝的程度。</summary>
+    public bool CanForward => IsFresh(MaxPublicIpAge == TimeSpan.MaxValue ? TimeSpan.MaxValue : MaxPublicIpAge + StaleGrace);
+
     /// <summary>查不到公网地址时的说明（这时不当出口）；正常时为 null。</summary>
     public string? Failure => _failure;
 
@@ -94,10 +97,12 @@ public sealed partial class ExitPolicy : IDisposable
             while (!ct.IsCancellationRequested)
             {
                 await RefreshPublicAsync(ct);
-                if (_failure != lastLogged)
+                // 只记被采用的结果：查询期间网络变了（结果作废、还没准备好）时什么都不记。
+                var state = _failure is { } f ? L.F("core.mp.exit.failure_log", f) : _ready ? L.T("core.mp.exit.public_ip_ready") : null;
+                if (state is not null && state != lastLogged)
                 {
-                    log?.Invoke(_failure is { } f ? L.F("core.mp.exit.failure_log", f) : L.T("core.mp.exit.public_ip_ready"));
-                    lastLogged = _failure;
+                    log?.Invoke(state);
+                    lastLogged = state;
                 }
                 var wake = Volatile.Read(ref _wake);
                 var delay = _ready ? ReadyInterval : RetryInterval;
@@ -121,18 +126,21 @@ public sealed partial class ExitPolicy : IDisposable
         {
             // 连接触发的重查：等锁期间后台刚查过（结果还新），就不再查。
             if (onlyIfStale && IsFresh(MaxPublicIpAge)) return;
+            // 上次收集网卡失败：先重新收集，还是失败就继续不转发。
+            if (_localStale && !RecollectLocal()) return;
             var generation = Volatile.Read(ref _generation);
             var ok = await (Discover ?? (c => DiscoverPublicAddressAsync(_stunServers, c)))(ct);
             // 检查“期间网络没变”和设成可用放在同一把锁里：网络变化（也拿这把锁）不会插在两步中间。
             lock (_lock)
             {
-                if (ok && generation == _generation)
+                // 正在重新收集网卡时（新的本机网段还没换上）不设成可用。
+                if (ok && generation == _generation && _collecting == 0)
                 {
                     _failure = null;
                     Interlocked.Exchange(ref _lastSuccessTicks, System.Diagnostics.Stopwatch.GetTimestamp());
                     _ready = true;
                 }
-                else if (!ok)
+                else if (!ok && generation == _generation)
                 {
                     _ready = false;
                     _failure = L.T("core.mp.exit.public_ip_unavailable");
@@ -199,24 +207,75 @@ public sealed partial class ExitPolicy : IDisposable
     /// <summary>网卡地址变了：先停止转发，再重新收集本机地址，公网地址也重新查，查到之前不转发。</summary>
     private void OnAddressChanged(object? sender, EventArgs e)
     {
-        lock (_lock)
+        // 这是系统的网络变化回调：这里抛出的异常会让整个程序退出，所以什么都不往外抛。
+        try
         {
-            _ready = false;
-            _generation++;
+            RecollectLocal();
+            Volatile.Read(ref _wake).TrySetResult();
         }
-        RefreshLocal();
-        // 收集网卡期间开始、按旧网段算的查询也作废。
-        lock (_lock)
+        catch (Exception)
         {
-            _ready = false;
-            _generation++;
+            lock (_lock) _ready = false;
         }
-        _failure = null;
-        Volatile.Read(ref _wake).TrySetResult();
     }
 
-    /// <summary>本机所有网卡（包括停用的、虚拟的）的单播地址和所在网段。</summary>
-    public void RefreshLocal()
+    /// <summary>正在重新收集网卡的次数（可能有几个地址变化同时在收集）。收集期间开始的查询不能让出口变成可用。</summary>
+    private int _collecting;
+
+    /// <summary>上次收集网卡失败了：还在用旧的本机网段，下次查公网 IP 之前先重新收集，成功之前不转发。</summary>
+    private bool _localStale;
+
+    /// <summary>测试用：换掉收集本机地址和网段的方法。</summary>
+    internal Func<(HashSet<IPAddress> Addresses, List<(IPAddress, int)> Networks)>? Collector { get; set; }
+
+    /// <summary>
+    /// 重新收集本机地址和网段，成功时换上新的。期间开始的公网 IP 查询全部作废，收集失败时不转发（保留旧的网段，等下次重试）。
+    /// 计数在 finally 里减，收集出任何异常都不会让出口一直卡在“正在收集”。
+    /// </summary>
+    private bool RecollectLocal()
+    {
+        lock (_lock)
+        {
+            _ready = false;
+            _generation++;
+            _collecting++;
+        }
+        try
+        {
+            var (addresses, networks) = (Collector ?? CollectLocal)();
+            // 换上新的本机网段，和作废收集期间开始的查询放在同一把锁里。
+            lock (_lock)
+            {
+                _localAddresses = addresses;
+                _localNetworks = networks;
+                _ready = false;
+                _generation++;
+                _localStale = false;
+                _failure = null;
+            }
+            return true;
+        }
+        catch (Exception e)
+        {
+            lock (_lock)
+            {
+                _ready = false;
+                _generation++;
+                _localStale = true;
+                _failure = L.F("core.mp.exit.local_scan_failed", e.Message);
+            }
+            return false;
+        }
+        finally
+        {
+            lock (_lock) _collecting--;
+        }
+    }
+
+    /// <summary>重新收集本机所有网卡（包括停用的、虚拟的）的单播地址和所在网段。失败时不转发，下次查公网 IP 时再试。</summary>
+    public void RefreshLocal() => RecollectLocal();
+
+    private (HashSet<IPAddress> Addresses, List<(IPAddress, int)> Networks) CollectLocal()
     {
         var addresses = new HashSet<IPAddress>();
         var networks = new List<(IPAddress, int)>();
@@ -244,8 +303,7 @@ public sealed partial class ExitPolicy : IDisposable
         catch (NetworkInformationException) { }
         // 路由表里除默认路由以外的每条路由的目标网段（包括 VPN 推下来的路由）：这些地址不走普通的上网出口。
         if (OperatingSystem.IsWindows()) networks.AddRange(NonDefaultRoutes());
-        _localAddresses = addresses;
-        _localNetworks = networks;
+        return (addresses, networks);
     }
 
     /// <summary>加上从外面看到的本机公网地址（STUN、路由器端口映射报告的外部地址）。</summary>
@@ -283,7 +341,7 @@ public sealed partial class ExitPolicy : IDisposable
     public bool Allows(IPAddress address)
     {
         // 公网 IP 太久没确认（后台一直查不到新结果）也拒绝：路由器可能已经换了 IP，旧的名单拦不住新的。
-        if (!IsFresh(MaxPublicIpAge == TimeSpan.MaxValue ? TimeSpan.MaxValue : MaxPublicIpAge + StaleGrace)) return false;
+        if (!CanForward) return false;
         var ip = Normalize(address);
         // 只转 IPv4：路由器的 IPv6 外网地址不在本机任何网段里，拦不全；Minecraft 服务器和 Mojang 都有 IPv4，Java 也优先用 IPv4。
         if (ip.AddressFamily != AddressFamily.InterNetwork) return false;
@@ -373,16 +431,8 @@ public sealed partial class ExitPolicy : IDisposable
                 if (ReadSockaddr(row + 12) is not { } destination) continue;
                 var nextHop = ReadSockaddr(row + 44);
                 var onLink = nextHop is null || nextHop.Equals(IPAddress.Any) || nextHop.Equals(IPAddress.IPv6Any);
-                var normalized = Normalize(destination);
-                // IPv6 里嵌着的 IPv4 换成 IPv4 后，前缀长度也要按 IPv4 算（和网卡地址那里一样）。
-                int prefix = prefixLength;
-                if (destination.AddressFamily == AddressFamily.InterNetworkV6 && normalized.AddressFamily == AddressFamily.InterNetwork)
-                {
-                    prefix -= 96;
-                    // 比 /96 还宽的嵌入式前缀（比如整个 ::ffff:0:0/96）换算后什么都不剩，不能当成默认路由。
-                    if (prefix <= 0) continue;
-                }
-                rows.Add((index, normalized, prefix, onLink));
+                if (RouteDestination(destination, prefixLength) is not { } route) continue;
+                rows.Add((index, route.Network, route.Prefix, onLink));
             }
             // 有默认路由的网卡（正常上网走的那块）。
             var defaultInterfaces = rows.Where(r => r.Prefix == 0).Select(r => r.Interface).ToHashSet();
@@ -404,6 +454,21 @@ public sealed partial class ExitPolicy : IDisposable
             FreeMibTable(table);
         }
         return result;
+    }
+
+    /// <summary>
+    /// 路由表里的目标网段换成判断用的写法：IPv6 里嵌着的 IPv4 换成 IPv4，前缀长度减 96（和网卡地址那里一样）。
+    /// 比 /96 还宽的嵌入式前缀（比如整个 ::ffff:0:0/96）换算后什么都不剩，返回 null（不能当成默认路由）。
+    /// </summary>
+    internal static (IPAddress Network, int Prefix)? RouteDestination(IPAddress destination, int prefixLength)
+    {
+        var normalized = Normalize(destination);
+        if (destination.AddressFamily == AddressFamily.InterNetworkV6 && normalized.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var prefix = prefixLength - 96;
+            return prefix <= 0 ? null : (normalized, Math.Min(prefix, 32));
+        }
+        return (normalized, prefixLength);
     }
 
     private static IPAddress? ReadSockaddr(IntPtr p)

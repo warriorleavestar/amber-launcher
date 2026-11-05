@@ -20,8 +20,9 @@ public static class Socks5
     /// <summary>出口成员：处理一条已经接上的 SOCKS5 连接。</summary>
     /// <param name="ready">出口准备好了没有（查到了自己的公网 IP）。没有时读完请求就回“出口没准备好”，不解析也不连接。</param>
     /// <param name="ensureReady">收到请求之后、解析和连接之前调用（出口在这里确认公网 IP 还是新的）；返回 false 时同样回“出口没准备好”。</param>
+    /// <param name="stillReady">所有地址都被拒绝时再问一次出口还能不能转发：确认之后、判断地址之前网络变了，应该回“没准备好”，而不是“目标不允许”。</param>
     public static async Task ServeAsync(Stream client, CancellationToken ct, Action<string>? log = null, Func<IPAddress, bool>? allow = null, Func<int, bool>? allowPort = null, bool ready = true,
-        Func<CancellationToken, Task<bool>>? ensureReady = null, TimeSpan? handshakeTimeout = null)
+        Func<CancellationToken, Task<bool>>? ensureReady = null, TimeSpan? handshakeTimeout = null, Func<bool>? stillReady = null)
     {
         allowPort ??= ExitPolicy.AllowsPort;
         allow ??= IsPublic;
@@ -63,7 +64,22 @@ public static class Socks5
             await ReplyAsync(client, 4, ct);   // 找不到主机
             return;
         }
-        var targets = addresses.Where(allow).ToArray();
+        // 连的是判断过的那个 IPv4（::ffff:a.b.c.d、6to4、NAT64 这类 IPv6 写法按里面的 IPv4 判断，也按它去连，
+        // 不然实际走的是另一条 IPv6 路线，判断和连接对不上）。
+        // 判断地址之前先看一次出口还能不能转发：公网 IP 太旧被拒的不会被说成“目标不允许”。
+        if (stillReady is not null && !stillReady())
+        {
+            log?.Invoke(L.T("core.mp.socks.public_ip_unconfirmed"));
+            await ReplyAsync(client, 3, ct);
+            return;
+        }
+        var targets = addresses.Where(allow).Select(ExitPolicy.Normalize).Distinct().ToArray();
+        if (targets.Length == 0 && stillReady is not null && !stillReady())
+        {
+            log?.Invoke(L.T("core.mp.socks.public_ip_unconfirmed"));
+            await ReplyAsync(client, 3, ct);
+            return;
+        }
         if (targets.Length == 0)
         {
             // 只有 IPv6 地址（里面也没嵌 IPv4）：单独回“地址类型不支持”，加入方能看到“出口只转 IPv4”。
