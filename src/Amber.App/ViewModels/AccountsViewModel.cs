@@ -94,9 +94,6 @@ public sealed partial class AccountsViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial bool IsBusy { get; set; }
 
-    [ObservableProperty]
-    public partial string Status { get; set; } = "";
-
     public AccountsViewModel(LauncherService service)
     {
         _service = service;

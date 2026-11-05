@@ -104,22 +104,9 @@ public sealed partial class HomeViewModel : PageViewModel
     [ObservableProperty]
     public partial double Progress { get; set; }
 
-    [ObservableProperty]
-    public partial string Status { get; set; } = L.T("home.status.ready");
+    protected override StatusMessage? DefaultStatus => StatusMessage.Info("home.status.ready");
 
-    /// <summary>空闲时的状态文字对应的翻译键；换语言时按它重新取文字。显示的是别的内容（进度、错误）时为 null。</summary>
-    private string? _statusKey = "home.status.ready";
-
-    private void SetIdleStatus(string key)
-    {
-        _statusKey = key;
-        Status = L.T(key);
-    }
-
-    partial void OnStatusChanged(string value)
-    {
-        if (_statusKey is not null && value != L.T(_statusKey)) _statusKey = null;
-    }
+    private void SetIdleStatus(string key) => SetStatus(StatusMessage.Info(key));
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasCrash))]
@@ -143,7 +130,6 @@ public sealed partial class HomeViewModel : PageViewModel
         L.Changed += () => Dispatcher.UIThread.Post(() =>
         {
             OnSelectedVersionChanged(SelectedVersion);
-            if (_statusKey is { } key) Status = L.T(key);
         });
     }
 

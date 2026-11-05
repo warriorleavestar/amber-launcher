@@ -147,9 +147,6 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial double Progress { get; set; }
 
-    [ObservableProperty]
-    public partial string Status { get; set; } = "";
-
     public DownloadViewModel(LauncherService service)
     {
         _service = service;

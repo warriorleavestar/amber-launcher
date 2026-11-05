@@ -9,6 +9,14 @@
       <TextBlock Text="{Binding Label}" />
     </DataTemplate>
   </Application.DataTemplates>
+  <!-- 资源要写在样式前面：样式里的 StaticResource 在加载时就查，后面的资源那时还没有。 -->
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://Amber/Themes/Tokens.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
   <Application.Styles>
     <FluentTheme />
     <Style Selector=":is(Window)">
@@ -130,11 +138,4 @@
       <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
     </Style>
   </Application.Styles>
-  <Application.Resources>
-    <ResourceDictionary>
-      <ResourceDictionary.MergedDictionaries>
-        <ResourceInclude Source="avares://Amber/Themes/Tokens.axaml" />
-      </ResourceDictionary.MergedDictionaries>
-    </ResourceDictionary>
-  </Application.Resources>
 </Application>

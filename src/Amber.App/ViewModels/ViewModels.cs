@@ -69,6 +69,35 @@ public abstract class PageViewModel : ObservableObject
     }
 
     protected virtual void OnFirstActivated() { }
+
+    private StatusMessage? _statusInfo;
+
+    /// <summary>
+    /// 页面底部状态条显示的消息（null 时显示 DefaultStatus）。用 SetStatus 设：带翻译键和种类（成功/警告/错误），换语言时跟着换。
+    /// </summary>
+    public StatusMessage? StatusInfo => _statusInfo ?? DefaultStatus;
+
+    /// <summary>
+    /// 状态文字（StatusInfo 按当前语言格式化的结果）。直接赋字符串是旧写法：当作普通信息显示，不跟着换语言。
+    /// </summary>
+    public string Status
+    {
+        get => StatusInfo?.Text ?? "";
+        set => SetStatus(string.IsNullOrEmpty(value) ? null : StatusMessage.Plain(value));
+    }
+
+    /// <summary>没有消息时显示的内容（比如首页的“准备就绪”）。</summary>
+    protected virtual StatusMessage? DefaultStatus => null;
+
+    public void SetStatus(StatusMessage? message)
+    {
+        _statusInfo = message;
+        OnPropertyChanged(nameof(StatusInfo));
+        OnPropertyChanged(nameof(Status));
+        OnStatusChanged();
+    }
+
+    protected virtual void OnStatusChanged() { }
 }
 
 /// <summary>开发用：截图模式下让页面走一遍真实流程。</summary>
@@ -162,7 +191,6 @@ public sealed partial class SettingsViewModel : PageViewModel
     [ObservableProperty] public partial string CurseForgeKey { get; set; }
     [ObservableProperty] public partial string CurseForgeRoot { get; set; }
     [ObservableProperty] public partial string UpdateFeed { get; set; }
-    [ObservableProperty] public partial string Status { get; set; } = "";
 
     public string SettingsPath => AppSettings.FilePath;
     public string SettingsPathLabel => L.F("settings.file_path", SettingsPath);

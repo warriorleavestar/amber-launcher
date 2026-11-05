@@ -129,12 +129,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial double Progress { get; set; }
 
-    private string? _status;
-    public string Status
-    {
-        get => _status ?? L.T("content.search.hint");
-        set => SetProperty(ref _status, value);
-    }
+    protected override StatusMessage? DefaultStatus => StatusMessage.Info("content.search.hint");
 
     public bool IsModpack => CurrentType == ContentType.Modpack;
     public bool IsDatapack => CurrentType == ContentType.Datapack;

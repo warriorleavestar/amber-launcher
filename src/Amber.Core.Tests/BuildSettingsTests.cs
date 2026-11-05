@@ -20,4 +20,19 @@ public class BuildSettingsTests
         Assert.All(values, v => Assert.Equal("", v.Value.Trim()));
         Assert.All(values, v => Assert.Null(v.Attribute("Condition")));
     }
+
+    /// <summary>
+    /// App.axaml 里 Application.Resources 要在 Application.Styles 前面：样式里的 StaticResource（UiFont、FontCaption 等）
+    /// 在加载时就查找，资源写在后面会在启动时抛 KeyNotFoundException。
+    /// </summary>
+    [Fact]
+    public void AppResourcesComeBeforeStyles()
+    {
+        var app = XDocument.Load(Path.Combine(Src, "Amber.App", "App.axaml"));
+        var names = app.Root!.Elements().Select(e => e.Name.LocalName).ToList();
+        var resources = names.IndexOf("Application.Resources");
+        var styles = names.IndexOf("Application.Styles");
+        Assert.True(resources >= 0 && styles >= 0);
+        Assert.True(resources < styles, "Application.Resources 要写在 Application.Styles 前面");
+    }
 }

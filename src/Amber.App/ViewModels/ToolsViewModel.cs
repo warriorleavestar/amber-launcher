@@ -46,7 +46,6 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
     [ObservableProperty] public partial string? UpdateUrl { get; set; }
     [ObservableProperty] public partial bool IsBusy { get; set; }
     [ObservableProperty] public partial double Progress { get; set; }
-    [ObservableProperty] public partial string Status { get; set; } = "";
 
     [RelayCommand]
     private async Task ScanJunkAsync()

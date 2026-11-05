@@ -3,6 +3,7 @@
         xmlns:l="using:Amber.App.Localization"
         xmlns:vm="using:Amber.App.ViewModels"
         xmlns:views="using:Amber.App.Views"
+        xmlns:c="using:Amber.App.Views.Controls"
         x:Class="Amber.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
         Title="{l:T main.title}"
@@ -108,7 +109,7 @@
         </ScrollViewer>
         <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="12" Margin="0,4,0,0">
           <Button Classes="primary" Content="{l:T settings.save}" Command="{Binding SaveCommand}" Padding="28,10" />
-          <TextBlock Text="{Binding Status}" VerticalAlignment="Center" />
+          <c:StatusBar Message="{Binding StatusInfo}" VerticalAlignment="Center" />
         </StackPanel>
       </Grid>
     </DataTemplate>

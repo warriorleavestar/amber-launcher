@@ -315,7 +315,7 @@
     <Border Grid.Row="3" Classes="card" Margin="0" IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
       <Grid ColumnDefinitions="*,Auto">
         <StackPanel Spacing="6" VerticalAlignment="Center">
-          <TextBlock Text="{Binding Status}" ToolTip.Tip="{Binding Status}" TextTrimming="CharacterEllipsis" MinHeight="18" />
+          <c:StatusBar Message="{Binding StatusInfo}" />
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
         </StackPanel>
         <Button Grid.Column="1" Content="{l:T common.cancel}" Command="{Binding CancelWorkCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />

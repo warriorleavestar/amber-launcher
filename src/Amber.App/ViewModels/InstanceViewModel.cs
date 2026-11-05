@@ -180,9 +180,6 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial double Progress { get; set; }
 
-    [ObservableProperty]
-    public partial string Status { get; set; } = "";
-
     public InstanceViewModel(LauncherService service)
     {
         _service = service;

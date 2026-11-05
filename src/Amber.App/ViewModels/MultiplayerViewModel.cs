@@ -226,7 +226,6 @@ public sealed partial class MultiplayerViewModel : PageViewModel
 
     [ObservableProperty] public partial string RoomCodeText { get; set; } = "";
     [ObservableProperty] public partial string JoinAddress { get; set; } = "";
-    [ObservableProperty] public partial string Status { get; set; } = "";
 
     public string ComponentText => IsComponentReady
         ? L.F("multiplayer.component.ready", EasyTierRelease.Version)

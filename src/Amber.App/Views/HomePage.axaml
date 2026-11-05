@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Amber.App.ViewModels"
+             xmlns:c="using:Amber.App.Views.Controls"
              xmlns:l="using:Amber.App.Localization"
              xmlns:diag="using:Amber.Core.Diagnostics"
              x:Class="Amber.App.Views.HomePage"
@@ -63,7 +64,7 @@
     <Border Grid.Row="2" Classes="card" Margin="0">
       <Grid ColumnDefinitions="*,Auto,Auto">
         <StackPanel VerticalAlignment="Center" Spacing="6">
-          <TextBlock Text="{Binding Status}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Status}" />
+          <c:StatusBar Message="{Binding StatusInfo}" />
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
         </StackPanel>
         <Button Grid.Column="1" Content="{l:T common.end}" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}"
