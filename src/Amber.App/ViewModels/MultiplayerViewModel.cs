@@ -641,7 +641,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         try
         {
             _hub = new ChatHub(room, RoomChat.Port);
-            _ = ConnectChatAsync("127.0.0.1", RoomChat.Port);
+            // 房主自己的客户端走转发留给它的本机端口（房间连接满了也能连上）。
+            _ = ConnectChatAsync("127.0.0.1", _hub.HostPort);
         }
         catch (System.Net.Sockets.SocketException e)
         {
@@ -741,7 +742,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         // 端口一时被占（比如刚结束的房间还没放开）时，下次刷新再试。
         if (IsHosting && _hub is null && _room is { } room) StartHub(room);
-        if (IsHosting && _chat is null && _hub is not null) _ = ConnectChatAsync("127.0.0.1", RoomChat.Port);
+        if (IsHosting && _chat is null && _hub is not null) _ = ConnectChatAsync("127.0.0.1", _hub.HostPort);
     }
 
     private bool _hubOnVirtualIp;
@@ -793,6 +794,12 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private void StopExitNode()
     {
         if (!UsingExit) return;
+        // 出口是测试设的：停止整个测试（由测试恢复原来的设置）。
+        if (GuestTestRunning)
+        {
+            _ = StopGuestTestAsync();
+            return;
+        }
         if (RestartWithExit(null)) Status = L.T("multiplayer.exit.stopped");
         ExitNodeIp = "";
     }

@@ -13,14 +13,21 @@ public sealed class GuestTestConsent
     /// <summary>同意后这么久没有收到下一步，就当测试已经结束（房主掉线、崩溃）。</summary>
     public static readonly TimeSpan IdleLimit = TimeSpan.FromMinutes(3);
 
+    /// <summary>一次测试从同意起最长这么久，到了就结束（不管房主还在不在发步骤）。</summary>
+    public static readonly TimeSpan MaxDuration = TimeSpan.FromMinutes(10);
+
+    /// <summary>一次测试最多执行这么多步（完整的测试计划最多 21 步）。</summary>
+    public const int MaxSteps = 24;
+
     private readonly object _gate = new();
     private readonly Func<DateTime> _now;
     private TestRequest? _pending;
     private Active? _active;
 
-    private sealed record Active(string Run, bool FullLan, bool Exit, EasyTierOptions? Original)
+    private sealed record Active(string Run, bool FullLan, bool Exit, EasyTierOptions? Original, DateTime Started)
     {
         public int LastIndex { get; set; }
+        public int Steps { get; set; }
         public DateTime LastActivity { get; set; }
         public bool StepRunning { get; set; }
     }
@@ -54,7 +61,7 @@ public sealed class GuestTestConsent
             if (!accept) return null;
             var fullLan = request.WantsFullLan && allowFullLan;
             var exit = fullLan && allowExit;
-            _active = new Active(request.Run, fullLan, exit, original) { LastActivity = _now() };
+            _active = new Active(request.Run, fullLan, exit, original, _now()) { LastActivity = _now() };
             return (request.Run, fullLan, exit);
         }
     }
@@ -88,9 +95,11 @@ public sealed class GuestTestConsent
             var a = _active!;
             if (index <= a.LastIndex) return "stale";
             if (a.StepRunning) return "busy";
+            if (a.Steps >= MaxSteps) return "too-many-steps";
             if (fullLan && !a.FullLan) return "full-lan-not-allowed";
             if (exit && !a.Exit) return "exit-not-allowed";
             a.LastIndex = index;
+            a.Steps++;
             a.StepRunning = true;
             a.LastActivity = _now();
             return null;
@@ -122,15 +131,16 @@ public sealed class GuestTestConsent
         }
     }
 
-    /// <summary>同意过但太久没收到下一步：返回 true 和这次测试的编号（调用方用 End 恢复）。</summary>
+    /// <summary>同意过但太久没收到下一步，或者整个测试超过了最长时间：返回 true 和这次测试的编号（调用方用 End 恢复）。</summary>
     public bool IsIdle(out string run)
     {
         lock (_gate)
         {
             run = _active?.Run ?? "";
-            return _active is { StepRunning: false } a && _now() - a.LastActivity > IdleLimit;
+            return _active is { } a && (!a.StepRunning && _now() - a.LastActivity > IdleLimit || _now() - a.Started > MaxDuration);
         }
     }
 
-    private bool IsCurrent(string? run) => _active is { } a && run is not null && a.Run == run && _now() - a.LastActivity <= IdleLimit;
+    private bool IsCurrent(string? run) => _active is { } a && run is not null && a.Run == run
+        && _now() - a.LastActivity <= IdleLimit && _now() - a.Started <= MaxDuration;
 }

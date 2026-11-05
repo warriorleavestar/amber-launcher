@@ -429,18 +429,17 @@ public sealed class DirectBridge : IAsyncDisposable
             if (packet.Length == 0) continue;
             var type = packet[0];
 
-            if (type == Data)
-            {
-                if (_peers.TryGetValue(from, out var peer)) await ForwardToLocalAsync(peer, packet[1..].ToArray());
-                continue;
-            }
-            if (!Verify(packet)) continue;
-            var payload = packet[1..^TagLength].ToArray();
-            // 对方发来的内容不可信：处理一个包时出任何错（坏 JSON、字段类型不对、事件处理抛异常）都只丢掉这个包、记一笔，
-            // 不能让共用的接收循环停掉。
+            // 对方发来的内容不可信：处理一个包时出任何错（坏 JSON、字段类型不对、事件处理抛异常、转发出错）都只丢掉这个包、记一笔，
+            // 不能让共用的接收循环停掉。数据包也在里面。
             try
             {
-                await HandleAuthenticatedAsync(from, type, payload);
+                if (type == Data)
+                {
+                    if (_peers.TryGetValue(from, out var peer)) await ForwardToLocalAsync(peer, packet[1..].ToArray());
+                    continue;
+                }
+                if (!Verify(packet)) continue;
+                await HandleAuthenticatedAsync(from, type, packet[1..^TagLength].ToArray());
             }
             catch (Exception e) when (e is not OperationCanceledException || !_cts.IsCancellationRequested)
             {
@@ -483,25 +482,57 @@ public sealed class DirectBridge : IAsyncDisposable
         }
     }
 
+    /// <summary>房主最多同时接这么多个加入方（每个一个本机套接字和一个转发循环）。</summary>
+    public const int MaxHostPeers = 32;
+
     private void Accept(IPEndPoint from)
     {
-        if (_peers.ContainsKey(from)) return;
+        if (_peers.TryGetValue(from, out var known))
+        {
+            // 已经连着的对方回了探测（心跳断了之后补发的探测）：算它还活着。
+            known.LastSeen = DateTime.UtcNow;
+            return;
+        }
         if (!_isHost && !_peers.IsEmpty) return;
+        if (_isHost && _peers.Count >= MaxHostPeers)
+        {
+            _log(L.F("core.mp.punch.toomanypeers", from, MaxHostPeers));
+            return;
+        }
         var peer = new DirectPeer { Remote = from, Path = Classify(from), ConnectedMs = _clock.ElapsedMilliseconds };
         if (!AllowedPaths.Contains(peer.Path) && !(peer.Path == PathKind.Punch && AllowedPaths.Contains(PathKind.PunchSpray)))
         {
             _log(L.F("core.mp.punch.disabled", from, DirectText.Path(peer.Path)));
             return;
         }
-        if (!_peers.TryAdd(from, peer)) return;
         if (_isHost)
         {
-            // 每个加入方一个本机套接字，去连本机 EasyTier 的监听端口。
-            var local = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            if (OperatingSystem.IsWindows()) local.IOControl(unchecked((int)0x9800000C), [0, 0, 0, 0], null);
-            local.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            // 每个加入方一个本机套接字，去连本机 EasyTier 的监听端口。先建好再登记：建不了就不接这个加入方，
+            // 不会留下一个没有本机套接字的对方（之后它的数据包会让转发出错）。
+            Socket? local = null;
+            try
+            {
+                local = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                if (OperatingSystem.IsWindows()) local.IOControl(unchecked((int)0x9800000C), [0, 0, 0, 0], null);
+                local.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            }
+            catch (Exception e) when (e is SocketException or ObjectDisposedException)
+            {
+                local?.Dispose();
+                _log(L.F("core.mp.punch.localerror", e.GetType().Name));
+                return;
+            }
             peer.Local = local;
+            if (!_peers.TryAdd(from, peer))
+            {
+                local.Dispose();
+                return;
+            }
             _loops.Add(HostLocalLoopAsync(peer));
+        }
+        else if (!_peers.TryAdd(from, peer))
+        {
+            return;
         }
         _log(L.F("core.mp.punch.connected", from, DirectText.Path(peer.Path)));
         Connected?.Invoke(peer);
@@ -513,7 +544,7 @@ public sealed class DirectBridge : IAsyncDisposable
         Interlocked.Add(ref peer.BytesIn, data.Length);
         try
         {
-            if (_isHost) await peer.Local!.SendToAsync(data, SocketFlags.None, new IPEndPoint(IPAddress.Loopback, LocalPort));
+            if (_isHost) { if (peer.Local is { } local) await local.SendToAsync(data, SocketFlags.None, new IPEndPoint(IPAddress.Loopback, LocalPort)); }
             else if (peer.LocalClient is { } client) await _guestLocal!.SendToAsync(data, SocketFlags.None, client);
         }
         catch (Exception e) when (e is SocketException or ObjectDisposedException) { }
@@ -567,7 +598,13 @@ public sealed class DirectBridge : IAsyncDisposable
         }
     }
 
-    /// <summary>每秒一次心跳：测延迟和丢包，也保持路由器上的映射不过期。</summary>
+    /// <summary>对方这么久没回任何东西（心跳停了）就同时补发探测包。</summary>
+    internal static readonly TimeSpan ReprobeAfter = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// 每秒一次心跳：测延迟和丢包，也保持路由器上的映射不过期。对方的回应停了（对方换了版本、路由器映射被回收、
+    /// 对方重启了桥）时，每次心跳再补一个探测包：探测包任何版本都会回，回了就重新算连着。
+    /// </summary>
     private async Task PingLoopAsync()
     {
         uint seq = 0;
@@ -592,6 +629,8 @@ public sealed class DirectBridge : IAsyncDisposable
                 var payload = new byte[4];
                 BinaryPrimitives.WriteUInt32BigEndian(payload, seq);
                 await SendRawAsync(Seal(Ping, payload), peer.Remote, _cts.Token);
+                if (DateTime.UtcNow - peer.LastSeen > ReprobeAfter)
+                    await SendRawAsync(Seal(Probe, BuildProbePayload(_probeRound)), peer.Remote, _cts.Token);
             }
         }
     }
@@ -617,7 +656,11 @@ public sealed class DirectBridge : IAsyncDisposable
         {
             await Task.WhenAll(_loops.ToArray());
         }
-        catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException or SocketException) { }
+        catch (Exception e)
+        {
+            // 哪个循环出过错都不影响收尾：调用方接着要撤掉端口映射、重置界面。
+            if (e is not (OperationCanceledException or ObjectDisposedException or SocketException)) _log(L.F("core.mp.punch.localerror", e.GetType().Name));
+        }
         _cts.Dispose();
     }
 }

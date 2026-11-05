@@ -32,6 +32,8 @@
                     <TextBlock Text="{l:T accounts.current.label}" IsVisible="{Binding IsCurrent}" Foreground="{DynamicResource AmberAccent}" />
                   </StackPanel>
                   <TextBlock Text="{Binding KindText}" Classes="hint" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding KindText}" />
+                  <TextBlock Text="{l:T accounts.external.insecure_saved}" IsVisible="{Binding InsecureServer}" Foreground="{DynamicResource AmberAccent}"
+                             FontSize="12" TextWrapping="Wrap" />
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                   <Button Content="{l:T common.use}" Command="{Binding $parent[ListBox].((vm:AccountsViewModel)DataContext).UseCommand}" CommandParameter="{Binding}" />

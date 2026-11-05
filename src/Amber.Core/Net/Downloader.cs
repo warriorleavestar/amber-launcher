@@ -278,17 +278,18 @@ public sealed class Downloader
         return result;
     }
 
-    /// <summary>写入前最后再查一次路径：必须是规范化的完整路径；设了 Within 时必须在它里面。</summary>
+    /// <summary>
+    /// 写入前最后再查一次路径。只查设了 Within 的下载（路径来自不可信的元数据，比如版本文件）：
+    /// 必须是规范化的完整路径，并且在 Within 里面。用户自己选的位置（工具箱下载到的文件夹）照原样用。
+    /// </summary>
     internal static void CheckTarget(DownloadItem item)
     {
+        if (item.Within is not { } within) return;
         var full = Path.IsPathFullyQualified(item.LocalPath) ? Path.GetFullPath(item.LocalPath) : null;
-        var ok = full is not null && string.Equals(full, item.LocalPath, StringComparison.OrdinalIgnoreCase) && !Path.GetFileName(full).Contains(':');
-        if (ok && item.Within is { } within)
-        {
-            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(within));
-            ok = full!.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-        }
-        if (!ok) throw new InvalidDataException(L.F("core.game.directory.unsafepath", item.LocalPath));
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(within));
+        var ok = full is not null && string.Equals(full, item.LocalPath, StringComparison.OrdinalIgnoreCase) && !Path.GetFileName(full).Contains(':')
+                 && full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        if (!ok) throw new InvalidDataException(L.F("core.net.download.unsafetarget", item.LocalPath));
     }
 
     private async Task<long> DownloadCoreAsync(DownloadItem item, Action<long> onBytes, CancellationToken ct)

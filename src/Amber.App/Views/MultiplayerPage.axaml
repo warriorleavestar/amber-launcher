@@ -119,6 +119,14 @@
           </StackPanel>
         </Border>
 
+        <!-- 加入方：房主发起的测试正在进行 -->
+        <Border Classes="card" Margin="0" IsVisible="{Binding GuestTestRunning}" BorderBrush="#E0703A" BorderThickness="2">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Text="{Binding GuestTestBanner}" TextWrapping="Wrap" VerticalAlignment="Center" FontWeight="SemiBold" />
+            <Button Grid.Column="1" Classes="amber" Content="{l:T multiplayer.matrix.stop_test}" Command="{Binding StopGuestTestCommand}" Margin="12,0,0,0" />
+          </Grid>
+        </Border>
+
         <!-- 正在经别人上网 -->
         <Border Classes="card" Margin="0" IsVisible="{Binding UsingExit}" BorderBrush="#E0703A" BorderThickness="2">
           <Grid ColumnDefinitions="*,Auto">

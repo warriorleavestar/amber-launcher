@@ -256,9 +256,11 @@ public static class LegacyForge
         Directory.CreateDirectory(libDir);
         foreach (var lib in libs)
         {
-            var target = Path.Combine(libDir, lib.Name);
+            // amberLegacyLibs 写在版本文件里（任何版本文件都能写，继承时也会被合并过来）：名字只能是单个文件名，拼出来的路径必须在各自目录里。
+            var name = Game.GameDirectory.CheckId(lib.Name);
+            var target = Game.GameDirectory.Contained(libDir, name);
             if (File.Exists(target) && Sha1Sync(target) == lib.Sha1) continue;
-            var source = Path.Combine(FmlCacheDir(root), lib.Name);
+            var source = Game.GameDirectory.Contained(FmlCacheDir(root), name);
             if (!File.Exists(source))
             {
                 log?.Invoke(L.F("core.install.legacyforge.missinglibrary", lib.Name));
