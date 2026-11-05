@@ -1,13 +1,15 @@
 <div align="center">
 
-# Amber
+<img src="docs/brand/jay-feather-amber-v1.png" alt="Jay" width="96">
+
+# Jay
 
 **干净、轻快的 Minecraft Java 版启动器**
 
 没有遥测，没有远程开关，下载解压就能用。
 
-[![最新版本](https://img.shields.io/github/v/release/warriorleavestar/amber-launcher?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=d98a1f)](https://github.com/warriorleavestar/amber-launcher/releases/latest)
-[![许可证](https://img.shields.io/github/license/warriorleavestar/amber-launcher?label=%E8%AE%B8%E5%8F%AF%E8%AF%81)](LICENSE)
+[![最新版本](https://img.shields.io/github/v/release/warriorleavestar/jay-launcher?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=d98a1f)](https://github.com/warriorleavestar/jay-launcher/releases/latest)
+[![许可证](https://img.shields.io/github/license/warriorleavestar/jay-launcher?label=%E8%AE%B8%E5%8F%AF%E8%AF%81)](LICENSE)
 ![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
 简体中文 | [English](README.en.md)
@@ -16,9 +18,11 @@
 
 </div>
 
+本项目现名 **Jay**，仓库地址已更新。已发布的程序和截图仍可能使用 Amber 名称；应用内品牌将逐步迁移。详见[改名与兼容说明](docs/announcements/2026-11-06-jay-rename.md)。
+
 ## 下载安装
 
-到 [Releases](https://github.com/warriorleavestar/amber-launcher/releases/latest) 下载与你的电脑对应的包：
+到 [Releases](https://github.com/warriorleavestar/jay-launcher/releases/latest) 下载与你的电脑对应的包：
 
 | 系统 | 文件 | 运行方式 |
 |---|---|---|
@@ -116,8 +120,8 @@ macOS/Linux 版本目前没有代码签名。macOS 第一次运行若被 Gatekee
 需要 [.NET 10 SDK](https://dotnet.microsoft.com/download)。
 
 ```shell
-git clone https://github.com/warriorleavestar/amber-launcher.git
-cd amber-launcher/src
+git clone https://github.com/warriorleavestar/jay-launcher.git
+cd jay-launcher/src
 dotnet build
 dotnet test
 dotnet run --project Amber.App

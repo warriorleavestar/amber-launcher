@@ -13,7 +13,7 @@ Amber 的联机功能靠 [EasyTier](https://github.com/EasyTier/EasyTier) 组网
 支持 x86_64 和 arm64，需要 systemd（Ubuntu、Debian、CentOS、Rocky 等大多数发行版都有）。
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/warriorleavestar/amber-launcher/main/node/install.sh
+curl -fsSLO https://raw.githubusercontent.com/warriorleavestar/jay-launcher/main/node/install.sh
 sudo bash install.sh
 ```
 
@@ -41,7 +41,7 @@ sudo bash install.sh
 ### 方法二：Docker
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/warriorleavestar/amber-launcher/main/node/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/warriorleavestar/jay-launcher/main/node/docker-compose.yml
 # 把文件里的 NODE_SECRET 换成一串随机字符
 docker compose up -d
 ```
@@ -85,7 +85,7 @@ This folder has one-step install scripts. The node only relays, creates no netwo
 x86_64 and arm64, systemd required.
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/warriorleavestar/amber-launcher/main/node/install.sh
+curl -fsSLO https://raw.githubusercontent.com/warriorleavestar/jay-launcher/main/node/install.sh
 sudo bash install.sh
 ```
 

@@ -1,13 +1,15 @@
 <div align="center">
 
-# Amber
+<img src="docs/brand/jay-feather-amber-v1.png" alt="Jay" width="96">
+
+# Jay
 
 **A clean, lightweight launcher for Minecraft: Java Edition**
 
 No telemetry, no remote switches. Download, unzip, run.
 
-[![Latest release](https://img.shields.io/github/v/release/warriorleavestar/amber-launcher?color=d98a1f)](https://github.com/warriorleavestar/amber-launcher/releases/latest)
-[![License](https://img.shields.io/github/license/warriorleavestar/amber-launcher)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/warriorleavestar/jay-launcher?color=d98a1f)](https://github.com/warriorleavestar/jay-launcher/releases/latest)
+[![License](https://img.shields.io/github/license/warriorleavestar/jay-launcher)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
 [简体中文](README.md) | English
@@ -16,9 +18,11 @@ No telemetry, no remote switches. Download, unzip, run.
 
 </div>
 
+The project is now named **Jay** and the repository URL has changed. Existing releases and screenshots may still use Amber while the application branding is migrated. See the [rename and compatibility notice](docs/announcements/2026-11-06-jay-rename.md) (Chinese).
+
 ## Download
 
-Get the package for your computer from [Releases](https://github.com/warriorleavestar/amber-launcher/releases/latest):
+Get the package for your computer from [Releases](https://github.com/warriorleavestar/jay-launcher/releases/latest):
 
 | System | File | Run |
 |---|---|---|
@@ -116,8 +120,8 @@ Settings are stored under the system application-data directory in `Amber/settin
 You need the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
 ```shell
-git clone https://github.com/warriorleavestar/amber-launcher.git
-cd amber-launcher/src
+git clone https://github.com/warriorleavestar/jay-launcher.git
+cd jay-launcher/src
 dotnet build
 dotnet test
 dotnet run --project Amber.App
