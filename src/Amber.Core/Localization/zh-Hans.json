@@ -1056,5 +1056,7 @@
   "multiplayer.matrix.decline": "不同意",
   "multiplayer.matrix.request_status": "房主请求全条件测试，请在直连卡片里确认",
   "core.game.directory.unsafepath": "版本文件里的路径不安全，已拒绝：{0}",
-  "core.mp.punch.controlerror": "丢掉一个处理不了的控制包（{0}）"
+  "core.mp.punch.controlerror": "丢掉一个处理不了的控制包（{0}）",
+  "core.auth.external.insecure": "外置登录服务器必须用 https（密码和令牌会经它传）：{0}",
+  "core.auth.external.redirected": "外置登录服务器把请求跳转到了别的地址（{0}），为了安全没有继续"
 }

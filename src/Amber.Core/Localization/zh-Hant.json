@@ -1056,5 +1056,7 @@
   "multiplayer.matrix.decline": "不同意",
   "multiplayer.matrix.request_status": "房主請求所有條件測試，請在直連卡片中確認",
   "core.game.directory.unsafepath": "版本檔案中的路徑不安全，已拒絕：{0}",
-  "core.mp.punch.controlerror": "丟棄一個無法處理的控制封包（{0}）"
+  "core.mp.punch.controlerror": "丟棄一個無法處理的控制封包（{0}）",
+  "core.auth.external.insecure": "外置登入伺服器必須使用 https（密碼和權杖會經由它傳送）：{0}",
+  "core.auth.external.redirected": "外置登入伺服器把請求轉址到別的位址（{0}），為了安全沒有繼續"
 }
