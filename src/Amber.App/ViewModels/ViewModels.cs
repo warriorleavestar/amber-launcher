@@ -432,7 +432,88 @@ public sealed partial class LogViewModel : PageViewModel
     private async Task CopyAsync()
     {
         var text = string.Join(Environment.NewLine, _all.Select(e => $"[{e.Time}] [{e.Level}] {e.Message}"));
-        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
-            await clipboard.SetTextAsync(text);
+        var ok = false;
+        try
+        {
+            if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
+            {
+                await clipboard.SetTextAsync(text);
+                ok = true;
+            }
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
+        CopyLabel = L.T(ok ? "common.copied" : "log.copy_failed");
+        await Task.Delay(1500);
+        CopyLabel = L.T("log.copy_all");
+    }
+
+    /// <summary>“复制全部”按钮的文字：点了之后短暂显示“已复制”或“复制失败”。</summary>
+    [ObservableProperty]
+    public partial string CopyLabel { get; private set; } = L.T("log.copy_all");
+
+    // ---- 这次运行的实例和开始时间（页头小字） ----
+
+    private string? _runInstance;
+    private DateTimeOffset _runStartedAt;
+
+    /// <summary>游戏开始启动时调用（在 Clear 之后）：页头显示“实例 · 开始时间”。</summary>
+    public void BeginRun(string instance, DateTimeOffset startedAt)
+    {
+        _runInstance = instance;
+        _runStartedAt = startedAt;
+        OnPropertyChanged(nameof(RunSummary));
+        OnPropertyChanged(nameof(HasRun));
+    }
+
+    public bool HasRun => _runInstance is not null;
+    public string RunSummary => _runInstance is null ? "" : L.F("log.run_summary", _runInstance, Fmt.Time(_runStartedAt));
+
+    // ---- 跳到下一个错误 / 警告 ----
+
+    /// <summary>LogPage 订阅：滚动到这一行并选中它。</summary>
+    public event Action<LogEntry>? JumpRequested;
+
+    [ObservableProperty]
+    public partial LogEntry? SelectedLine { get; set; }
+
+    public bool HasErrors => ErrorCount > 0;
+    public bool HasWarnings => WarningCount > 0;
+
+    partial void OnErrorCountChanged(int value) => OnPropertyChanged(nameof(HasErrors));
+    partial void OnWarningCountChanged(int value) => OnPropertyChanged(nameof(HasWarnings));
+
+    [RelayCommand]
+    private void NextError() => JumpTo(NextMatch(_all, SelectedLine, e => e.IsError));
+
+    [RelayCommand]
+    private void NextWarning() => JumpTo(NextMatch(_all, SelectedLine, e => e.IsWarning));
+
+    private void JumpTo(LogEntry? target)
+    {
+        if (target is null) return;
+        // 跳转时不再跟随最新，不然马上又滚回底部；筛选把它藏起来时（理论上不会，错误和警告都在筛选里）先关掉筛选。
+        FollowLatest = false;
+        if (!Visible(target)) OnlyProblems = false;
+        SelectedLine = target;
+        JumpRequested?.Invoke(target);
+    }
+
+    /// <summary>从 current 之后找下一个满足条件的行，到末尾回到开头；current 不在列表里时从头找。</summary>
+    internal static LogEntry? NextMatch(IReadOnlyList<LogEntry> lines, LogEntry? current, Func<LogEntry, bool> match)
+    {
+        if (lines.Count == 0) return null;
+        var start = current is null ? -1 : IndexOf(lines, current);
+        for (var step = 1; step <= lines.Count; step++)
+        {
+            var entry = lines[(start + step + lines.Count) % lines.Count];
+            if (match(entry)) return entry;
+        }
+        return null;
+    }
+
+    private static int IndexOf(IReadOnlyList<LogEntry> lines, LogEntry entry)
+    {
+        for (var i = 0; i < lines.Count; i++) if (ReferenceEquals(lines[i], entry)) return i;
+        return -1;
     }
 }

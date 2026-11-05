@@ -17,22 +17,32 @@
     <Style Selector="TextBlock.log-level.error, SelectableTextBlock.log-message.error">
       <Setter Property="Foreground" Value="{DynamicResource DangerText}" />
     </Style>
+    <Style Selector="Button.chip">
+      <Setter Property="CornerRadius" Value="{DynamicResource RadiusPill}" />
+      <Setter Property="Padding" Value="10,4" />
+    </Style>
     <Style Selector="ListBoxItem">
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />
       <Setter Property="Padding" Value="2" />
     </Style>
   </UserControl.Styles>
   <Grid RowDefinitions="Auto,Auto,Auto,*">
-    <TextBlock Classes="h1" Text="{l:T log.heading}" />
+    <StackPanel>
+      <TextBlock Classes="h1" Text="{l:T log.heading}" Margin="0,0,0,2" />
+      <TextBlock Classes="caption" Text="{Binding RunSummary}" IsVisible="{Binding HasRun}" TextWrapping="Wrap" Margin="0,0,0,10" />
+    </StackPanel>
+    <!-- 计数芯片也是按钮：点一次跳到下一个错误 / 警告，到末尾回到第一个。 -->
     <WrapPanel Grid.Row="1" Margin="0,0,0,4">
-      <Border Background="{DynamicResource DangerTint}" CornerRadius="{DynamicResource RadiusPill}"
-              Padding="10,4" Margin="0,0,8,8">
+      <Button x:Name="ErrorChip" Classes="ghost chip" Background="{DynamicResource DangerTint}" Margin="0,0,8,8"
+              Command="{Binding NextErrorCommand}" IsEnabled="{Binding HasErrors}"
+              ToolTip.Tip="{l:T log.next_error}" AutomationProperties.HelpText="{l:T log.next_error}">
         <TextBlock x:Name="ErrorSummary" Text="{Binding ErrorSummary}" Foreground="{DynamicResource DangerText}" TextWrapping="Wrap" />
-      </Border>
-      <Border Background="{DynamicResource WarningTint}" CornerRadius="{DynamicResource RadiusPill}"
-              Padding="10,4" Margin="0,0,8,8">
+      </Button>
+      <Button x:Name="WarningChip" Classes="ghost chip" Background="{DynamicResource WarningTint}" Margin="0,0,8,8"
+              Command="{Binding NextWarningCommand}" IsEnabled="{Binding HasWarnings}"
+              ToolTip.Tip="{l:T log.next_warning}" AutomationProperties.HelpText="{l:T log.next_warning}">
         <TextBlock x:Name="WarningSummary" Text="{Binding WarningSummary}" Foreground="{DynamicResource WarningText}" TextWrapping="Wrap" />
-      </Border>
+      </Button>
     </WrapPanel>
     <WrapPanel Grid.Row="2" Margin="0,0,0,4">
       <CheckBox x:Name="ProblemsFilter" IsChecked="{Binding OnlyProblems}" Margin="0,0,12,8">
@@ -42,7 +52,7 @@
         <TextBlock Text="{l:T log.follow_latest}" TextWrapping="Wrap" />
       </CheckBox>
       <Button Classes="primary" Command="{Binding CopyCommand}" Margin="0,0,0,8">
-        <TextBlock Text="{l:T log.copy_all}" TextWrapping="Wrap" />
+        <TextBlock Text="{Binding CopyLabel}" TextWrapping="Wrap" />
       </Button>
     </WrapPanel>
     <Border Grid.Row="3" Classes="card" Padding="8" Margin="0">
@@ -50,7 +60,7 @@
         <TextBlock Classes="hint" Text="{Binding EmptyMessage}" IsVisible="{Binding !Lines.Count}"
                    Margin="12" TextAlignment="Center"
                    HorizontalAlignment="Center" VerticalAlignment="Center" />
-        <ListBox x:Name="List" ItemsSource="{Binding Lines}" Background="Transparent"
+        <ListBox x:Name="List" ItemsSource="{Binding Lines}" SelectedItem="{Binding SelectedLine}" Background="Transparent"
                  FontFamily="{DynamicResource MonoFont}" FontSize="{DynamicResource FontCaption}"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
           <ListBox.ItemsPanel>

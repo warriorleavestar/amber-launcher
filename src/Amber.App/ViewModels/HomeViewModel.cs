@@ -259,6 +259,7 @@ public sealed partial class HomeViewModel : PageViewModel
             SetStatus(StatusMessage.Info("home.status.launching"));
             Progress = 100;
             _log.Clear();
+            _log.BeginRun(id, DateTimeOffset.Now);
             _recentOutput.Clear();
             _log.AddRaw(L.F("home.log.launch", id, javaPath, memory));
             foreach (var note in _proxyNotes) _log.AddRaw(note);

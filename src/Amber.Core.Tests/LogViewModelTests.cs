@@ -204,4 +204,52 @@ public class LogViewModelTests
         foreach (var property in new[] { nameof(vm.ErrorCount), nameof(vm.WarningCount), nameof(vm.ErrorSummary), nameof(vm.WarningSummary) })
             Assert.True(changed.Contains(property) || changed.Contains(null) || changed.Contains(""), property);
     }
+
+    [Fact]
+    public void NextErrorCyclesThroughErrorsAndWraps() => UiTestThread.Run(NextErrorCyclesThroughErrorsAndWrapsOnUiThread);
+
+    private static void NextErrorCyclesThroughErrorsAndWrapsOnUiThread()
+    {
+        var vm = new LogViewModel();
+        vm.AddRaw("[main/INFO]: a");
+        vm.AddRaw("[main/ERROR]: first");
+        vm.AddRaw("[main/WARN]: warn");
+        vm.AddRaw("[main/ERROR]: second");
+        vm.Flush();
+        var jumps = new List<string>();
+        vm.JumpRequested += e => jumps.Add(e.Message);
+
+        vm.NextErrorCommand.Execute(null);
+        vm.NextErrorCommand.Execute(null);
+        vm.NextErrorCommand.Execute(null);
+        vm.NextWarningCommand.Execute(null);
+
+        Assert.Equal(["[main/ERROR]: first", "[main/ERROR]: second", "[main/ERROR]: first", "[main/WARN]: warn"], jumps);
+        Assert.Equal("[main/WARN]: warn", vm.SelectedLine?.Message);
+        Assert.False(vm.FollowLatest);
+        Assert.True(vm.HasErrors);
+    }
+
+    [Fact]
+    public void NextMatchHandlesEmptyAndMissingCurrent() => UiTestThread.Run(() =>
+    {
+        Assert.Null(LogViewModel.NextMatch([], null, _ => true));
+        var vm = new LogViewModel();
+        vm.AddRaw("[main/INFO]: only info");
+        vm.Flush();
+        Assert.False(vm.HasErrors);
+        vm.NextErrorCommand.Execute(null);
+        Assert.Null(vm.SelectedLine);
+    });
+
+    [Fact]
+    public void RunSummaryShowsInstanceAndStartTime() => UiTestThread.Run(() =>
+    {
+        var vm = new LogViewModel();
+        Assert.False(vm.HasRun);
+        var start = new DateTimeOffset(2026, 11, 5, 15, 0, 0, TimeSpan.FromHours(13));
+        vm.BeginRun("1.21.1-Fabric", start);
+        Assert.True(vm.HasRun);
+        Assert.Equal(L.F("log.run_summary", "1.21.1-Fabric", Fmt.Time(start)), vm.RunSummary);
+    });
 }

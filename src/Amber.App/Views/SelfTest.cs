@@ -181,6 +181,18 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         log.AddRaw("[main/ERROR]: 当前页可见错误");
         check("日志：当前页新错误不产生未读徽标", await WaitAsync(() => log.ErrorCount == 6, 5) && !log.HasBadge, "");
 
+        // 点“错误 N”芯片：选中第一个错误行，再点跳到下一个。
+        var errorChip = page.FindControl<Button>("ErrorChip");
+        var firstError = log.Lines.First(e => e.IsError);
+        var pressed = Press(errorChip);
+        await Task.Delay(100);
+        var jumpedFirst = ReferenceEquals(log.SelectedLine, firstError) && ReferenceEquals(list.SelectedItem, firstError);
+        Press(errorChip);
+        await Task.Delay(100);
+        check("日志：点错误芯片跳到第一个、再点跳到下一个错误", pressed && jumpedFirst && log.SelectedLine is { IsError: true } next
+            && !ReferenceEquals(next, firstError) && !log.FollowLatest, log.SelectedLine?.Message ?? "");
+        follow.IsChecked = true;
+
         follow.IsChecked = false;
         list.ScrollIntoView(0);
         await Task.Delay(200);

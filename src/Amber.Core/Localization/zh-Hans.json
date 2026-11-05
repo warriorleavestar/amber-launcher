@@ -1070,5 +1070,9 @@
   "error.file_in_use": "文件正被别的程序占用（比如游戏还开着），关掉后再试",
   "error.disk_full": "磁盘空间不够",
   "error.path_too_long": "路径太长，换一个短一点的目录",
-  "error.network": "网络连接失败，检查是否已联网"
+  "error.network": "网络连接失败，检查是否已联网",
+  "log.copy_failed": "复制失败",
+  "log.run_summary": "{0} · {1} 开始",
+  "log.next_error": "跳到下一个错误",
+  "log.next_warning": "跳到下一个警告"
 }

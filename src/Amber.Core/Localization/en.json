@@ -1099,5 +1099,9 @@
   "error.file_in_use": "The file is in use by another program (for example, the game is still open). Close it and try again",
   "error.disk_full": "Not enough disk space",
   "error.path_too_long": "The path is too long. Use a shorter folder",
-  "error.network": "Couldn't connect. Check that you're online"
+  "error.network": "Couldn't connect. Check that you're online",
+  "log.copy_failed": "Copy failed",
+  "log.run_summary": "{0} · started {1}",
+  "log.next_error": "Jump to next error",
+  "log.next_warning": "Jump to next warning"
 }

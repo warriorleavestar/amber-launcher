@@ -1070,5 +1070,9 @@
   "error.file_in_use": "檔案正被其他程式使用（例如遊戲還開著），關閉後再試",
   "error.disk_full": "磁碟空間不足",
   "error.path_too_long": "路徑太長，請換一個短一點的目錄",
-  "error.network": "網路連線失敗，請確認是否已連上網路"
+  "error.network": "網路連線失敗，請確認是否已連上網路",
+  "log.copy_failed": "複製失敗",
+  "log.run_summary": "{0} · {1} 開始",
+  "log.next_error": "跳到下一個錯誤",
+  "log.next_warning": "跳到下一個警告"
 }
