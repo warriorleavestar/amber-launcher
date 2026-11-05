@@ -474,6 +474,26 @@ public sealed partial class HomeViewModel : PageViewModel
 
             // 每局一份日志：多开时第二局不会清掉第一局的，也不会混在一起。
             run.Log = _log.BeginRun(id, DateTimeOffset.Now);
+            if (_service.Settings.ExperimentalBake)
+            {
+                SetStatus(StatusMessage.Info("home.status.baking"));
+                try
+                {
+                    var (baked, reason) = await _service.PrepareBakeAsync(id, javaPath, new Progress<Amber.Core.Bake.BakeEvent>(e =>
+                    {
+                        Status = e.Message;
+                        if (e.IsProblem) _log.AddRaw(run.Log, "[Bake] " + e.Message);
+                    }), ct);
+                    if (reason.Length > 0) _log.AddRaw(run.Log, "[Bake] " + reason);
+                    if (baked is not null) options = options with { Baked = baked };
+                }
+                catch (Exception e) when (e is Amber.Core.Bake.BakeException or IOException or InvalidDataException or System.ComponentModel.Win32Exception or System.Text.Json.JsonException)
+                {
+                    // 实验功能失败时不挡住游戏：记下原因，按普通方式启动。
+                    _log.AddRaw(run.Log, "[Bake] " + L.F("home.bake.fallback", e.Message));
+                    Toasts.Show(L.T("home.bake.fallback_toast"));
+                }
+            }
             if (!string.IsNullOrWhiteSpace(settings.PreLaunchCommand))
             {
                 SetStatus(StatusMessage.Info("home.status.pre_launch_command"));

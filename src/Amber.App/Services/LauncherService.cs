@@ -248,6 +248,28 @@ public sealed class LauncherService : IDisposable
 
     public GameInstance GetInstance(string id) => GameInstance.Detect(Directory, id, WorkDirFor(id));
 
+    /// <summary>实验功能“烘焙”：开了并且找到了加载器原型时返回服务，否则 null。缓存放在数据目录，所有实例共用。</summary>
+    public Amber.Core.Bake.BakeService? Bake =>
+        Settings.ExperimentalBake && Amber.Core.Bake.BakeToolkit.Find(Settings.BakeLoaderPath) is { } toolkit
+            ? new Amber.Core.Bake.BakeService(toolkit, Path.Combine(AppSettings.DataDir, "bake-cache"))
+            : null;
+
+    /// <summary>
+    /// 启动前的烘焙：实例支持时，输入没变就直接用上次的结果，变了就先烘焙模组和实例。
+    /// 返回 null 表示这次按普通方式启动（没开、不支持）；reason 是给日志看的原因。
+    /// </summary>
+    public async Task<(Amber.Core.Bake.BakedLaunch? Launch, string Reason)> PrepareBakeAsync(string id, string javaPath, IProgress<Amber.Core.Bake.BakeEvent>? progress, CancellationToken ct)
+    {
+        if (Bake is not { } bake) return (null, Settings.ExperimentalBake ? Amber.Core.Localization.L.T("core.bake.loader_missing") : "");
+        var instance = GetInstance(id);
+        var (_, _, supported) = await bake.VersionAsync(javaPath, ct);
+        if (!Amber.Core.Bake.BakeService.Supports(instance, supported, out var reason)) return (null, reason);
+        var major = Directory.ResolveVersion(id).JavaVersion?.MajorVersion ?? 21;
+        if (bake.Current(Directory, instance, major) is { } current) return (current, Amber.Core.Localization.L.T("core.bake.reused"));
+        await bake.BakeModsAsync(javaPath, Directory, instance, progress, ct);
+        return (await bake.BakeInstanceAsync(javaPath, major, Directory, instance, progress, ct), Amber.Core.Localization.L.T("core.bake.done"));
+    }
+
     /// <summary>整合包的文件都在版本目录里，这个版本必须固定开启隔离。</summary>
     public void ForceIsolated(string id)
     {
