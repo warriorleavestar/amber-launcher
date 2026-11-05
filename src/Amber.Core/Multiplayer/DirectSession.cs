@@ -41,6 +41,9 @@ public sealed class DirectSession : IAsyncDisposable
     private TaskCompletionSource<JsonObject>? _testAnswer;
     private string? _hostRun;
     private Timer? _consentWatch;
+    private Timer? _pendingWatch;
+    private volatile bool _disposed;
+    private IPEndPoint? _legacyPeer;
     private CancellationTokenSource? _hostAbort;
 
     // 启动、换参数重启 EasyTier 一次只做一个（测试步骤、提权、结束恢复可能同时触发）。
@@ -55,8 +58,11 @@ public sealed class DirectSession : IAsyncDisposable
     /// <summary>测试用：代替真的启动 EasyTier。</summary>
     internal Func<EasyTierOptions, CancellationToken, Task<IEasyTierSession>>? StartForTest { get; init; }
 
-    /// <summary>房主：加入方是 0.5.9 以前的版本（hello 里带完整房间码、没有会话 id）。全条件测试需要对方升级。</summary>
-    public bool GuestIsLegacy { get; private set; }
+    /// <summary>
+    /// 房主：现在连着的加入方（测试要用的那个）是 0.5.9 以前的版本（hello 里带完整房间码、没有会话 id）。全条件测试需要对方升级。
+    /// 按地址记：别的成员发来旧 hello 不影响，同一个地址后来发了新 hello 就清掉。
+    /// </summary>
+    public bool GuestIsLegacy => _legacyPeer is { } legacy && Bridge?.Peers.FirstOrDefault()?.Remote.Equals(legacy) == true;
 
     /// <summary>加入方：开始执行测试的一步（界面显示“测试中”和完整局域网/出口提示）。</summary>
     public event Action<MatrixStep>? GuestStepStarted;
@@ -193,6 +199,8 @@ public sealed class DirectSession : IAsyncDisposable
             }
             _currentOptions = options;
             EasyTierStarts++;
+            // 启动途中（比如在等权限确认）用户已经离开：刚起来的 EasyTier 马上关掉，不留在后台。
+            if (_disposed) EasyTier?.Dispose();
         }
         finally
         {
@@ -318,9 +326,9 @@ public sealed class DirectSession : IAsyncDisposable
         {
             case "hello" when IsHost && IsLegacyHello(message):
                 // 0.5.9 以前的加入方：hello 里是完整的邀请码（含房间密钥，明文经过网络）。不解析它，只记下来提醒用户。
-                if (!GuestIsLegacy)
+                if (!peer.Remote.Equals(_legacyPeer))
                 {
-                    GuestIsLegacy = true;
+                    _legacyPeer = peer.Remote;
                     Log(L.T("core.mp.session.legacyguest"));
                     StateChanged?.Invoke();
                 }
@@ -328,6 +336,11 @@ public sealed class DirectSession : IAsyncDisposable
             case "hello" when IsHost:
                 if (LocalCode is { } local && TryParseHello(message, local.Session, out var nat, out var candidates))
                 {
+                    if (peer.Remote.Equals(_legacyPeer))
+                    {
+                        _legacyPeer = null;
+                        StateChanged?.Invoke();
+                    }
                     _guestCandidates = candidates;
                     _guestNat = nat;
                     Log(L.T("core.mp.session.guestaddresses") + string.Join(L.T("core.mp.format.listseparator"), candidates));
@@ -337,12 +350,13 @@ public sealed class DirectSession : IAsyncDisposable
                 if (Str(message, "run") is { } requestRun && TestConsent.Request(new TestRequest(requestRun, Bool(message, "fullLan") == true)))
                 {
                     Log(L.T("core.mp.matrix.requested"));
-                    TestRequested?.Invoke(TestConsent.Pending!);
+                    WatchPending(requestRun);
+                    TestRequested?.Invoke(new TestRequest(requestRun, Bool(message, "fullLan") == true));
                 }
                 break;
             case "test-end" when !IsHost:
-                TestConsent.Withdraw(Str(message, "run") ?? "");
-                _ = EndGuestTestAsync(Str(message, "run"));
+                var withdrew = TestConsent.Withdraw(Str(message, "run") ?? "");
+                _ = EndGuestTestAsync(Str(message, "run"), notify: withdrew);
                 break;
             case "step" when !IsHost:
                 _ = GuestStepAsync(peer, message);
@@ -382,17 +396,25 @@ public sealed class DirectSession : IAsyncDisposable
     /// <summary>
     /// 加入方：用户回答房主的测试请求。同意时只同意勾上的部分（完整局域网、把房主当出口），记下现在的联机设置，测完恢复。
     /// </summary>
-    public async Task AnswerTestRequestAsync(bool accept, bool allowFullLan, bool allowExit)
+    /// <returns>真的同意并且告诉了房主时返回 true（请求已经作废、断开、拒绝都是 false）。</returns>
+    public async Task<bool> AnswerTestRequestAsync(bool accept, bool allowFullLan, bool allowExit)
     {
         var run = TestConsent.Pending?.Run;
-        if (run is null) return;
+        _pendingWatch?.Dispose();
+        _pendingWatch = null;
+        if (run is null)
+        {
+            // 请求已经作废（超时、房主撤回）：界面收起确认。
+            TestEnded?.Invoke();
+            return false;
+        }
         if (Bridge?.Peers.FirstOrDefault() is not { } peer)
         {
             // 和房主断开了：当作拒绝（不留下一个没人知道的“已同意”）。
             TestConsent.Answer(false, false, false, null);
             Log(L.T("core.mp.matrix.nopeerdeclined"));
             TestEnded?.Invoke();
-            return;
+            return false;
         }
         // 记下现在真正在跑的参数（不是上次要求的），测完恢复成它。
         var answer = TestConsent.Answer(accept, allowFullLan, allowExit, EasyTier?.Options ?? _currentOptions);
@@ -418,52 +440,95 @@ public sealed class DirectSession : IAsyncDisposable
             ["fullLan"] = answer?.FullLan == true,
             ["exit"] = answer?.Exit == true,
         });
+        return answer is not null;
+    }
+
+    /// <summary>等确认的请求放太久（<see cref="GuestTestConsent.PendingLimit"/>）就作废，界面收起确认。</summary>
+    private void WatchPending(string run)
+    {
+        _pendingWatch?.Dispose();
+        _pendingWatch = new Timer(_ =>
+        {
+            if (TestConsent.ExpirePending(run))
+            {
+                Log(L.T("core.mp.matrix.requestexpired"));
+                TestEnded?.Invoke();
+            }
+        }, null, GuestTestConsent.PendingLimit + TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>加入方：用户点了“停止测试”。告诉房主（尽力而为），然后自己结束并恢复。</summary>
+    /// <remarks>
+    /// 还没回答的请求当作拒绝。已经同意的：先清掉同意、放开所有路径、断了就重新打洞，再通知房主，最后恢复 EasyTier
+    /// （停在“直连只开一条路径”的那一步时，不先恢复路径就发不出通知）。
+    /// </remarks>
     public async Task StopGuestTestAsync()
     {
-        if (TestConsent.ActiveRun is not { } run) return;
-        Log(L.T("core.mp.matrix.gueststopped"));
-        if (Bridge?.Peers.FirstOrDefault() is { } peer)
+        if (TestConsent.ActiveRun is not { } run)
         {
-            try { await Bridge.SendControlAsync(peer, new JsonObject { ["op"] = "test-abort", ["run"] = run }); }
-            catch (Exception e) when (e is SocketException or ObjectDisposedException or OperationCanceledException) { }
+            if (TestConsent.Pending is not null) await AnswerTestRequestAsync(false, false, false);
+            return;
         }
-        await EndGuestTestAsync(run);
+        Log(L.T("core.mp.matrix.gueststopped"));
+        await EndGuestTestAsync(run, beforeRestore: async () =>
+        {
+            if (Bridge?.Peers.FirstOrDefault() is { } peer)
+            {
+                try { await Bridge.SendControlAsync(peer, new JsonObject { ["op"] = "test-abort", ["run"] = run }); }
+                catch (Exception e) when (e is SocketException or ObjectDisposedException or OperationCanceledException) { }
+            }
+        });
     }
 
     /// <summary>
     /// 加入方：测试结束（房主说结束、太久没动静、超过最长时间、用户点停止）：清掉同意，取消还在路上的步骤，
     /// 在启动锁里无条件恢复所有路径和原来的联机设置。
     /// </summary>
-    internal async Task EndGuestTestAsync(string? run)
+    /// <param name="notify">不是这次测试（比如只是撤回了还没回答的请求）时也通知界面。</param>
+    /// <param name="beforeRestore">放开路径之后、恢复 EasyTier 之前做的事（停止时通知房主）。</param>
+    internal async Task EndGuestTestAsync(string? run, bool notify = false, Func<Task>? beforeRestore = null)
     {
         var ended = TestConsent.End(run, out var original);
-        if (ended)
+        try
         {
+            if (!ended) return;
             CancelRun(run);
             _consentWatch?.Dispose();
             _consentWatch = null;
-            if (Bridge is { } bridge)
+            try
             {
-                bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
-                bridge.SprayPorts = 256;
+                if (Bridge is { } bridge)
+                {
+                    bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
+                    bridge.SprayPorts = 256;
+                    // 停在直连某一步时连接可能已经断了：重新打洞，好让通知和之后的联机走得通。
+                    if (bridge.Peers.Count == 0 && _remote is { } remote && !_disposed)
+                        await bridge.PunchAsync(remote.Candidates, remote.Nat, TimeSpan.FromSeconds(30));
+                }
+                if (beforeRestore is not null) await beforeRestore();
             }
-            if (original is not null)
+            catch (Exception e)
+            {
+                Log(L.T("core.mp.matrix.restorefailedsettings") + e.Message);
+            }
+            if (original is not null && !_disposed)
             {
                 try
                 {
                     await StartEasyTierAsync(original with { RpcPort = EasyTierArgs.FreeTcpPort() }, CancellationToken.None, force: true);
                     Log(L.T("core.mp.matrix.restored"));
                 }
-                catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
+                catch (Exception e)
                 {
+                    // 任何失败（包括没权限写运行目录）都只记下来：同意已经清掉，界面照样收起。
                     Log(L.T("core.mp.matrix.restorefailedsettings") + e.Message);
                 }
             }
         }
-        TestEnded?.Invoke();
+        finally
+        {
+            if (ended || notify) TestEnded?.Invoke();
+        }
     }
 
     /// <summary>当前连接走的路径，界面显示用。</summary>
@@ -801,7 +866,9 @@ public sealed class DirectSession : IAsyncDisposable
             try { await step(); }
             catch (Exception e) { Log(L.F("core.mp.punch.localerror", e.GetType().Name)); }
         }
+        _disposed = true;
         Try(() => _consentWatch?.Dispose());
+        Try(() => _pendingWatch?.Dispose());
         Try(() =>
         {
             lock (_runGate)

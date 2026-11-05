@@ -171,6 +171,87 @@ public sealed class GuestTestLifecycleTests : IDisposable
         Assert.NotNull(consent2.BeginStep("run-0006", 99, false, false));
     }
 
+    /// <summary>恢复时出了没预料到的错（比如没权限写运行目录）：同意照样清掉，界面照样收到“测试结束”。</summary>
+    [Fact]
+    public async Task RestoreFailureStillEndsTest()
+    {
+        await using var session = NewSession((o, _) => IsStep(o) || o.RpcPort == 1
+            ? Task.FromResult<IEasyTierSession>(new FakeEasyTier(o))
+            : throw new UnauthorizedAccessException("denied"));
+        await session.StartEasyTierAsync(Original, default);
+        Accept(session, "run-0007");
+        await session.StartForRunAsync("run-0007", Step);
+        var ended = 0;
+        session.TestEnded += () => ended++;
+        await session.EndGuestTestAsync("run-0007");
+        Assert.Equal(1, ended);
+        Assert.Null(session.TestConsent.ActiveRun);
+    }
+
+    /// <summary>别的测试编号的“结束”：不动正在进行的测试，也不让界面收起。</summary>
+    [Fact]
+    public async Task WrongRunEndIsIgnored()
+    {
+        await using var session = NewSession((o, _) => Task.FromResult<IEasyTierSession>(new FakeEasyTier(o)));
+        await session.StartEasyTierAsync(Original, default);
+        Accept(session, "run-0008");
+        var ended = 0;
+        session.TestEnded += () => ended++;
+        await session.EndGuestTestAsync("run-other");
+        Assert.Equal(0, ended);
+        Assert.Equal("run-0008", session.TestConsent.ActiveRun);
+    }
+
+    /// <summary>等确认的请求放久了作废：不能再同意，也不挡住房主下一次请求。</summary>
+    [Fact]
+    public void PendingRequestExpires()
+    {
+        var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var consent = new GuestTestConsent(() => now);
+        Assert.True(consent.Request(new TestRequest("run-0009", false)));
+        Assert.False(consent.ExpirePending("run-0009"));
+        now += GuestTestConsent.PendingLimit + TimeSpan.FromSeconds(1);
+        Assert.True(consent.ExpirePending("run-0009"));
+        Assert.Null(consent.Pending);
+        Assert.Null(consent.Answer(true, false, false, null));
+        Assert.True(consent.Request(new TestRequest("run-0010", false)));
+        Assert.True(consent.Withdraw("run-0010"));
+        Assert.False(consent.Withdraw("run-0010"));
+    }
+
+    /// <summary>还没同意时点“停止测试”：当作拒绝，请求清掉。</summary>
+    [Fact]
+    public async Task StopBeforeAnswerDeclines()
+    {
+        await using var session = NewSession((o, _) => Task.FromResult<IEasyTierSession>(new FakeEasyTier(o)));
+        await session.StartEasyTierAsync(Original, default);
+        Assert.True(session.TestConsent.Request(new TestRequest("run-0011", true)));
+        await session.StopGuestTestAsync();
+        Assert.Null(session.TestConsent.Pending);
+        Assert.Null(session.TestConsent.ActiveRun);
+    }
+
+    /// <summary>启动途中（比如在等权限确认）会话已经关了：刚起来的 EasyTier 马上关掉。</summary>
+    [Fact]
+    public async Task StartFinishingAfterDisposeIsStopped()
+    {
+        var gate = new TaskCompletionSource();
+        var started = new TaskCompletionSource();
+        FakeEasyTier? late = null;
+        var session = NewSession(async (o, _) =>
+        {
+            started.TrySetResult();
+            await gate.Task;
+            return late = new FakeEasyTier(o);
+        });
+        var start = session.StartEasyTierAsync(Original, default);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await session.DisposeAsync();
+        gate.SetResult();
+        await start;
+        Assert.True(late!.HasExited);
+    }
+
     /// <summary>认得出 0.5.9 以前的 hello（带完整码、没有会话 id）；新版本的不算。</summary>
     [Fact]
     public void LegacyHelloIsRecognized()

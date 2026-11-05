@@ -198,7 +198,8 @@ public sealed partial class MultiplayerViewModel
         // 先订阅再加入：打通后房主可能马上发来测试请求。只认当前这个会话的事件（结束或换了会话就不管）。
         direct.TestRequested += request => Dispatcher.UIThread.Post(() =>
         {
-            if (_direct != direct) return;
+            // 事件排到界面线程时请求可能已经作废或撤回：只显示还在等确认的那个。
+            if (_direct != direct || direct.TestConsent.Pending?.Run != request.Run) return;
             ShowTestRequest(request);
         });
         direct.GuestStepStarted += step => Dispatcher.UIThread.Post(() =>
@@ -242,6 +243,8 @@ public sealed partial class MultiplayerViewModel
             _direct = null;
             IsDirect = false;
             Mode = "";
+            // 打洞期间可能已经收到测试请求：一起收起。
+            ResetGuestTest();
             Status = L.F("multiplayer.direct.connect_failed", e.Message);
         }
     }
@@ -416,8 +419,16 @@ public sealed partial class MultiplayerViewModel
     {
         if (_direct is not { IsHost: false } direct || !TestRequestPending) return;
         TestRequestPending = false;
-        await direct.AnswerTestRequestAsync(accept, TestRequestWantsFullLan && TestAllowFullLan, TestRequestWantsFullLan && TestAllowFullLan && TestAllowExit);
-        Status = L.T(accept ? "multiplayer.matrix.running" : "multiplayer.matrix.cancelled");
+        var accepted = await direct.AnswerTestRequestAsync(accept, TestRequestWantsFullLan && TestAllowFullLan, TestRequestWantsFullLan && TestAllowFullLan && TestAllowExit);
+        if (_direct != direct) return;
+        if (accepted)
+        {
+            // 同意后马上显示横幅和“停止测试”（不等第一步到）。
+            GuestTestRunning = true;
+            GuestTestBanner = L.T("multiplayer.matrix.banner_running");
+            Status = L.T("multiplayer.matrix.running");
+        }
+        else Status = L.T(accept ? "multiplayer.matrix.request_gone" : "multiplayer.matrix.cancelled");
     }
 
     [RelayCommand]

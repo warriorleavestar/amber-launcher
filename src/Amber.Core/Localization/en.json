@@ -1102,5 +1102,7 @@
   "multiplayer.matrix.banner_full_lan": "Full test in progress: testing full LAN mode (virtual network adapter is on)",
   "multiplayer.matrix.banner_exit": "Full test in progress: testing the exit node. During this step your internet traffic goes through the host's computer",
   "multiplayer.matrix.stop_test": "Stop test",
-  "core.mp.punch.peerevicted": "{0} stopped responding and was removed"
+  "core.mp.punch.peerevicted": "{0} stopped responding and was removed",
+  "core.mp.matrix.requestexpired": "The host's test request went unanswered for too long and has expired",
+  "multiplayer.matrix.request_gone": "This test request is no longer valid (it timed out or the host cancelled it). No test was started."
 }

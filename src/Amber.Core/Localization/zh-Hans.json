@@ -1074,5 +1074,7 @@
   "multiplayer.matrix.banner_full_lan": "全条件测试中：正在测完整局域网模式（虚拟网卡已开启）",
   "multiplayer.matrix.banner_exit": "全条件测试中：正在测出口，这一步你的网络流量经房主的电脑上网",
   "multiplayer.matrix.stop_test": "停止测试",
-  "core.mp.punch.peerevicted": "{0} 太久没有回应，已移除"
+  "core.mp.punch.peerevicted": "{0} 太久没有回应，已移除",
+  "core.mp.matrix.requestexpired": "房主的测试请求太久没有回答，已作废",
+  "multiplayer.matrix.request_gone": "这次测试请求已经作废（超时或房主已取消），没有开始测试"
 }
