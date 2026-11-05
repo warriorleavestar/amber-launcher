@@ -200,7 +200,7 @@
   "core.content.modpack.notcurseforge": "不是 CurseForge 整合包",
   "core.content.modpack.parsefailed": "{0} 解析失败",
   "core.content.modpack.querymods": "查询模组信息",
-  "core.content.modpack.unrecognized": "不认识这个整合包：支持 Modrinth（mrpack）、CurseForge、MultiMC / Prism 实例、HMCL 和 MCBBS 整合包",
+  "core.content.modpack.unrecognized": "不认识这个整合包：支持 Modrinth（mrpack）、CurseForge、MultiMC / Prism 实例、HMCL、MCBBS、PCL 导出的整合包（含带启动器的压缩包），以及直接压缩的 .minecraft 文件夹",
   "core.content.modpack.unsafepath": "整合包里有不安全的路径：{0}",
   "core.content.modpack.unsupportedloader": "不支持的加载器：{0}",
   "core.content.modrinth.nofiles": "版本 {0} 没有可下载文件",
@@ -1058,5 +1058,7 @@
   "core.game.directory.unsafepath": "版本文件里的路径不安全，已拒绝：{0}",
   "core.mp.punch.controlerror": "丢掉一个处理不了的控制包（{0}）",
   "core.auth.external.insecure": "外置登录服务器必须用 https（密码和令牌会经它传）：{0}",
-  "core.auth.external.redirected": "外置登录服务器把请求跳转到了别的地址（{0}），为了安全没有继续"
+  "core.auth.external.redirected": "外置登录服务器把请求跳转到了别的地址（{0}），为了安全没有继续",
+  "core.content.modpack.notzip": "这是 {0} 压缩包，Amber 只能打开 zip：请先解压，再把里面的文件重新压缩成 zip",
+  "core.content.modpack.foldernoversion": "认不出压缩包里版本 {0} 的游戏版本"
 }

@@ -200,7 +200,7 @@
   "core.content.modpack.notcurseforge": "這不是 CurseForge 模組包",
   "core.content.modpack.parsefailed": "{0} 解析失敗",
   "core.content.modpack.querymods": "查詢模組資訊",
-  "core.content.modpack.unrecognized": "無法辨識這個模組包：支援 Modrinth（mrpack）、CurseForge、MultiMC / Prism 實例、HMCL 和 MCBBS 模組包",
+  "core.content.modpack.unrecognized": "無法辨識這個模組包：支援 Modrinth（mrpack）、CurseForge、MultiMC / Prism 實例、HMCL、MCBBS、PCL 匯出的模組包（含附帶啟動器的壓縮檔），以及直接壓縮的 .minecraft 資料夾",
   "core.content.modpack.unsafepath": "模組包中含有不安全的路徑：{0}",
   "core.content.modpack.unsupportedloader": "不支援的模組載入器：{0}",
   "core.content.modrinth.nofiles": "版本 {0} 沒有可下載的檔案",
@@ -1058,5 +1058,7 @@
   "core.game.directory.unsafepath": "版本檔案中的路徑不安全，已拒絕：{0}",
   "core.mp.punch.controlerror": "丟棄一個無法處理的控制封包（{0}）",
   "core.auth.external.insecure": "外置登入伺服器必須使用 https（密碼和權杖會經由它傳送）：{0}",
-  "core.auth.external.redirected": "外置登入伺服器把請求轉址到別的位址（{0}），為了安全沒有繼續"
+  "core.auth.external.redirected": "外置登入伺服器把請求轉址到別的位址（{0}），為了安全沒有繼續",
+  "core.content.modpack.notzip": "這是 {0} 壓縮檔，Amber 只能開啟 zip：請先解壓縮，再把裡面的檔案重新壓縮成 zip",
+  "core.content.modpack.foldernoversion": "無法辨識壓縮檔中版本 {0} 的遊戲版本"
 }

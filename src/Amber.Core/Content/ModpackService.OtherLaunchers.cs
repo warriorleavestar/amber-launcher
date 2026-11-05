@@ -29,22 +29,22 @@ public sealed partial class ModpackService
 
     private static string PrefixOf(ZipArchiveEntry entry) => entry.FullName[..^entry.Name.Length];
 
-    private static ModpackInfo? InspectOtherLaunchers(ZipArchive zip)
+    private static ModpackInfo? InspectOtherLaunchers(ZipArchive zip, string root)
     {
-        if (zip.GetEntry("mcbbs.packmeta") is { } mcbbs)
+        if (McbbsMeta(zip, root) is { } mcbbs)
         {
             var meta = ReadJson(mcbbs);
             var (mc, loader, version) = FromAddons(meta["addons"] as JsonArray);
             return new ModpackInfo(Mcbbs, Str(meta, "name") ?? L.T("core.content.modpack.defaultname"), Str(meta, "version"),
                 mc ?? throw new InvalidDataException(L.T("core.content.modpack.mcbbsnoversion")), loader, version,
-                (meta["files"] as JsonArray)?.Count ?? 0, "overrides/");
+                (meta["files"] as JsonArray)?.Count ?? 0, root + "overrides/", root);
         }
 
-        if (zip.GetEntry("modpack.json") is { } hmcl)
+        if (zip.GetEntry(root + "modpack.json") is { } hmcl)
         {
             var meta = ReadJson(hmcl);
             var (mc, loader, version) = FromAddons(meta["addons"] as JsonArray);
-            if (loader is null && zip.GetEntry("minecraft/pack.json") is { } pack)
+            if (loader is null && zip.GetEntry(root + "minecraft/pack.json") is { } pack)
             {
                 var json = ReadJson(pack);
                 (loader, version) = FromLibraries(json);
@@ -52,13 +52,13 @@ public sealed partial class ModpackService
             }
             mc = Str(meta, "gameVersion") ?? mc;
             return new ModpackInfo(Hmcl, Str(meta, "name") ?? L.T("core.content.modpack.defaultname"), Str(meta, "version"),
-                mc ?? throw new InvalidDataException(L.T("core.content.modpack.hmclnoversion")), loader, version, 0, "minecraft/");
+                mc ?? throw new InvalidDataException(L.T("core.content.modpack.hmclnoversion")), loader, version, 0, root + "minecraft/", root);
         }
 
         var mmcPack = FindEntry(zip, "mmc-pack.json");
         var cfg = FindEntry(zip, "instance.cfg");
         if (mmcPack is null && cfg is null) return null;
-        var root = PrefixOf(mmcPack ?? cfg!);
+        root = PrefixOf(mmcPack ?? cfg!);
         var settings = cfg is null ? [] : ReadInstanceCfg(cfg);
 
         string? game = null;
@@ -185,13 +185,13 @@ public sealed partial class ModpackService
                 ApplyMultiMcSettings(ReadInstanceCfg(cfg), id);
                 break;
             case Mcbbs:
-                var meta = ReadJson(zip.GetEntry("mcbbs.packmeta")!);
+                var meta = ReadJson(McbbsMeta(zip, info.Root)!);
                 await AddOptiFineModAsync(info, OptiFineAddon(meta["addons"] as JsonArray, info.McVersion), workDir, progress, ct);
                 await DownloadMcbbsCurseFilesAsync(meta, workDir, progress, ct);
                 break;
             case Hmcl:
-                var addon = OptiFineAddon(ReadJson(zip.GetEntry("modpack.json")!)["addons"] as JsonArray, info.McVersion);
-                if (addon is null && zip.GetEntry("minecraft/pack.json") is { } packJson) addon = OptiFineLibrary(ReadJson(packJson));
+                var addon = OptiFineAddon(ReadJson(zip.GetEntry(info.Root + "modpack.json")!)["addons"] as JsonArray, info.McVersion);
+                if (addon is null && zip.GetEntry(info.Root + "minecraft/pack.json") is { } packJson) addon = OptiFineLibrary(ReadJson(packJson));
                 await AddOptiFineModAsync(info, addon, workDir, progress, ct);
                 break;
         }

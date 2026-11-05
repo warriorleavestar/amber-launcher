@@ -204,7 +204,7 @@
   "core.content.modpack.notcurseforge": "This is not a CurseForge modpack",
   "core.content.modpack.parsefailed": "Failed to parse {0}",
   "core.content.modpack.querymods": "Look up mod information",
-  "core.content.modpack.unrecognized": "Unrecognized modpack. Supported formats: Modrinth (mrpack), CurseForge, MultiMC / Prism instances, HMCL, and MCBBS modpacks",
+  "core.content.modpack.unrecognized": "Unrecognized modpack. Supported: Modrinth (mrpack), CurseForge, MultiMC / Prism instances, HMCL, MCBBS, PCL exports (including archives that bundle a launcher), and zipped .minecraft folders",
   "core.content.modpack.unsafepath": "The modpack contains an unsafe path: {0}",
   "core.content.modpack.unsupportedloader": "Unsupported mod loader: {0}",
   "core.content.modrinth.nofiles": "Version {0} has no files to download",
@@ -1086,5 +1086,7 @@
   "core.game.directory.unsafepath": "Rejected an unsafe path in the version file: {0}",
   "core.mp.punch.controlerror": "Dropped a control packet that couldn't be handled ({0})",
   "core.auth.external.insecure": "The external login server must use https (your password and tokens go through it): {0}",
-  "core.auth.external.redirected": "The external login server redirected the request to another address ({0}). Stopped for safety"
+  "core.auth.external.redirected": "The external login server redirected the request to another address ({0}). Stopped for safety",
+  "core.content.modpack.notzip": "This is a {0} archive, and Amber can only open zip files. Extract it, then compress the contents into a zip",
+  "core.content.modpack.foldernoversion": "Could not tell which Minecraft version {0} in the archive is for"
 }
