@@ -1,6 +1,6 @@
 # Amber launcher: notes for coding agents
 
-Amber is an original Minecraft Java launcher for Windows, built with .NET 10 and Avalonia 12 (MVVM via CommunityToolkit.Mvvm).
+Amber is an original cross-platform Minecraft Java launcher for Windows, macOS and Linux, built with .NET 10 and Avalonia 12 (MVVM via CommunityToolkit.Mvvm).
 The UI text, comments and docs are written in Simplified Chinese. Keep new ones in the same language and tone.
 
 ## Layout
@@ -24,6 +24,8 @@ Release build, a single self-contained exe:
 ```bash
 dotnet publish Amber.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishReadyToRun=true -p:DebugType=none -o ../publish
 ```
+
+Use `osx-arm64`, `osx-x64`, `linux-x64` or `linux-arm64` for the other release targets. The CI workflow publishes every supported RID on its native runner.
 
 GUI self-check: it drives the real window through install, launch, mods, multiplayer and import, then writes `report.txt` to the report directory you pass.
 

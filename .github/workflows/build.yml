@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  validate:
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -36,33 +36,98 @@ jobs:
 
       # 界面自检（AMBER_SELFTEST）要真实窗口、联网下载游戏和启动 Java，CI 上不跑，发布前在本机跑 tools/run-selftest.ps1。
 
-      - name: Publish (single file, ReadyToRun)
-        run: dotnet publish Amber.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishReadyToRun=true -p:DebugType=none -o ../out/r2r
+  publish:
+    needs: validate
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            archive: zip
+          - os: macos-15-intel
+            rid: osx-x64
+            archive: tar
+          - os: macos-14
+            rid: osx-arm64
+            archive: tar
+          - os: ubuntu-latest
+            rid: linux-x64
+            archive: tar
+          - os: ubuntu-24.04-arm
+            rid: linux-arm64
+            archive: tar
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Publish (Native AOT)
-        run: dotnet publish Amber.App -c Release -r win-x64 -p:PublishAot=true -p:DebugType=none -o ../out/aot
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
 
-      # 原生库（SkiaSharp 等）的 .pdb 调试符号不需要发出去。AOT 版是 4 个文件，另外打成一个 zip 方便下载。
-      - name: Package
+      - name: Publish single-file ReadyToRun
+        run: >-
+          dotnet publish Amber.App -c Release -r ${{ matrix.rid }} --self-contained
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:PublishReadyToRun=true -p:DebugType=none
+          -o ../out/${{ matrix.rid }}
+
+      - name: Package Windows
+        if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          Get-ChildItem ../out -Recurse -Filter *.pdb | Remove-Item
-          Compress-Archive -Path ../out/aot/* -DestinationPath ../out/Amber-win-x64-aot.zip
+          New-Item -ItemType Directory -Force ../packages | Out-Null
+          Get-ChildItem ../out/${{ matrix.rid }} -Recurse -Filter *.pdb | Remove-Item
+          Compress-Archive -Path ../out/${{ matrix.rid }}/* -DestinationPath ../packages/Amber-${{ matrix.rid }}.zip
+
+      - name: Package macOS/Linux
+        if: matrix.archive == 'tar'
+        shell: bash
+        run: |
+          mkdir -p ../packages
+          find ../out/${{ matrix.rid }} -name '*.pdb' -delete
+          chmod +x ../out/${{ matrix.rid }}/Amber
+          tar -C ../out/${{ matrix.rid }} -czf ../packages/Amber-${{ matrix.rid }}.tar.gz .
+
+      - name: Publish Windows Native AOT
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: |
+          dotnet publish Amber.App -c Release -r win-x64 -p:PublishAot=true -p:DebugType=none -o ../out/win-x64-aot
+          Get-ChildItem ../out/win-x64-aot -Recurse -Filter *.pdb | Remove-Item
+          Compress-Archive -Path ../out/win-x64-aot/* -DestinationPath ../packages/Amber-win-x64-aot.zip
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: amber-r2r
-          path: out/r2r
+          name: amber-${{ matrix.rid }}
+          path: packages/*
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: amber-aot
-          path: out/aot
-          if-no-files-found: error
+          pattern: amber-*
+          path: release-assets
+          merge-multiple: true
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: amber-aot-zip
-          path: out/Amber-win-x64-aot.zip
-          if-no-files-found: error
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release-assets/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --generate-notes \
+            --title "Amber ${GITHUB_REF_NAME}"
