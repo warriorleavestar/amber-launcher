@@ -147,8 +147,23 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
 
         var search = await FindAsync<TextBox>(t => t.PlaceholderText?.StartsWith("搜索版本号", StringComparison.Ordinal) == true);
         Dispatcher.UIThread.Invoke(() => search!.Text = "1.21.1");
-        var row = await FindAsync<Button>(b => b.Content as string == "安装…" && b.DataContext is RemoteVersionItem { Id: "1.21.1" });
-        Check("搜索框过滤出 1.21.1 并显示安装按钮", row is not null && download.Items.All(i => i.Id.Contains("1.21.1")), $"{download.Items.Count} 个");
+        // 按行的数据和命令找按钮（不靠按钮文字）；每次找之前把这一行滚进可见区，列表是虚拟化的，没滚到的行不会生成。
+        var list = await FindAsync<ListBox>(l => ReferenceEquals(l.ItemsSource, download.Items));
+        Button? row = null;
+        await WaitAsync(() => Dispatcher.UIThread.Invoke(() =>
+        {
+            if (download.Items.FirstOrDefault(i => i.Id == "1.21.1") is { } item) list?.ScrollIntoView(item);
+            row = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.IsEffectivelyVisible
+                && b.DataContext is RemoteVersionItem { Id: "1.21.1" } && ReferenceEquals(b.Command, download.ConfigureCommand));
+            return row is not null;
+        }), 20);
+        var rowInfo = Dispatcher.UIThread.Invoke(() =>
+        {
+            var rows = window.GetVisualDescendants().OfType<Button>().Where(b => b.DataContext is RemoteVersionItem).ToList();
+            return $"{download.Items.Count} 个；窗口 {window.Bounds.Width:0}×{window.Bounds.Height:0}，已生成的行 {string.Join("/", rows.Select(b => ((RemoteVersionItem)b.DataContext!).Id))}，" +
+                   $"按钮文字「{row?.Content}」";
+        });
+        Check("搜索框过滤出 1.21.1 并显示安装按钮", row is not null && row.Content as string == "安装…" && download.Items.All(i => i.Id.Contains("1.21.1")), rowInfo);
         Check("点“安装…”打开安装面板", Press(row) && await WaitAsync(() => download.IsConfiguring && download.Target?.Id == "1.21.1", 5));
 
         var loaderBox = await FindAsync<ComboBox>(c => ReferenceEquals(c.ItemsSource, download.LoaderChoices));
