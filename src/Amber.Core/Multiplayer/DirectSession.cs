@@ -790,16 +790,30 @@ public sealed class DirectSession : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _consentWatch?.Dispose();
-        lock (_runGate)
+        // 每一步单独兜住：前面哪一步出错，后面的（关 EasyTier、关桥、撤端口映射）照样做。
+        void Try(Action step)
         {
-            _runCts?.Cancel();
-            _runCts?.Dispose();
-            _runCts = null;
+            try { step(); }
+            catch (Exception e) { Log(L.F("core.mp.punch.localerror", e.GetType().Name)); }
         }
-        EasyTier?.Dispose();
-        if (_speed is not null) await _speed.DisposeAsync();
-        if (Bridge is not null) await Bridge.DisposeAsync();
+        async Task TryAsync(Func<Task> step)
+        {
+            try { await step(); }
+            catch (Exception e) { Log(L.F("core.mp.punch.localerror", e.GetType().Name)); }
+        }
+        Try(() => _consentWatch?.Dispose());
+        Try(() =>
+        {
+            lock (_runGate)
+            {
+                _runCts?.Cancel();
+                _runCts?.Dispose();
+                _runCts = null;
+            }
+        });
+        Try(() => EasyTier?.Dispose());
+        if (_speed is not null) await TryAsync(() => _speed.DisposeAsync().AsTask());
+        if (Bridge is not null) await TryAsync(() => Bridge.DisposeAsync().AsTask());
         if (_gathered?.Mapping?.Remove is { } remove)
         {
             try

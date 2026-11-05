@@ -1073,5 +1073,6 @@
   "multiplayer.matrix.banner_running": "房主正在進行全條件測試，連線方式會自動切換",
   "multiplayer.matrix.banner_full_lan": "全條件測試中：正在測試完整區域網路模式（虛擬網卡已開啟）",
   "multiplayer.matrix.banner_exit": "全條件測試中：正在測試出口，這一步你的網路流量經房主的電腦上網",
-  "multiplayer.matrix.stop_test": "停止測試"
+  "multiplayer.matrix.stop_test": "停止測試",
+  "core.mp.punch.peerevicted": "{0} 太久沒有回應，已移除"
 }

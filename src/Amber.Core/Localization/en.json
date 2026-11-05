@@ -1101,5 +1101,6 @@
   "multiplayer.matrix.banner_running": "The host is running a full test. The connection method will switch automatically",
   "multiplayer.matrix.banner_full_lan": "Full test in progress: testing full LAN mode (virtual network adapter is on)",
   "multiplayer.matrix.banner_exit": "Full test in progress: testing the exit node. During this step your internet traffic goes through the host's computer",
-  "multiplayer.matrix.stop_test": "Stop test"
+  "multiplayer.matrix.stop_test": "Stop test",
+  "core.mp.punch.peerevicted": "{0} stopped responding and was removed"
 }

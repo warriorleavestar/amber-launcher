@@ -1073,5 +1073,6 @@
   "multiplayer.matrix.banner_running": "ホストが全条件テストを実行中です。接続方法は自動で切り替わります",
   "multiplayer.matrix.banner_full_lan": "全条件テスト中：フルLANモードをテストしています（仮想ネットワークアダプターが有効）",
   "multiplayer.matrix.banner_exit": "全条件テスト中：出口ノードをテストしています。このステップではインターネット通信がホストのPCを経由します",
-  "multiplayer.matrix.stop_test": "テストを停止"
+  "multiplayer.matrix.stop_test": "テストを停止",
+  "core.mp.punch.peerevicted": "{0} から長時間応答がないため削除しました"
 }

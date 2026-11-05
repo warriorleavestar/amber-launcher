@@ -138,6 +138,31 @@ public sealed class DirectHelloTests
         }
     }
 
+    /// <summary>房主人满时先清掉不再回应的加入方：走掉的人不会一直占着位子；不接的加入方收不到探测确认。</summary>
+    [Fact]
+    public async Task StalePeersAreEvictedWhenFull()
+    {
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { }) { PeerTimeout = TimeSpan.FromSeconds(2) };
+        var target = new[] { new Candidate(PathKind.Lan, new IPEndPoint(IPAddress.Loopback, host.SocketEndPoint.Port)) };
+        var gone = new List<DirectBridge>();
+        for (var i = 0; i < DirectBridge.MaxHostPeers; i++)
+        {
+            var g = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+            Assert.NotNull(await g.PunchAsync(target, NatKind.Cone, TimeSpan.FromSeconds(5)));
+            gone.Add(g);
+        }
+        Assert.Equal(DirectBridge.MaxHostPeers, host.Peers.Count);
+        // 满了：再来的人收不到确认（不会以为连上了）。
+        await using (var refused = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { }))
+            Assert.Null(await refused.PunchAsync(target, NatKind.Cone, TimeSpan.FromSeconds(1.5)));
+        // 所有人都走了（不再回心跳），过了超时以后新来的人能连上。
+        foreach (var g in gone) await g.DisposeAsync();
+        await Task.Delay(TimeSpan.FromSeconds(3));
+        await using var late = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+        Assert.NotNull(await late.PunchAsync(target, NatKind.Cone, TimeSpan.FromSeconds(5)));
+        Assert.True(host.Peers.Count < DirectBridge.MaxHostPeers);
+    }
+
     /// <summary>原文、十六进制、Base64 / Base64url（任意对齐）里有没有 secret。</summary>
     private static bool ContainsReversible(byte[] data, string secret)
     {
