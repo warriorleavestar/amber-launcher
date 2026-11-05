@@ -249,7 +249,10 @@ public sealed class ChatHub : IAsyncDisposable
     internal Func<DateTimeOffset> Clock { get; init; } = () => DateTimeOffset.UtcNow;
 
     /// <summary>测试用：给接受的连接设发送缓冲区大小，模拟网络慢。</summary>
-    internal int? SendBufferForTest { get; init; }
+internal int? SendBufferForTest { get; init; }
+
+/// <summary>测试用：在指定成员的写入前等待，稳定模拟发送阻塞，不依赖系统 TCP 缓冲区。</summary>
+internal Func<string?, CancellationToken, Task>? BeforeSendForTest { get; init; }
 
     private readonly ChatCipher _cipher;
     private readonly List<TcpListener> _listeners = [];
@@ -496,13 +499,17 @@ public sealed class ChatHub : IAsyncDisposable
         }
     }
 
-    private static async Task WriteLoopAsync(Member member)
+    private async Task WriteLoopAsync(Member member)
     {
         try
         {
             var stream = member.Client.GetStream();
             await foreach (var frame in member.Outbox.Reader.ReadAllAsync(member.Cts.Token))
+            {
+                if (BeforeSendForTest is { } beforeSend)
+                    await beforeSend(member.SenderId, member.Cts.Token);
                 await RoomChat.WriteFrameAsync(stream, frame, member.Cts.Token);
+            }
         }
         catch (Exception e) when (e is IOException or OperationCanceledException or ObjectDisposedException or InvalidOperationException or SocketException)
         {
