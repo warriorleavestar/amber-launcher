@@ -69,13 +69,13 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>最小尺寸：放得下侧边栏和一列内容。小屏幕（比如 1280×720 开 150% 缩放，只有约 853×448）上再往下收。</summary>
-    public const double PreferredMinWidth = 760;
-    public const double PreferredMinHeight = 440;
+    /// <summary>最小尺寸（见 WindowSizing）。屏幕放不下时再往下收到可用区域。</summary>
+    public const double PreferredMinWidth = Amber.Core.Layout.WindowSizing.MinWidth;
+    public const double PreferredMinHeight = Amber.Core.Layout.WindowSizing.MinHeight;
 
     /// <summary>
-    /// 按屏幕的可用区域定窗口大小和位置：恢复上次的（还在某块屏幕上时），否则默认大小居中；都不超过可用区域。
-    /// 之前固定 1080×700、最小 900×560，在小屏幕或高缩放下窗口比屏幕还大，下面和右边被切掉。
+    /// 按屏幕的可用区域定窗口大小和位置：恢复上次的（还在某块屏幕上时），否则按可用区域的比例取默认大小并居中；
+    /// 都不超过可用区域。不按哪一种屏幕定死大小。
     /// </summary>
     private void FitToScreen(WindowPlacement? saved)
     {
@@ -86,13 +86,12 @@ public partial class MainWindow : Window
         if (screen is null) return;
         var scale = screen.Scaling;
         var work = screen.WorkingArea;
-        var maxWidth = work.Width / scale;
-        var maxHeight = work.Height / scale;
-        MinWidth = Math.Min(PreferredMinWidth, maxWidth);
-        MinHeight = Math.Min(PreferredMinHeight, maxHeight);
+        var (workW, workH) = (work.Width / scale, work.Height / scale);
+        (MinWidth, MinHeight) = Amber.Core.Layout.WindowSizing.Minimum(workW, workH);
         var onScreen = saved is not null && screen.WorkingArea.Contains(new PixelPoint(saved.X + 40, saved.Y + 20));
-        Width = Math.Clamp(onScreen ? saved!.Width : Width, MinWidth, maxWidth);
-        Height = Math.Clamp(onScreen ? saved!.Height : Height, MinHeight, maxHeight);
+        (Width, Height) = onScreen
+            ? Amber.Core.Layout.WindowSizing.Restore(saved!.Width, saved.Height, workW, workH)
+            : Amber.Core.Layout.WindowSizing.Default(workW, workH);
         var pixelWidth = (int)(Width * scale);
         var pixelHeight = (int)(Height * scale);
         WindowStartupLocation = WindowStartupLocation.Manual;

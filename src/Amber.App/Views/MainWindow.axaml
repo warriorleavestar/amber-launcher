@@ -7,7 +7,7 @@
         x:DataType="vm:MainViewModel"
         Title="{l:T main.title}"
         Icon="/Assets/amber.ico"
-        Width="1080" Height="700" MinWidth="760" MinHeight="440"
+        MinWidth="760" MinHeight="440"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource PageBackground}">
 
