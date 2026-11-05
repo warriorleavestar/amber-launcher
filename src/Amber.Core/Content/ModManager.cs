@@ -27,6 +27,7 @@ public sealed partial class ModManager(string modsDir)
         var mods = Directory.EnumerateFiles(ModsDir)
             .Where(IsModFile)
             .AsParallel()
+            .WithDegreeOfParallelism(Math.Min(4, Environment.ProcessorCount))
             .Select(ReadCached)
             .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -153,8 +154,7 @@ public sealed partial class ModManager(string modsDir)
     {
         var entry = zip.GetEntry(entryName);
         if (entry is null) return null;
-        using var reader = new StreamReader(entry.Open());
-        var text = reader.ReadToEnd();
+        var text = ArchiveMetadata.ReadText(entry);
         var start = text.IndexOf("[[mods]]", StringComparison.Ordinal);
         if (start < 0) return null;
         var section = text[start..];
@@ -178,7 +178,7 @@ public sealed partial class ModManager(string modsDir)
     {
         var entry = zip.GetEntry("META-INF/MANIFEST.MF");
         if (entry is null) return null;
-        using var reader = new StreamReader(entry.Open());
+        using var reader = new StringReader(ArchiveMetadata.ReadText(entry));
         while (reader.ReadLine() is { } line)
         {
             if (line.StartsWith("Implementation-Version:", StringComparison.OrdinalIgnoreCase)) return line["Implementation-Version:".Length..].Trim();
@@ -189,20 +189,16 @@ public sealed partial class ModManager(string modsDir)
     private static byte[]? ReadIcon(ZipArchive zip, string? path)
     {
         if (string.IsNullOrEmpty(path) || zip.GetEntry(path.TrimStart('/')) is not { } entry || entry.Length > 2_000_000) return null;
-        using var stream = entry.Open();
-        using var memory = new MemoryStream();
-        stream.CopyTo(memory);
-        return memory.ToArray();
+        return ArchiveMetadata.ReadBytes(entry, 2_000_000);
     }
 
     private static JsonNode? ReadJson(ZipArchive zip, string name)
     {
         var entry = zip.GetEntry(name);
         if (entry is null) return null;
-        using var stream = entry.Open();
         try
         {
-            return JsonNode.Parse(stream, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            return JsonNode.Parse(ArchiveMetadata.ReadText(entry), documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
         }
         catch (JsonException)
         {
