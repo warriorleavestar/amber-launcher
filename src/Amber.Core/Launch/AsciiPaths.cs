@@ -136,6 +136,13 @@ public static class AsciiPaths
         else if (Directory.Exists(path)) (dir, rest) = (path, "");
         else return arg;
         var mapped = alias(Path.TrimEndingDirectorySeparator(dir));
+        if (rest.Length > 0)
+        {
+            // 测试、远程配置和跨平台工具可能在 Unix 上处理 Windows 路径；
+            // 别把 C:\alias\file 拼成 C:\alias/file。
+            var separator = mapped.Contains('\\') && !mapped.Contains('/') ? '\\' : Path.DirectorySeparatorChar;
+            rest = separator + rest.TrimStart('/', '\\');
+        }
         return prefix + mapped + rest + suffix;
     }
 
@@ -159,10 +166,13 @@ public static class AsciiPaths
     /// <summary>把 path 里 from 开头的部分换成 to。</summary>
     public static string Remap(string path, string from, string to)
     {
-        var prefix = Path.TrimEndingDirectorySeparator(from);
+        var prefix = from.TrimEnd('/', '\\');
+        // 两种分隔符都可作为路径边界，但不能把系统根目录裁成空串或 C:。
+        var root = Path.GetPathRoot(from);
+        if (root is not null && prefix.Length < root.Length) prefix = root;
         if (from == to || !path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return path;
         var rest = path[prefix.Length..];
-        if (Path.EndsInDirectorySeparator(prefix)) return rest.Length == 0 ? to : Path.Combine(to, rest.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        return rest.Length == 0 || rest[0] == Path.DirectorySeparatorChar ? to + rest : path;
+        if (Path.EndsInDirectorySeparator(prefix)) return rest.Length == 0 ? to : Path.Combine(to, rest.TrimStart('/', '\\'));
+        return rest.Length == 0 || rest[0] is '/' or '\\' ? to + rest : path;
     }
 }

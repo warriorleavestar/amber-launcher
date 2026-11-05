@@ -96,6 +96,9 @@ public static class Toolbox
     {
         var script = BuildLaunchScript(javaPath, workDir, args, accessToken, OperatingSystem.IsWindows());
         File.WriteAllText(path, script, new UTF8Encoding(false));
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, File.GetUnixFileMode(path)
+                | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
         return path;
     }
 

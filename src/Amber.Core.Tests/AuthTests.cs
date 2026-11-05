@@ -135,6 +135,12 @@ public class AuthTests
             var raw = File.ReadAllText(path);
             Assert.DoesNotContain("secret-access", raw);
             Assert.DoesNotContain("secret-refresh", raw);
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Contains("v2:", raw);
+                var mode = File.GetUnixFileMode(path + ".key");
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
+            }
 
             var loaded = new AccountStore(path);
             loaded.Load();
