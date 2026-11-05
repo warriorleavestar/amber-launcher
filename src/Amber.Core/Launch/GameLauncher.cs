@@ -30,6 +30,8 @@ public sealed record LaunchOptions
     public string? JoinWorld { get; init; }
     public IReadOnlyList<string> ExtraJvmArgs { get; init; } = [];
     public IReadOnlyList<string> ExtraGameArgs { get; init; } = [];
+    /// <summary>无痕模式：logs/latest.log 里不写聊天行（见 ChatLogFilter）。</summary>
+    public bool NoTrace { get; init; }
     public string LauncherName { get; init; } = "Amber";
     public string LauncherVersion { get; init; } = "0.1";
 }
@@ -44,9 +46,22 @@ public sealed class GameLauncher(GameDirectory dir)
     /// <summary>改用英文名联接启动时，联接背后真正的游戏目录。旧版本的家目录联接要直接指向真目录，不能联接套联接。</summary>
     internal string? RealRoot { get; init; }
 
-    /// <summary>生成完整命令行（不含 java 本身），可用于导出启动脚本。</summary>
-    public List<string> BuildArguments(LaunchOptions options)
+    /// <summary>
+    /// 无痕模式生成的 log4j2 配置放在这里（每次启动一个子目录，游戏退出后删掉），不写进游戏目录：
+    /// 游戏目录可能就是用户自己的 .minecraft。
+    /// </summary>
+    internal string NoTraceRoot { get; init; } = DefaultNoTraceRoot;
+
+    public static string DefaultNoTraceRoot { get; } =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Amber", "notrace");
+
+    /// <summary>生成完整命令行（不含 java 本身），可用于导出启动脚本。notice 收到无痕模式的提示（开着无痕模式时）。</summary>
+    public List<string> BuildArguments(LaunchOptions options, Action<string>? notice = null) => BuildArguments(options, notice, out _);
+
+    /// <summary>noTraceDir：这次无痕模式配置放的临时目录（没生成时为 null），用完由调用方删掉。</summary>
+    internal List<string> BuildArguments(LaunchOptions options, Action<string>? notice, out string? noTraceDir)
     {
+        noTraceDir = null;
         var version = dir.ResolveVersion(options.VersionId);
         var rules = new RuleEvaluator
         {
@@ -107,7 +122,40 @@ public sealed class GameLauncher(GameDirectory dir)
         if (version.Logging?.GetValueOrDefault("client") is { Argument: { } logArg, File: { } logFile })
         {
             var logPath = dir.LoggingConfigPath(logFile.Id);
-            if (File.Exists(logPath)) args.Add(logArg.Replace("${path}", logPath));
+            if (File.Exists(logPath))
+            {
+                if (options.NoTrace)
+                {
+                    noTraceDir = NewNoTraceDir();
+                    logPath = ChatLogFilter.Prepare(logPath, noTraceDir);
+                    notice?.Invoke(L.T("core.launch.notrace.on"));
+                }
+                args.Add(AsciiPaths.MapArgument(logArg.Replace("${path}", logPath), notice));
+            }
+            else if (options.NoTrace)
+            {
+                throw new InvalidOperationException(L.T("core.launch.notrace.config_missing"));
+            }
+        }
+        else if (options.NoTrace)
+        {
+            // Forge 1.13+、NeoForge 的版本文件把 logging 清空了，游戏用加载器 jar 里自带的 log4j2.xml：取出来改好再指给它。
+            noTraceDir = NewNoTraceDir();
+            var extracted = ChatLogFilter.ExtractFromClasspath(classpath, Path.Combine(noTraceDir, "loader-log4j2.xml"));
+            if (extracted is not null)
+            {
+                args.Add(AsciiPaths.MapArgument("-Dlog4j.configurationFile=" + ChatLogFilter.Prepare(extracted, noTraceDir), notice));
+                notice?.Invoke(L.T("core.launch.notrace.on"));
+            }
+            else if (ChatLogFilter.UsesLog4j(classpath))
+            {
+                // 有 log4j（会写 latest.log）却找不到配置：不启动，说清楚是哪个加载器。
+                throw new InvalidOperationException(L.F("core.launch.notrace.loader_config_missing", ChatLogFilter.LoaderName(version)));
+            }
+            else
+            {
+                notice?.Invoke(L.T("core.launch.notrace.unsupported"));
+            }
         }
 
         if (version.Arguments?.Jvm is { Count: > 0 } jvm)
@@ -187,7 +235,7 @@ public sealed class GameLauncher(GameDirectory dir)
                 ExtraJvmArgs = options.ExtraJvmArgs.Select(a => AsciiPaths.MapArgument(Map(a), onOutput)).ToList(),
                 ExtraGameArgs = options.ExtraGameArgs.Select(a => AsciiPaths.MapArgument(Map(a), onOutput)).ToList(),
             };
-            return (new GameLauncher(new GameDirectory(root)) { BaseRules = BaseRules, RealRoot = dir.Root }, mapped);
+            return (new GameLauncher(new GameDirectory(root)) { BaseRules = BaseRules, RealRoot = dir.Root, NoTraceRoot = NoTraceRoot }, mapped);
         }
         // 游戏目录和 Java 都是英文路径，参数里也可能带别处的路径（比如外置登录的 -javaagent 指向数据目录）。
         var args = options with
@@ -218,7 +266,16 @@ public sealed class GameLauncher(GameDirectory dir)
             StandardErrorEncoding = onOutput is not null ? System.Text.Encoding.UTF8 : null,
             CreateNoWindow = true,
         };
-        foreach (var arg in BuildArguments(options)) psi.ArgumentList.Add(arg);
+        string? noTraceDir = null;
+        try
+        {
+            foreach (var arg in BuildArguments(options, onOutput, out noTraceDir)) psi.ArgumentList.Add(arg);
+        }
+        catch
+        {
+            DeleteNoTraceDir(noTraceDir);
+            throw;
+        }
         // 1.6 以前的版本（和 Amber 装的老 Forge）把 %APPDATA%\.minecraft 当家目录，改成指向这个实例。
         var realWorkDir = RealRoot is { } real ? AsciiPaths.Remap(workDir, dir.Root, real) : workDir;
         if (IsPreLaunchwrapperHome(version) && AsciiPaths.LegacyHome(realWorkDir, onOutput) is { } home)
@@ -227,7 +284,25 @@ public sealed class GameLauncher(GameDirectory dir)
             onOutput?.Invoke(L.F("core.launch.game.legacyappdata", home));
         }
 
-        var process = Process.Start(psi) ?? throw new InvalidOperationException(L.T("core.launch.game.javastartfailed"));
+        Process process;
+        try
+        {
+            process = Process.Start(psi) ?? throw new InvalidOperationException(L.T("core.launch.game.javastartfailed"));
+        }
+        catch
+        {
+            DeleteNoTraceDir(noTraceDir);
+            throw;
+        }
+        if (noTraceDir is not null)
+        {
+            // 记下是哪个游戏进程在用：Amber 先退出、崩溃或被结束时，下次启动按这个判断能不能清掉（SweepNoTrace）。
+            NoTraceDirs.WriteOwner(noTraceDir, process);
+            // 游戏退出后删掉这次生成的配置；被杀毒软件之类占着时过一会儿再试几次。
+            process.EnableRaisingEvents = true;
+            process.Exited += (_, _) => _ = DeleteNoTraceDirWithRetryAsync(noTraceDir);
+            if (process.HasExited) _ = DeleteNoTraceDirWithRetryAsync(noTraceDir);
+        }
         if (onOutput is not null)
         {
             process.OutputDataReceived += (_, e) => { if (e.Data is not null) onOutput(e.Data); };
@@ -237,6 +312,29 @@ public sealed class GameLauncher(GameDirectory dir)
         }
         return process;
     }
+
+    private string NewNoTraceDir() => Path.Combine(NoTraceRoot, Guid.NewGuid().ToString("N")[..12]);
+
+    /// <summary>只删 Amber 自己在 NoTraceRoot 下建的目录。删掉了（或本来就没有）返回 true。</summary>
+    internal bool DeleteNoTraceDir(string? path) =>
+        path is null || !NoTraceDirs.IsUnder(NoTraceRoot, path) || NoTraceDirs.TryDelete(path);
+
+    /// <summary>删不掉时按 0.25、0.5、1、2 秒间隔再试；都不行就留给下次启动时的清理。</summary>
+    internal async Task<bool> DeleteNoTraceDirWithRetryAsync(string path, int attempts = 5)
+    {
+        for (var i = 0; i < attempts; i++)
+        {
+            if (i > 0) await Task.Delay(250 << (i - 1)).ConfigureAwait(false);
+            if (DeleteNoTraceDir(path)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 启动 Amber 时清掉以前留下的无痕配置目录（Amber 在游戏运行时被关掉、崩溃、注销，或者当时删不掉）。
+    /// 还在被运行中的游戏用的、刚建好还没启动游戏的、删不掉的都跳过。返回删掉了几个。
+    /// </summary>
+    public static int SweepNoTrace(string? root = null) => NoTraceDirs.Sweep(root ?? DefaultNoTraceRoot, DateTime.UtcNow);
 
     /// <summary>1.6.1（2013-06-25）以前发布的版本，或者 Amber 装的老 Forge。</summary>
     internal static bool IsPreLaunchwrapperHome(VersionJson version) =>

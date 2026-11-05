@@ -22,6 +22,9 @@ public sealed class AppSettings
     public bool AutoMemory { get; set; } = true;
     public int MaxMemoryMb { get; set; } = 4096;
     public bool IsolateVersions { get; set; } = true;
+
+    /// <summary>无痕模式：游戏日志（logs/latest.log）里不写聊天行。默认关。</summary>
+    public bool NoTrace { get; set; }
     public string PlayerName { get; set; } = "Player";
     public string? LastVersion { get; set; }
     public int? WindowWidth { get; set; }
