@@ -373,6 +373,55 @@ public sealed class GuestTestLifecycleTests : IDisposable
         Assert.False(session.EasyTier!.HasExited);
     }
 
+    /// <summary>加入方平台不支持提权：经真实控制消息立即回拒绝，结束测试后仍恢复普通会话。</summary>
+    [Fact]
+    public async Task UnsupportedGuestElevationRepliesFalseAndCanRestore()
+    {
+        var elevationAttempts = 0;
+        await using var session = new DirectSession(null!, _dir, Room, false, Options, new DiagnosticLog())
+        {
+            CreateSessionForTest = (elevated, o) =>
+            {
+                if (elevated)
+                {
+                    Interlocked.Increment(ref elevationAttempts);
+                    throw new PlatformNotSupportedException("完整局域网只支持 Windows");
+                }
+                return new FakeEasyTier(o);
+            },
+        };
+        await session.StartEasyTierAsync(Original, default);
+        await session.PrepareAsync();
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { });
+        var reply = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.ControlReceived += (_, message) =>
+        {
+            if (message["op"]?.GetValue<string>() == "elevated") reply.TrySetResult(message);
+        };
+        var hostWait = host.WaitForPeerAsync(TimeSpan.FromSeconds(5));
+        var peer = await session.Bridge!.PunchAsync(
+            [new Candidate(PathKind.Lan, new IPEndPoint(IPAddress.Loopback, host.SocketEndPoint.Port))],
+            NatKind.Cone, TimeSpan.FromSeconds(5));
+        Assert.NotNull(peer);
+        var guest = await hostWait;
+        Assert.NotNull(guest);
+        const string run = "run-unsupported";
+        Assert.True(session.TestConsent.Request(new TestRequest(run, true)));
+        Assert.True(await session.AnswerTestRequestAsync(true, true, false));
+
+        await host.SendControlAsync(guest!, new JsonObject { ["op"] = "elevate", ["run"] = run });
+        var answer = await reply.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(1, elevationAttempts);
+        Assert.Equal(run, answer["run"]!.GetValue<string>());
+        Assert.False(answer["ok"]!.GetValue<bool>());
+        await session.StopGuestTestAsync();
+        Assert.Null(session.TestConsent.ActiveRun);
+        Assert.NotNull(session.EasyTier);
+        Assert.False(session.EasyTier.HasExited);
+        Assert.False(session.EasyTier.Options.Tun);
+    }
+
     /// <summary>别的测试编号的“结束”：不动正在进行的测试，也不让界面收起。</summary>
     [Fact]
     public async Task WrongRunEndIsIgnored()

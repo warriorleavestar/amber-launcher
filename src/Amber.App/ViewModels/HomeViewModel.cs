@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.IO.Compression;
+using System.Text;
 using Amber.App.Services;
 using Amber.Core.Auth;
 using Amber.Core.Content;
@@ -61,6 +63,7 @@ public sealed partial class HomeViewModel : PageViewModel
     private readonly LogViewModel _log;
     private List<string> _lastRunFiles = [];
     private string[] _lastRunOutput = [];
+    private CrashAttachment[] _lastRunAttachments = [];
     private bool _refreshingAccounts;
     private CrashInput? _crashInput;
     /// <summary>每次显示新的崩溃结果（或清掉）加一：换语言的重新分析只在期间没有新结果时才替换。</summary>
@@ -717,13 +720,72 @@ public sealed partial class HomeViewModel : PageViewModel
         catch (InvalidOperationException) { return null; }
     }
 
-    private static CrashInput CrashInputFor(GameRun run, int? pid) =>
-        new(run.WorkDir, run.Started, run.Output.Lines, run.Output.ForExport().ToArray(), pid, run.SharedWorkDir);
+    /// <summary>每个磁盘附件最多保留末尾 1 MiB；一局最多选一份崩溃报告、一份 JVM 日志和 latest.log。</summary>
+    internal const int MaxCrashAttachmentBytes = 1024 * 1024;
+
+    private static CrashInput CrashInputFor(GameRun run, int? pid)
+    {
+        // 必须在让出界面线程前读取：下一局可能马上复用这个目录并覆盖 latest.log。
+        var attachments = CrashAnalyzer.FindRunFiles(run.WorkDir, run.Started, pid, run.SharedWorkDir)
+            .Select(path => SnapshotAttachment(path, run.Output.NoTrace)).OfType<CrashAttachment>().ToArray();
+        return new(run.Output.Lines, run.Output.ForExport().ToArray(), attachments);
+    }
+
+    private sealed record CrashAttachment(string SourcePath, string Text, string ExportText, bool Truncated)
+    {
+        public string Name => Truncated
+            ? Path.GetFileNameWithoutExtension(SourcePath) + ".tail" + Path.GetExtension(SourcePath)
+            : Path.GetFileName(SourcePath);
+    }
+
+    private static CrashAttachment? SnapshotAttachment(string path, bool noTrace)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var length = stream.Length;
+            var truncated = length > MaxCrashAttachmentBytes;
+            var bytes = new byte[(int)Math.Min(length, MaxCrashAttachmentBytes)];
+            stream.Position = length - bytes.Length;
+            var read = 0;
+            while (read < bytes.Length)
+            {
+                var count = stream.Read(bytes, read, bytes.Length - read);
+                if (count == 0) break;
+                read += count;
+            }
+            using var reader = new StreamReader(new MemoryStream(bytes, 0, read), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var text = reader.ReadToEnd();
+            // 截断可能落在 UTF-8 字符或消息中间，第一条不完整的物理行不保留。
+            if (truncated) text = text.IndexOf('\n') is var newline and >= 0 ? text[(newline + 1)..] : "";
+            var export = noTrace ? FilterAttachment(text, truncated) : text;
+            return new(path, text, export, truncated);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    private static string FilterAttachment(string text, bool truncated)
+    {
+        var filter = new ChatLogFilter.OutputFilter();
+        // 被裁掉的首行可能带着 [CHAT]：直到下一条明确的日志事件前，都视作聊天的续行。
+        if (truncated) filter.Add("[00:00:00] [main/INFO]: [CHAT]");
+        var lines = new List<ChatLogFilter.OutputLine>();
+        using var reader = new StringReader(text);
+        while (reader.ReadLine() is { } line) lines.Add(filter.Add(line));
+        var kept = lines.Where(l => !l.IsChat).Select(l => l.Text).ToList();
+        return kept.Count == 0 ? "" : string.Join('\n', kept) + "\n";
+    }
 
     /// <summary>崩溃分析保留原始输入；导出单独保存这一局已经过滤好的快照，后续启动和设置变化都不能替换它。</summary>
-    private sealed record CrashInput(string WorkDir, DateTime Started, string[] Output, string[] ExportOutput, int? Pid, bool SharedWorkDir)
+    private sealed record CrashInput(string[] Output, string[] ExportOutput, CrashAttachment[] Attachments)
     {
-        public CrashAnalysis Analyze() => CrashAnalyzer.AnalyzeRun(WorkDir, Started, Output, Pid, SharedWorkDir);
+        public CrashAnalysis Analyze()
+        {
+            // 和原来的分析一样，每个文件最多看末尾 400,000 字；换语言也不重新读取可能已被复用的磁盘路径。
+            var parts = Attachments.Select(a => a.Text.Length > 400_000 ? a.Text[^400_000..] : a.Text)
+                .Append(string.Join('\n', Output));
+            return CrashAnalyzer.Analyze(string.Join("\n\n", parts), Attachments.Select(a => a.SourcePath).ToList());
+        }
     }
 
     private void RememberCrash(GameRun run, CrashInput input, CrashAnalysis analysis)
@@ -733,6 +795,7 @@ public sealed partial class HomeViewModel : PageViewModel
         _crashLog = run.Log;
         _lastRunFiles = [.. analysis.SourceFiles];
         _lastRunOutput = input.ExportOutput;
+        _lastRunAttachments = input.Attachments;
         _log.AddRaw(run.Log, L.F("home.log.crash_analysis", analysis.Summary));
         Crash = analysis;
     }
@@ -775,7 +838,16 @@ public sealed partial class HomeViewModel : PageViewModel
     /// <summary>导出崩溃卡对应的那一局：无痕过滤已在保存快照时完成，多开和后续启动不会串日志。</summary>
     public void ExportCrashBundle(string zipPath)
     {
-        CrashAnalyzer.ExportBundle(zipPath, _lastRunFiles, _lastRunOutput);
+        // 先写内存中的输出，再附上崩溃当时的磁盘快照；导出时绝不重新打开原日志路径。
+        CrashAnalyzer.ExportBundle(zipPath, [], _lastRunOutput);
+        using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Update))
+        {
+            foreach (var attachment in _lastRunAttachments)
+            {
+                using var writer = new StreamWriter(zip.CreateEntry(attachment.Name).Open(), new UTF8Encoding(false));
+                writer.Write(attachment.ExportText);
+            }
+        }
         SetStatus(StatusMessage.Success("home.status.report_exported", zipPath));
     }
 

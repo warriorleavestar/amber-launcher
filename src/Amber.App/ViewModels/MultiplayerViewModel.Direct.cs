@@ -151,7 +151,7 @@ public sealed partial class MultiplayerViewModel
             StartHub(room);
             SetStatus(StatusMessage.Success("multiplayer.direct.created"));
         }
-        catch (Exception e) when (e is OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception e) when (e is OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException)
         {
             await direct.DisposeAsync();
             SetStatus(StatusMessage.Failure("multiplayer.direct.create_failed", e, ErrorText.Of(e)));
@@ -238,7 +238,7 @@ public sealed partial class MultiplayerViewModel
             // 万一请求在界面订阅前就到了（或者事件被错过）：按会话里记着的待确认请求补上。
             if (direct.TestConsent.Pending is { } pending && !TestRequestPending) ShowTestRequest(pending);
         }
-        catch (Exception e) when (e is DirectFailedException or OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception e) when (e is DirectFailedException or OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException)
         {
             await direct.DisposeAsync();
             _direct = null;
@@ -403,7 +403,7 @@ public sealed partial class MultiplayerViewModel
         {
             SetStatus(StatusMessage.Warning("multiplayer.matrix.cancelled"));
         }
-        catch (Exception e) when (e is InvalidOperationException or IOException or System.Net.Sockets.SocketException)
+        catch (Exception e) when (e is InvalidOperationException or IOException or System.Net.Sockets.SocketException or PlatformNotSupportedException)
         {
             SetStatus(StatusMessage.Failure("multiplayer.matrix.failed", e, ErrorText.Of(e)));
         }

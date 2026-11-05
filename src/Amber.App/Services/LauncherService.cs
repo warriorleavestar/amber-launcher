@@ -1,4 +1,4 @@
-using Amber.Core.Multiplayer;
+﻿using Amber.Core.Multiplayer;
 using Amber.Core.Auth;
 using Amber.Core.Content;
 using Amber.Core.Game;
@@ -187,9 +187,13 @@ public sealed class LauncherService : IDisposable
         return removed;
     }
 
-    /// <summary>版本设置叠加全局设置后的结果。</summary>
-    public InstanceSettings EffectiveSettings(string id) =>
-        InstanceSettings.Load(Directory, id).Over(Settings.ToGlobalInstanceSettings());
+    /// <summary>版本设置叠加全局设置后的结果。版本没设隔离时，先看 PCL / HMCL 给这个版本记的隔离设置，再用全局值。</summary>
+    public InstanceSettings EffectiveSettings(string id)
+    {
+        var own = InstanceSettings.Load(Directory, id);
+        own.Isolate ??= OtherLauncherSettings.Isolation(Directory, id);
+        return own.Over(Settings.ToGlobalInstanceSettings());
+    }
 
     public string WorkDirFor(string id) => UsesSharedDir(id) ? Directory.Root : Directory.VersionDir(id);
 
