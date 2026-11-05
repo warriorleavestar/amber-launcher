@@ -1054,5 +1054,6 @@
   "multiplayer.matrix.allow_exit": "也測試把房主當作出口（這幾步裡你的網路流量會經過房主）",
   "multiplayer.matrix.accept": "同意測試",
   "multiplayer.matrix.decline": "不同意",
-  "multiplayer.matrix.request_status": "房主請求所有條件測試，請在直連卡片中確認"
+  "multiplayer.matrix.request_status": "房主請求所有條件測試，請在直連卡片中確認",
+  "core.game.directory.unsafepath": "版本檔案中的路徑不安全，已拒絕：{0}"
 }

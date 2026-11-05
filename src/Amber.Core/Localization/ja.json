@@ -1054,5 +1054,6 @@
   "multiplayer.matrix.allow_exit": "ホストを出口にするテストも行う（そのステップの間、通信はホストを経由します）",
   "multiplayer.matrix.accept": "同意する",
   "multiplayer.matrix.decline": "同意しない",
-  "multiplayer.matrix.request_status": "ホストが全条件テストを求めています。直接接続のカードで確認してください"
+  "multiplayer.matrix.request_status": "ホストが全条件テストを求めています。直接接続のカードで確認してください",
+  "core.game.directory.unsafepath": "バージョンファイル内の安全でないパスを拒否しました：{0}"
 }

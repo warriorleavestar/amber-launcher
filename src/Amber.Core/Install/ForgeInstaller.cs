@@ -118,7 +118,7 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
         var profileVersion = new VersionJson { Libraries = profile["libraries"]?.Deserialize(Json.Options.Info<List<Library>>()) ?? [] };
         var items = LibraryResolver.Resolve(profileVersion, dir, RuleEvaluator.Current)
             .Where(l => !string.IsNullOrEmpty(l.Url))
-            .Select(l => new DownloadItem(l.Url!, l.LocalPath, l.Sha1, l.Size)).ToList();
+            .Select(l => new DownloadItem(l.Url!, l.LocalPath, l.Sha1, l.Size, Within: dir.LibrariesDir)).ToList();
         progress?.Report(new(L.T("core.install.forge.downloadprocessors")));
         await Ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.install.forge.processorprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
