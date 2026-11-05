@@ -34,11 +34,13 @@ public sealed class JavaRuntimeInstaller(Downloader downloader, string gameRoot)
                                   ?? throw new InvalidOperationException(L.F("core.java.install.unavailableversion", majorVersion));
 
         using var manifest = JsonDocument.Parse(await downloader.GetStringAsync(manifestUrl, ct));
+        // 组件名来自版本文件，文件名来自运行时清单：拼出来的路径都必须在 runtime 目录里。
+        Game.GameDirectory.CheckId(name);
         var home = Path.Combine(gameRoot, "runtime", name, Platform, name);
         var items = new List<DownloadItem>();
         foreach (var file in manifest.RootElement.GetProperty("files").EnumerateObject())
         {
-            var local = Path.Combine(home, file.Name.Replace('/', Path.DirectorySeparatorChar));
+            var local = Game.GameDirectory.Contained(home, file.Name);
             switch (file.Value.GetProperty("type").GetString())
             {
                 case "directory":
@@ -46,7 +48,7 @@ public sealed class JavaRuntimeInstaller(Downloader downloader, string gameRoot)
                     break;
                 case "file":
                     var raw = file.Value.GetProperty("downloads").GetProperty("raw");
-                    items.Add(new DownloadItem(raw.GetProperty("url").GetString()!, local, raw.GetProperty("sha1").GetString(), raw.GetProperty("size").GetInt64()));
+                    items.Add(new DownloadItem(raw.GetProperty("url").GetString()!, local, raw.GetProperty("sha1").GetString(), raw.GetProperty("size").GetInt64(), Within: home));
                     break;
             }
         }

@@ -11,7 +11,8 @@ using System.Text.Json;
 namespace Amber.Core.Net;
 
 /// <summary>一个下载项：官方地址 + 本地路径 + 可选校验信息。</summary>
-public sealed record DownloadItem(string Url, string LocalPath, string? Sha1 = null, long? Size = null);
+/// <param name="Within">设了的话，文件只能写在这个目录里面（版本文件、库、资源这类路径来自不可信的版本文件时用）。</param>
+public sealed record DownloadItem(string Url, string LocalPath, string? Sha1 = null, long? Size = null, string? Within = null);
 
 /// <summary>BytesDownloaded 是实时累计的字节数，CurrentFile 可能为空。</summary>
 public readonly record struct DownloadProgress(int CompletedFiles, int TotalFiles, long BytesDownloaded, string? CurrentFile);
@@ -277,8 +278,22 @@ public sealed class Downloader
         return result;
     }
 
+    /// <summary>
+    /// 写入前最后再查一次路径。只查设了 Within 的下载（路径来自不可信的元数据，比如版本文件）：
+    /// 必须是规范化的完整路径，并且在 Within 里面。用户自己选的位置（工具箱下载到的文件夹）照原样用。
+    /// </summary>
+    internal static void CheckTarget(DownloadItem item)
+    {
+        if (item.Within is not { } within) return;
+        var full = Path.IsPathFullyQualified(item.LocalPath) ? Path.GetFullPath(item.LocalPath) : null;
+        var ok = full is not null && string.Equals(full, item.LocalPath, StringComparison.OrdinalIgnoreCase) && !Path.GetFileName(full).Contains(':')
+                 && Game.GameDirectory.IsWithin(within, full);
+        if (!ok) throw new InvalidDataException(L.F("core.net.download.unsafetarget", item.LocalPath));
+    }
+
     private async Task<long> DownloadCoreAsync(DownloadItem item, Action<long> onBytes, CancellationToken ct)
     {
+        CheckTarget(item);
         Directory.CreateDirectory(Path.GetDirectoryName(item.LocalPath)!);
         var temp = item.LocalPath + ".part";
         var state = temp + ".state";
@@ -294,6 +309,7 @@ public sealed class Downloader
                 {
                     var (written, streamedSha1) = await FetchAsync(url, item, temp, state, onBytes, ct);
                     await VerifyAsync(item, temp, streamedSha1, ct);
+                    CheckTarget(item);
                     File.Move(temp, item.LocalPath, true);
                     TryDelete(state);
                     if (item.Sha1 is not null) Hashes?.Remember(item.LocalPath, item.Sha1);

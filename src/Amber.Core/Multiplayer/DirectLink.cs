@@ -67,15 +67,48 @@ public sealed record DirectCode(bool IsReply, RoomCode Room, string Session, Nat
 
     public string Encode()
     {
-        var json = new JsonObject
-        {
-            ["r"] = Room.ToString(),
-            ["s"] = Session,
-            ["n"] = Nat.ToString(),
-            ["c"] = new JsonArray(Candidates.Select(c => (JsonNode?)new JsonArray(c.Kind.ToString(), c.EndPoint.ToString())).ToArray()),
-        };
+        var json = Addresses();
+        json["r"] = Room.ToString();
         var body = Convert.ToBase64String(Encoding.UTF8.GetBytes(json.ToJsonString())).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         return $"{(IsReply ? ReplyPrefix : InvitePrefix)}{Version}-{body}";
+    }
+
+    /// <summary>
+    /// 只有会话 id、NAT 类型和地址，没有房间码：经直连通道发的 hello 用它。
+    /// 直连通道的控制消息只有 HMAC 认证、没有加密，路上的人看得到内容，所以绝不能带房间码（所有密钥都由它派生）。
+    /// </summary>
+    public JsonObject Addresses() => new()
+    {
+        ["s"] = Session,
+        ["n"] = Nat.ToString(),
+        ["c"] = new JsonArray(Candidates.Select(c => (JsonNode?)new JsonArray(c.Kind.ToString(), c.EndPoint.ToString())).ToArray()),
+    };
+
+    /// <summary>解析 <see cref="Addresses"/> 的内容（对方的 hello）。会话 id 长度不对时返回 false。</summary>
+    public static bool TryParseAddresses(JsonObject? json, out string session, out NatKind nat, out List<Candidate> candidates)
+    {
+        session = "";
+        nat = NatKind.Unknown;
+        candidates = [];
+        if (json is null) return false;
+        try
+        {
+            session = (json["s"] as JsonValue)?.TryGetValue<string>(out var s) == true ? s : "";
+            if (session.Length is < 8 or > 64) return false;
+            nat = (json["n"] as JsonValue)?.TryGetValue<string>(out var n) == true && Enum.TryParse<NatKind>(n, out var kind) && Enum.IsDefined(kind) ? kind : NatKind.Unknown;
+            foreach (var item in json["c"] as JsonArray ?? [])
+            {
+                if (item is not JsonArray pair || pair.Count != 2) continue;
+                if ((pair[0] as JsonValue)?.TryGetValue<string>(out var k) == true && Enum.TryParse<PathKind>(k, out var path) && Enum.IsDefined(path)
+                    && (pair[1] as JsonValue)?.TryGetValue<string>(out var e) == true && IPEndPoint.TryParse(e, out var ep) && ep.Port > 0)
+                    candidates.Add(new Candidate(path, ep));
+            }
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     /// <summary>解析粘贴的文字。版本不对时 error 说明原因。</summary>
@@ -396,71 +429,137 @@ public sealed class DirectBridge : IAsyncDisposable
             if (packet.Length == 0) continue;
             var type = packet[0];
 
-            if (type == Data)
+            // 对方发来的内容不可信：处理一个包时出任何错（坏 JSON、字段类型不对、事件处理抛异常、转发出错）都只丢掉这个包、记一笔，
+            // 不能让共用的接收循环停掉。数据包也在里面。
+            try
             {
-                if (_peers.TryGetValue(from, out var peer)) await ForwardToLocalAsync(peer, packet[1..].ToArray());
-                continue;
+                if (type == Data)
+                {
+                    if (_peers.TryGetValue(from, out var peer)) await ForwardToLocalAsync(peer, packet[1..].ToArray());
+                    continue;
+                }
+                if (!Verify(packet)) continue;
+                await HandleAuthenticatedAsync(from, type, packet[1..^TagLength].ToArray());
             }
-            if (!Verify(packet)) continue;
-            var payload = packet[1..^TagLength].ToArray();
-            switch (type)
+            catch (Exception e) when (e is not OperationCanceledException || !_cts.IsCancellationRequested)
             {
-                case Probe:
-                    // 对方是同一侧（房主收到房主的探测）就不理，防止自己连自己。
-                    if (payload.Length >= 1 && payload[0] == (_isHost ? 1 : 0)) break;
-                    await SendRawAsync(Seal(ProbeAck, payload), from, _cts.Token);
-                    Accept(from);
-                    break;
-                case ProbeAck:
-                    Accept(from);
-                    break;
-                case Ping when _peers.TryGetValue(from, out var p1):
-                    p1.LastSeen = DateTime.UtcNow;
-                    await SendRawAsync(Seal(Pong, payload), from, _cts.Token);
-                    break;
-                case Pong when _peers.TryGetValue(from, out var p2) && payload.Length >= 4:
-                    p2.LastSeen = DateTime.UtcNow;
-                    var seq = BinaryPrimitives.ReadUInt32BigEndian(payload);
-                    if (p2.PendingPings.TryRemove(seq, out var sentAt))
-                    {
-                        Interlocked.Increment(ref p2.PongsReceived);
-                        var rtt = _clock.Elapsed.TotalMilliseconds - sentAt / 1000.0;
-                        p2.RttMs = p2.RttMs is { } old ? old * 0.7 + rtt * 0.3 : rtt;
-                    }
-                    break;
-                case Control when _peers.TryGetValue(from, out var p3):
-                    try
-                    {
-                        if (JsonNode.Parse(payload) is JsonObject json) ControlReceived?.Invoke(p3, json);
-                    }
-                    catch (JsonException) { }
-                    break;
+                if (e is ObjectDisposedException && _cts.IsCancellationRequested) return;
+                _log(L.F("core.mp.punch.controlerror", e.GetType().Name));
             }
         }
     }
 
-    private void Accept(IPEndPoint from)
+    private async Task HandleAuthenticatedAsync(IPEndPoint from, byte type, byte[] payload)
     {
-        if (_peers.ContainsKey(from)) return;
-        if (!_isHost && !_peers.IsEmpty) return;
+        switch (type)
+        {
+            case Probe:
+                // 对方是同一侧（房主收到房主的探测）就不理，防止自己连自己。
+                if (payload.Length >= 1 && payload[0] == (_isHost ? 1 : 0)) break;
+                // 先登记再回确认：不接（人满、路径没开）就不回，对方不会以为连上了。
+                if (!Accept(from)) break;
+                await SendRawAsync(Seal(ProbeAck, payload), from, _cts.Token);
+                break;
+            case ProbeAck:
+                Accept(from);
+                break;
+            case Ping when _peers.TryGetValue(from, out var p1):
+                p1.LastSeen = DateTime.UtcNow;
+                await SendRawAsync(Seal(Pong, payload), from, _cts.Token);
+                break;
+            case Pong when _peers.TryGetValue(from, out var p2) && payload.Length >= 4:
+                p2.LastSeen = DateTime.UtcNow;
+                var seq = BinaryPrimitives.ReadUInt32BigEndian(payload);
+                if (p2.PendingPings.TryRemove(seq, out var sentAt))
+                {
+                    Interlocked.Increment(ref p2.PongsReceived);
+                    var rtt = _clock.Elapsed.TotalMilliseconds - sentAt / 1000.0;
+                    p2.RttMs = p2.RttMs is { } old ? old * 0.7 + rtt * 0.3 : rtt;
+                }
+                break;
+            case Control when _peers.TryGetValue(from, out var p3):
+                if (JsonNode.Parse(payload) is JsonObject json) ControlReceived?.Invoke(p3, json);
+                break;
+        }
+    }
+
+    /// <summary>房主最多同时接这么多个加入方（每个一个本机套接字和一个转发循环）。</summary>
+    public const int MaxHostPeers = 32;
+
+    /// <summary>房主：加入方这么久没有任何回应就移除（腾出位子，也关掉它的本机套接字和转发循环）。</summary>
+    internal TimeSpan PeerTimeout { get; init; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>登记一个对方。已经登记过返回 true；不接（加入方已经有房主、人满、路径没开、建不了套接字）返回 false。</summary>
+    private bool Accept(IPEndPoint from)
+    {
+        if (_peers.TryGetValue(from, out var known))
+        {
+            // 已经连着的对方回了探测（心跳断了之后补发的探测）：算它还活着。
+            known.LastSeen = DateTime.UtcNow;
+            return true;
+        }
+        if (!_isHost && !_peers.IsEmpty) return false;
+        if (_isHost && _peers.Count >= MaxHostPeers)
+        {
+            // 人满时先清掉已经不回应的，再看还有没有位子。
+            EvictStale();
+            if (_peers.Count >= MaxHostPeers)
+            {
+                _log(L.F("core.mp.punch.toomanypeers", from, MaxHostPeers));
+                return false;
+            }
+        }
         var peer = new DirectPeer { Remote = from, Path = Classify(from), ConnectedMs = _clock.ElapsedMilliseconds };
         if (!AllowedPaths.Contains(peer.Path) && !(peer.Path == PathKind.Punch && AllowedPaths.Contains(PathKind.PunchSpray)))
         {
             _log(L.F("core.mp.punch.disabled", from, DirectText.Path(peer.Path)));
-            return;
+            return false;
         }
-        if (!_peers.TryAdd(from, peer)) return;
         if (_isHost)
         {
-            // 每个加入方一个本机套接字，去连本机 EasyTier 的监听端口。
-            var local = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            if (OperatingSystem.IsWindows()) local.IOControl(unchecked((int)0x9800000C), [0, 0, 0, 0], null);
-            local.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            // 每个加入方一个本机套接字，去连本机 EasyTier 的监听端口。先建好再登记：建不了就不接这个加入方，
+            // 不会留下一个没有本机套接字的对方（之后它的数据包会让转发出错）。
+            Socket? local = null;
+            try
+            {
+                local = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                if (OperatingSystem.IsWindows()) local.IOControl(unchecked((int)0x9800000C), [0, 0, 0, 0], null);
+                local.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            }
+            catch (Exception e) when (e is SocketException or ObjectDisposedException)
+            {
+                local?.Dispose();
+                _log(L.F("core.mp.punch.localerror", e.GetType().Name));
+                return false;
+            }
             peer.Local = local;
+            if (!_peers.TryAdd(from, peer))
+            {
+                local.Dispose();
+                return true;
+            }
             _loops.Add(HostLocalLoopAsync(peer));
+        }
+        else if (!_peers.TryAdd(from, peer))
+        {
+            return true;
         }
         _log(L.F("core.mp.punch.connected", from, DirectText.Path(peer.Path)));
         Connected?.Invoke(peer);
+        return true;
+    }
+
+    /// <summary>房主：移除超过 PeerTimeout 没有任何回应的加入方（离开了、换了地址、掉线了）。</summary>
+    private void EvictStale()
+    {
+        if (!_isHost) return;
+        var now = DateTime.UtcNow;
+        foreach (var (endpoint, peer) in _peers)
+        {
+            if (now - peer.LastSeen <= PeerTimeout || !_peers.TryRemove(endpoint, out var removed)) continue;
+            removed.Local?.Dispose();
+            _log(L.F("core.mp.punch.peerevicted", endpoint));
+        }
     }
 
     private async Task ForwardToLocalAsync(DirectPeer peer, byte[] data)
@@ -469,7 +568,7 @@ public sealed class DirectBridge : IAsyncDisposable
         Interlocked.Add(ref peer.BytesIn, data.Length);
         try
         {
-            if (_isHost) await peer.Local!.SendToAsync(data, SocketFlags.None, new IPEndPoint(IPAddress.Loopback, LocalPort));
+            if (_isHost) { if (peer.Local is { } local) await local.SendToAsync(data, SocketFlags.None, new IPEndPoint(IPAddress.Loopback, LocalPort)); }
             else if (peer.LocalClient is { } client) await _guestLocal!.SendToAsync(data, SocketFlags.None, client);
         }
         catch (Exception e) when (e is SocketException or ObjectDisposedException) { }
@@ -523,7 +622,13 @@ public sealed class DirectBridge : IAsyncDisposable
         }
     }
 
-    /// <summary>每秒一次心跳：测延迟和丢包，也保持路由器上的映射不过期。</summary>
+    /// <summary>对方这么久没回任何东西（心跳停了）就同时补发探测包。</summary>
+    internal static readonly TimeSpan ReprobeAfter = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// 每秒一次心跳：测延迟和丢包，也保持路由器上的映射不过期。对方的回应停了（对方换了版本、路由器映射被回收、
+    /// 对方重启了桥）时，每次心跳再补一个探测包：探测包任何版本都会回，回了就重新算连着。
+    /// </summary>
     private async Task PingLoopAsync()
     {
         uint seq = 0;
@@ -537,6 +642,7 @@ public sealed class DirectBridge : IAsyncDisposable
             {
                 return;
             }
+            EvictStale();
             foreach (var peer in _peers.Values)
             {
                 seq++;
@@ -548,6 +654,8 @@ public sealed class DirectBridge : IAsyncDisposable
                 var payload = new byte[4];
                 BinaryPrimitives.WriteUInt32BigEndian(payload, seq);
                 await SendRawAsync(Seal(Ping, payload), peer.Remote, _cts.Token);
+                if (DateTime.UtcNow - peer.LastSeen > ReprobeAfter)
+                    await SendRawAsync(Seal(Probe, BuildProbePayload(_probeRound)), peer.Remote, _cts.Token);
             }
         }
     }
@@ -559,8 +667,9 @@ public sealed class DirectBridge : IAsyncDisposable
     /// <summary>断开所有对方（测试矩阵换路径时用），套接字保留。</summary>
     public void DropPeers()
     {
-        foreach (var peer in _peers.Values) peer.Local?.Dispose();
-        _peers.Clear();
+        // 一个一个摘下来再关：和正在登记的新对方赛跑时，不会把刚登记的那个清掉却不关它的套接字。
+        foreach (var endpoint in _peers.Keys)
+            if (_peers.TryRemove(endpoint, out var peer)) peer.Local?.Dispose();
     }
 
     public async ValueTask DisposeAsync()
@@ -573,7 +682,11 @@ public sealed class DirectBridge : IAsyncDisposable
         {
             await Task.WhenAll(_loops.ToArray());
         }
-        catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException or SocketException) { }
+        catch (Exception e)
+        {
+            // 哪个循环出过错都不影响收尾：调用方接着要撤掉端口映射、重置界面。
+            if (e is not (OperationCanceledException or ObjectDisposedException or SocketException)) _log(L.F("core.mp.punch.localerror", e.GetType().Name));
+        }
         _cts.Dispose();
     }
 }

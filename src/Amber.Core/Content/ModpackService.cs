@@ -1,4 +1,4 @@
-using Amber.Core.Localization;
+﻿using Amber.Core.Localization;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -42,7 +42,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
     }
 
     /// <summary>安装整合包：先装加载器（版本名字用 name），再下载文件、释放 overrides 到版本隔离目录。</summary>
-    public async Task<string> ImportAsync(string packPath, string name, Func<string, string> workDirForVersion, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default)
+    /// <param name="onSkip">跳过了一个文件（整合包里的原路径）。进度消息会被后面的覆盖，界面要在导入完成后汇总时用这个。</param>
+    public async Task<string> ImportAsync(string packPath, string name, Func<string, string> workDirForVersion, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default,
+        Action<string>? onSkip = null)
     {
         var info = Inspect(packPath);
         name = name.Trim();
@@ -53,11 +55,17 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         Directory.CreateDirectory(workDir);
 
         using var zip = ZipFile.OpenRead(packPath);
+        // 可疑的文件名（像 8.3 短名、带冒号、设备名）跳过这一个文件并说一声，不让整个导入失败。
+        var target = new PackTarget(workDir, ctx.Dir.VersionDir(id), id) { OnSkip = path =>
+        {
+            progress?.Report(new LoaderProgress(L.F("core.content.modpack.skipped", path)));
+            onSkip?.Invoke(path);
+        } };
         switch (info.Format)
         {
-            case "Modrinth": await ImportMrpackFilesAsync(zip, workDir, progress, ct); break;
-            case "CurseForge": await ImportCurseForgeFilesAsync(zip, workDir, progress, ct); break;
-            default: await ImportOtherLauncherFilesAsync(zip, info, id, workDir, progress, ct); break;
+            case "Modrinth": await ImportMrpackFilesAsync(zip, target, progress, ct); break;
+            case "CurseForge": await ImportCurseForgeFilesAsync(zip, target, progress, ct); break;
+            default: await ImportOtherLauncherFilesAsync(zip, info, id, target, progress, ct); break;
         }
         return id;
     }
@@ -85,14 +93,14 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         return version;
     }
 
-    private async Task ImportMrpackFilesAsync(ZipArchive zip, string workDir, IProgress<LoaderProgress>? progress, CancellationToken ct)
+    private async Task ImportMrpackFilesAsync(ZipArchive zip, PackTarget pack, IProgress<LoaderProgress>? progress, CancellationToken ct)
     {
         var index = ReadJson(zip.GetEntry("modrinth.index.json")!);
         var items = new List<DownloadItem>();
         foreach (var file in (index["files"] as JsonArray ?? []).OfType<JsonObject>())
         {
             if (file["env"]?["client"]?.GetValue<string>() == "unsupported") continue;
-            var target = SafeJoin(workDir, file["path"]!.GetValue<string>());
+            if (pack.Resolve(file["path"]!.GetValue<string>()) is not { } target) continue;
             var sha1 = file["hashes"]?["sha1"]?.GetValue<string>() ?? throw new InvalidDataException(L.F("core.content.modpack.missingsha1", file["path"]));
             var url = (file["downloads"] as JsonArray)?.Select(u => u?.GetValue<string>()).FirstOrDefault(u => u is not null && u.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                       ?? throw new InvalidDataException(L.F("core.content.modpack.nohttpsurl", file["path"]));
@@ -102,12 +110,13 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         await ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.content.modpack.downloadprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
         progress?.Report(new(L.T("core.content.modpack.extractconfig")));
-        ExtractPrefix(zip, "overrides/", workDir);
-        ExtractPrefix(zip, "client-overrides/", workDir);
+        ExtractPrefix(zip, "overrides/", pack);
+        ExtractPrefix(zip, "client-overrides/", pack);
     }
 
-    private async Task ImportCurseForgeFilesAsync(ZipArchive zip, string workDir, IProgress<LoaderProgress>? progress, CancellationToken ct)
+    private async Task ImportCurseForgeFilesAsync(ZipArchive zip, PackTarget pack, IProgress<LoaderProgress>? progress, CancellationToken ct)
     {
+        var workDir = pack.WorkDir;
         var manifest = ReadJson(zip.GetEntry("manifest.json")!);
         var ids = (manifest["files"] as JsonArray ?? []).OfType<JsonObject>().Select(f => f["fileID"]!.GetValue<long>()).ToList();
         progress?.Report(new(L.T("core.content.modpack.querymods")));
@@ -119,7 +128,7 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         await ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.content.modpack.downloadprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
         var overrides = manifest["overrides"]?.GetValue<string>() ?? "overrides";
-        ExtractPrefix(zip, overrides.TrimEnd('/') + "/", workDir);
+        ExtractPrefix(zip, overrides.TrimEnd('/') + "/", pack);
         if (missing > 0) throw new InvalidDataException(L.P("core.content.modpack.missingcursefiles", missing, missing));
     }
 
@@ -313,29 +322,115 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         };
     }
 
-    private static void ExtractPrefix(ZipArchive zip, string prefix, string target, IReadOnlyCollection<string>? skip = null)
+    private static void ExtractPrefix(ZipArchive zip, string prefix, PackTarget target, IReadOnlyCollection<string>? skip = null)
     {
         foreach (var entry in zip.Entries)
         {
             if (!entry.FullName.StartsWith(prefix, StringComparison.Ordinal) || entry.FullName.EndsWith('/')) continue;
-            var relative = entry.FullName[prefix.Length..];
+            // 前缀后面多出来的斜杠（“overrides//mods/x.jar”）只是多余的分隔符，不是绝对路径：去掉再判断。
+            var relative = entry.FullName[prefix.Length..].TrimStart('/', '\\');
             if (skip?.Contains(relative) == true) continue;
-            var path = SafeJoin(target, relative);
+            if (target.Resolve(relative) is not { } path) continue;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             entry.ExtractToFile(path, true);
         }
     }
 
-    /// <summary>整合包里的路径不可信：拒绝任何能跳出目标目录的路径。</summary>
+    /// <summary>
+    /// 整合包文件释放到哪里。启动器自己的文件整合包不能提供，直接跳过：
+    /// 任何位置的 amber-instance.json（实例设置，里面有启动前后执行的命令、Java 路径和 JVM 参数），
+    /// 以及版本目录根上的 &lt;id&gt;.json、&lt;id&gt;.jar 和 natives/。大小写不敏感，路径里的每一段都查（“amber-instance.json/x”也算）。
+    /// </summary>
+    internal sealed record PackTarget(string WorkDir, string VersionDir, string Id)
+    {
+        /// <summary>跳过了一个可疑或属于启动器的文件（参数：整合包里的原路径）。</summary>
+        public Action<string>? OnSkip { get; init; }
+
+        /// <summary>
+        /// 能释放时返回完整路径；启动器自己的文件、可疑的名字返回 null（并通知 OnSkip）；真正跳出目录的路径抛异常。
+        /// 每一段先按 Windows 的规则规范化（去掉结尾的点和空格），再做短名、设备名和启动器文件的判断：
+        /// 不然“AMBER-~1.JSO.”这种名字检查时不像短名，写文件时却被 Windows 当成 amber-instance.json 的短名。
+        /// </summary>
+        public string? Resolve(string relative)
+        {
+            // 以斜杠开头（绝对路径、\\server\share）是真的越界，不是可疑名字。
+            if (relative.StartsWith('/') || relative.StartsWith('\\'))
+                throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
+            if (NormalizeSegments(relative) is not { } segments) return Skip(relative);
+            var full = SafeJoin(WorkDir, string.Join('/', segments));
+            return IsLauncherOwned(full) ? Skip(relative) : full;
+        }
+
+        private string? Skip(string relative)
+        {
+            OnSkip?.Invoke(relative);
+            return null;
+        }
+
+        private bool IsLauncherOwned(string full)
+        {
+            var workDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(WorkDir));
+            var inWorkDir = Path.GetRelativePath(workDir, full).Split(Path.DirectorySeparatorChar);
+            if (inWorkDir.Any(s => s.Equals(Launch.InstanceSettings.FileName, StringComparison.OrdinalIgnoreCase))) return true;
+            var versionDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(VersionDir));
+            if (!full.StartsWith(versionDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
+            var first = Path.GetRelativePath(versionDir, full).Split(Path.DirectorySeparatorChar)[0].Normalize(System.Text.NormalizationForm.FormC);
+            var id = Id.Normalize(System.Text.NormalizationForm.FormC);
+            return first.Equals(id + ".json", StringComparison.OrdinalIgnoreCase) || first.Equals(id + ".jar", StringComparison.OrdinalIgnoreCase)
+                   || first.Equals("natives", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// 把整合包里的路径按段规范化：去掉空段和“.”，每段去掉结尾的点和空格（Windows 打开文件时也会这么做）。
+    /// 有可疑的段时返回 null：带冒号（备用数据流，“x::$DATA”就是 x 本身）、设备名（CON、NUL、COM1…）、
+    /// 像 8.3 短文件名（“AMBER-~1.JSO”）、含非法字符、规范化后成了空的。“..”原样保留，交给 SafeJoin 判断有没有跳出目录。
+    /// </summary>
+    internal static List<string>? NormalizeSegments(string relative)
+    {
+        var result = new List<string>();
+        foreach (var piece in relative.Split('/', '\\'))
+        {
+            if (piece is "" or ".") continue;
+            if (piece == "..") { result.Add(piece); continue; }
+            // 统一成 NFC：macOS 的文件系统把 NFC 和 NFD 当成同一个名字，不统一的话启动器文件的检查可能被绕过。
+            var raw = piece.IsNormalized(System.Text.NormalizationForm.FormC) ? piece : piece.Normalize(System.Text.NormalizationForm.FormC);
+            var segment = raw.TrimEnd('.', ' ');
+            if (segment.Length == 0 || segment.Contains(':') || segment.IndexOfAny(InvalidNameChars) >= 0
+                || IsDeviceName(segment) || ShortName().IsMatch(segment)) return null;
+            result.Add(segment);
+        }
+        return result.Count == 0 ? null : result;
+    }
+
+    // 按 Windows 的规则判断（别的系统上 GetInvalidFileNameChars 只有 \0 和 /）：整合包要在哪都能装、导出后在 Windows 上也能用。
+    private static readonly char[] InvalidNameChars =
+        [.. Enumerable.Range(0, 32).Select(i => (char)i), '"', '<', '>', '|', '?', '*', ':', '/', '\\'];
+
+    private static readonly HashSet<string> DeviceNames = new(
+        ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+         "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM\u00b9", "COM\u00b2", "COM\u00b3",
+         "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT\u00b9", "LPT\u00b2", "LPT\u00b3"],
+        StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Windows 的设备名（带不带扩展名都算，“nul.txt”也是 NUL）。</summary>
+    internal static bool IsDeviceName(string segment) => DeviceNames.Contains(segment.Split('.')[0].TrimEnd(' '));
+
+    /// <summary>整合包里的路径不可信：拒绝任何能跳出目标目录的路径（真正的越界，抛异常）。</summary>
     public static string SafeJoin(string root, string relative)
     {
         var rootFull = Path.GetFullPath(root);
+        if (Path.IsPathRooted(relative) || relative.Contains(':'))
+            throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
         var full = Path.GetFullPath(Path.Combine(rootFull, relative.Replace('/', Path.DirectorySeparatorChar)));
         var prefix = rootFull.EndsWith(Path.DirectorySeparatorChar) ? rootFull : rootFull + Path.DirectorySeparatorChar;
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
         return full;
     }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^[^.]{1,6}~\d+(\.[^.]{0,3})?$")]
+    private static partial System.Text.RegularExpressions.Regex ShortName();
 
     private static JsonObject ReadJson(ZipArchiveEntry entry)
     {
