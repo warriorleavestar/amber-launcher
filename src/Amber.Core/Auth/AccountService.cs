@@ -50,6 +50,8 @@ public sealed class AccountService(HttpClient http, AccountStore store, string d
                     new GameSession(account.Name, account.Uuid, account.AccessToken!, "msa", account.Xuid, MicrosoftClientId ?? ""), []);
 
             case AccountKind.External:
+                // 旧版本存下的 http 服务器：启动时说清楚原因和怎么办（不只在账号页提示）。
+                if (ExternalAuth.HasInsecureServer(account)) throw new InvalidOperationException(L.F("core.auth.external.insecure_saved", account.Name));
                 await External.EnsureValidAsync(account, ct);
                 Store.Save();
                 var metadata = await External.GetMetadataAsync(account.ServerUrl!, ct);

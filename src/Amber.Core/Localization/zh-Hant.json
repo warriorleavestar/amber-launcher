@@ -1077,5 +1077,6 @@
   "core.mp.punch.peerevicted": "{0} 太久沒有回應，已移除",
   "core.mp.matrix.requestexpired": "房主的測試請求太久沒有回答，已作廢",
   "multiplayer.matrix.request_gone": "這次測試請求已經作廢（逾時或房主已取消），沒有開始測試",
-  "content.modpack.installed_skipped": "整合包已安裝為 {0}。略過了 {1} 個可疑或屬於啟動器的檔案：{2}"
+  "content.modpack.installed_skipped": "整合包已安裝為 {0}。略過了 {1} 個可疑或屬於啟動器的檔案：{2}",
+  "core.auth.external.insecure_saved": "外置帳號 {0} 的伺服器位址是 http，密碼和權杖會明文傳輸，已不能用來啟動。請到帳號頁刪除它，再用 https 位址重新新增。"
 }
