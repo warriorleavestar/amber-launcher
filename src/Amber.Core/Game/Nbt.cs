@@ -13,6 +13,8 @@ public static class Nbt
     internal const int MaxFileBytes = 64 * 1024 * 1024;
     internal const int MaxDepth = 64;
     internal const int MaxTags = 250_000;
+    internal sealed record ReadLimits(int FileBytes, int DecodedBytes, int Values, int Depth);
+    internal static readonly ReadLimits DefaultReadLimits = new(MaxFileBytes, MaxFileBytes, MaxTags, MaxDepth);
 
     public sealed class NbtList(byte elementType, List<object> items)
     {
@@ -24,50 +26,79 @@ public static class Nbt
     public static Dictionary<string, object> ReadFile(string path)
     {
         using var input = File.OpenRead(path);
-        if (input.Length > MaxFileBytes) throw InvalidData();
-        var bytes = ReadBounded(input);
+        return Read(input, DefaultReadLimits);
+    }
+
+    internal static Dictionary<string, object> Read(Stream input, ReadLimits limits)
+    {
+        CheckLimits(limits);
+        var bytes = ReadBounded(input, limits.FileBytes);
         if (bytes.Length >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b)
         {
             using var gz = new GZipStream(new MemoryStream(bytes), CompressionMode.Decompress);
-            bytes = ReadBounded(gz);
+            bytes = ReadBounded(gz, limits.DecodedBytes);
         }
-        var reader = new Reader(bytes);
+        return ReadPlain(bytes, limits);
+    }
+
+    private static void CheckLimits(ReadLimits limits)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limits.FileBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limits.DecodedBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limits.Values);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limits.Depth);
+    }
+
+    private static Dictionary<string, object> ReadPlain(byte[] bytes, ReadLimits limits)
+    {
+        if (bytes.Length > limits.DecodedBytes) throw InvalidData();
+        var reader = new Reader(bytes, limits);
         var type = reader.U8();
         if (type != Compound) throw new InvalidDataException(L.T("core.game.nbt.invalidroot"));
         reader.Str();
         return reader.ReadCompound();
     }
 
-    private static byte[] ReadBounded(Stream input)
+    private static byte[] ReadBounded(Stream input, int limit)
     {
+        if (input.CanSeek && input.Length - input.Position > limit) throw InvalidData();
         using var output = new MemoryStream();
         var buffer = new byte[8192];
-        int count;
-        while ((count = input.Read(buffer)) != 0)
+        while (true)
         {
-            if (count > MaxFileBytes - output.Length) throw InvalidData();
+            // 长度快照可能落后于文件增长；最多多读一字节，在扩容之前拒绝。
+            var count = input.Read(buffer, 0, (int)Math.Min(buffer.Length, (long)limit - output.Length + 1));
+            if (count == 0) return output.ToArray();
+            if (count > limit - output.Length) throw InvalidData();
             output.Write(buffer, 0, count);
         }
-        return output.ToArray();
     }
 
     private static InvalidDataException InvalidData() => new(L.T("core.game.nbt.invaliddata"));
 
     /// <summary>写 NBT。servers.dat 不压缩，level.dat 要 gzip。</summary>
-    public static void WriteFile(string path, Dictionary<string, object> root, bool gzip = false)
+    public static void WriteFile(string path, Dictionary<string, object> root, bool gzip = false) =>
+        WriteFile(path, root, gzip, DefaultReadLimits);
+
+    internal static void WriteFile(string path, Dictionary<string, object> root, bool gzip, ReadLimits limits, string? backupPath = null)
     {
+        CheckLimits(limits);
         using var memory = new MemoryStream();
         var writer = new Writer(memory);
         writer.U8(Compound);
         writer.Str("");
         writer.WriteCompound(root);
         var bytes = memory.ToArray();
+        // 编辑后的输出仍须能被相同预算读取；拒绝时不替换原文件或已有恢复副本。
+        _ = ReadPlain(bytes, limits);
         if (gzip)
         {
             using var packed = new MemoryStream();
             using (var gz = new GZipStream(packed, CompressionLevel.Optimal, true)) gz.Write(bytes);
             bytes = packed.ToArray();
         }
+        if (bytes.Length > limits.FileBytes) throw InvalidData();
+        if (backupPath is not null) File.Copy(path, backupPath, true);
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         var temp = path + ".tmp";
         File.WriteAllBytes(temp, bytes);
@@ -136,10 +167,11 @@ public static class Nbt
         return builder.ToString();
     }
 
-    private sealed class Reader(byte[] data)
+    private sealed class Reader(byte[] data, ReadLimits limits)
     {
         private int _pos;
-        private int _remainingTags = MaxTags;
+        // 根复合标签也占一个值；重复键的值和列表项沿用全局计数。
+        private int _remainingTags = limits.Values - 1;
 
         private ReadOnlySpan<byte> Take(int count)
         {
@@ -174,7 +206,7 @@ public static class Nbt
 
         public Dictionary<string, object> ReadCompound(int depth = 0)
         {
-            if (depth > MaxDepth) throw InvalidData();
+            if (depth > limits.Depth) throw InvalidData();
             var result = new Dictionary<string, object>();
             while (true)
             {
@@ -194,7 +226,7 @@ public static class Nbt
 
         private object ReadValue(byte type, int depth)
         {
-            if (depth > MaxDepth || --_remainingTags < 0) throw InvalidData();
+            if (depth > limits.Depth || --_remainingTags < 0) throw InvalidData();
             switch (type)
             {
                 case Byte: return U8();
@@ -219,7 +251,8 @@ public static class Nbt
                     var element = U8();
                     var length = ReadLength(1);
                     if (length > _remainingTags || element > LongArray || (element == End && length != 0)) throw InvalidData();
-                    var items = new List<object>(length);
+                    // 按实际解析结果增长；嵌套列表不能反复预留同一份剩余预算。
+                    var items = new List<object>();
                     for (var i = 0; i < length; i++) items.Add(ReadValue(element, depth + 1));
                     return new NbtList(element, items);
                 }
