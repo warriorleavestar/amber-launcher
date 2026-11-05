@@ -12,7 +12,11 @@ using System.Threading.Channels;
 
 namespace Amber.Core.Multiplayer;
 
-public enum ChatKind { Message, Join, Leave }
+/// <summary>
+/// Ping 是 0.5.9 加的心跳：转发只在新成员加入后先发一个 Ping 表示“我支持心跳”，客户端收到后才开始定时发。
+/// 旧客户端解不开 Ping（不认识的类型）会直接忽略；旧转发从不发 Ping，新客户端也就不会对它发。
+/// </summary>
+public enum ChatKind { Message, Join, Leave, Ping }
 
 /// <summary>一条聊天消息（解密后）。Time 是发送方的时间。Nonce 是这条消息加密时用的随机数（判断是不是自己发的）。</summary>
 public sealed record ChatMessage(ChatKind Kind, string SenderId, string Name, string Text, DateTimeOffset Time)
@@ -179,9 +183,10 @@ public sealed class RateLimiter(int count, TimeSpan window, Func<DateTimeOffset>
 /// 房主电脑上的聊天转发：接受房间成员的连接，把认证通过的消息转给其他人。
 /// 一条连接的第一帧必须是认证通过的“加入”，之后才会收到别人的消息；发送者 id 和名字在这条连接里固定，
 /// 已经有人在用的 id 不让别的连接用。每个成员有自己的发送队列：一时满了先丢帧，一直满着才断开它（慢的人不拖住别人）。
-/// 第一帧有时限；加入之后不再按空闲断开，靠 TCP 保活发现掉线。连接数有上限，并给房主自己的客户端留一个位子（单独的本机端口）。
-/// 整个转发的新连接和加入/离开通知也限速（防止有人反复连上断开刷屏或占满）。超长或认证失败的连接直接断开；发太快的帧丢弃。
-/// 断开时替离开的人发一条“离开”通知。
+/// 第一帧有时限；加入之后不说话不会被断开。掉线靠两样发现：TCP 保活（直接连过来的），和心跳（经 EasyTier 端口转发连过来的，
+/// 保活只能探到本机这一跳）：支持心跳的成员太久没有任何帧就断开；不支持心跳的旧版本成员只在连接满了时，按最久没动静的先腾位子。
+/// 连接数有上限，还没加入的连接也有上限，并给房主自己的客户端留一个位子（单独的本机端口）。加入/离开通知和整个转发的消息量限速。
+/// 超长或认证失败的连接直接断开；发太快、太长的帧丢弃。断开时替离开的人发一条“离开”通知（宣布过加入的才发）。
 /// </summary>
 public sealed class ChatHub : IAsyncDisposable
 {
@@ -197,11 +202,29 @@ public sealed class ChatHub : IAsyncDisposable
     /// <summary>连上后多久内要发出第一帧（加入）。</summary>
     internal TimeSpan FirstFrameTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
-    /// <summary>整个转发每 10 秒最多接受多少个新连接（房主自己的端口不算）。</summary>
-    internal int AcceptsPerWindow { get; init; } = 16;
+    /// <summary>同时最多这么多条还没加入的连接（房主自己的端口不算）。反复连上不说话的人占不满所有位子。</summary>
+    public const int MaxPending = 8;
 
-    /// <summary>整个转发每 10 秒最多转发多少条加入/离开通知（超过的不转发，成员照常加入/离开）。</summary>
+    /// <summary>整个转发每 10 秒最多宣布多少次加入（超过的不宣布，成员照常加入；宣布过加入的离开总会宣布）。</summary>
     internal int PresencePerWindow { get; init; } = 16;
+
+    /// <summary>整个转发每 5 秒最多转发多少条消息（每人另有 5 秒 5 条）。</summary>
+    internal int MessagesPerWindow { get; init; } = 40;
+
+    /// <summary>转发的消息帧最大字节数（500 字的消息加密后约 2 KB；更长的只可能是自己拼的）。</summary>
+    public const int MaxForwardFrame = 4096;
+
+    /// <summary>支持心跳的成员这么久没有任何帧就断开。</summary>
+    internal TimeSpan PingTimeout { get; init; } = TimeSpan.FromSeconds(90);
+
+    /// <summary>连接满了时，不支持心跳的成员这么久没动静就可以被腾掉位子。</summary>
+    internal TimeSpan IdleEvictAfter { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>多久检查一次心跳超时。</summary>
+    internal TimeSpan SweepInterval { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>转发自己发的心跳用的发送者 id（不会和成员的 16 位十六进制 id 冲突）。</summary>
+    internal const string HubSender = "amber-hub";
 
     internal Func<DateTimeOffset> Clock { get; init; } = () => DateTimeOffset.UtcNow;
 
@@ -215,10 +238,10 @@ public sealed class ChatHub : IAsyncDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly List<Task> _loops = [];
     private readonly TcpListener _hostListener = new(IPAddress.Loopback, 0);
-    private RateLimiter? _acceptLimiter;
     private RateLimiter? _presenceLimiter;
-    private RateLimiter AcceptLimiter => _acceptLimiter ??= new(AcceptsPerWindow, TimeSpan.FromSeconds(10), Clock);
+    private RateLimiter? _messageLimiter;
     private RateLimiter PresenceLimiter => _presenceLimiter ??= new(PresencePerWindow, TimeSpan.FromSeconds(10), Clock);
+    private RateLimiter MessageLimiter => _messageLimiter ??= new(MessagesPerWindow, TimeSpan.FromSeconds(5), Clock);
 
     private sealed class Member(TcpClient client, int outboxFrames, bool isHost, CancellationToken hub)
     {
@@ -232,6 +255,12 @@ public sealed class ChatHub : IAsyncDisposable
         public string? SenderId { get; set; }
         public string? Name { get; set; }
         public volatile bool Authenticated;
+        /// <summary>最后一次收到任何帧（UTC ticks）。</summary>
+        public long LastActivity;
+        /// <summary>发过心跳（0.5.9 及以后的客户端）。</summary>
+        public volatile bool PingCapable;
+        /// <summary>加入被宣布过（离开时要宣布）。</summary>
+        public bool JoinAnnounced;
 
         public void Kick()
         {
@@ -255,6 +284,40 @@ public sealed class ChatHub : IAsyncDisposable
         _loops.Add(AcceptLoopAsync(_hostListener, true));
     }
 
+    private int _sweepStarted;
+
+    /// <summary>第一个成员加入时才开始检查心跳（这时 init 设置的时间参数已经生效）。</summary>
+    private void StartSweep()
+    {
+        if (Interlocked.Exchange(ref _sweepStarted, 1) != 0) return;
+        var loop = SweepLoopAsync();
+        lock (_loops) _loops.Add(loop);
+    }
+
+    /// <summary>定时断开心跳超时的成员（支持心跳、但太久没有任何帧：多半是经端口转发连着、人已经不在了）。</summary>
+    private async Task SweepLoopAsync()
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            try { await Task.Delay(SweepInterval, _cts.Token); }
+            catch (OperationCanceledException) { return; }
+            var now = Clock().UtcTicks;
+            foreach (var member in _members.Values)
+                if (member.PingCapable && now - Interlocked.Read(ref member.LastActivity) > PingTimeout.Ticks) member.Kick();
+        }
+    }
+
+    /// <summary>连接满了：腾掉一个最久没动静、不支持心跳的成员（超过 IdleEvictAfter 才算）。腾了返回 true。</summary>
+    private bool EvictIdle()
+    {
+        var now = Clock().UtcTicks;
+        var victim = _members.Values
+            .Where(m => !m.IsHost && m.Authenticated && !m.PingCapable && now - Interlocked.Read(ref m.LastActivity) > IdleEvictAfter.Ticks)
+            .OrderBy(m => Interlocked.Read(ref m.LastActivity)).FirstOrDefault();
+        victim?.Kick();
+        return victim is not null;
+    }
+
     /// <summary>房主自己的聊天客户端连这个本机端口：给它留着位子，房间连接满了或者新连接被限速时也能连上（同时只接一条）。</summary>
     public int HostPort => ((IPEndPoint)_hostListener.LocalEndpoint).Port;
 
@@ -266,7 +329,8 @@ public sealed class ChatHub : IAsyncDisposable
             var listener = new TcpListener(address, Port);
             listener.Start();
             lock (_listeners) _listeners.Add(listener);
-            _loops.Add(AcceptLoopAsync(listener, false));
+            var loop = AcceptLoopAsync(listener, false);
+            lock (_loops) _loops.Add(loop);
             return true;
         }
         catch (SocketException)
@@ -296,10 +360,11 @@ public sealed class ChatHub : IAsyncDisposable
             {
                 return;
             }
-            // 房主端口同时只接一条；其他连接给房主留一个位子，并且整个转发限速。
+            // 房主端口同时只接一条；其他连接给房主留一个位子，还没加入的连接另有上限。满了时先试着腾掉一个久没动静的旧版本成员。
             var accept = host
                 ? !_members.Values.Any(m => m.IsHost)
-                : _members.Values.Count(m => !m.IsHost) < MaxConnections - 1 && AcceptLimiter.TryAcquire();
+                : _members.Values.Count(m => !m.IsHost && !m.Authenticated) < MaxPending
+                  && (_members.Values.Count(m => !m.IsHost) < MaxConnections - 1 || EvictIdle());
             if (!accept)
             {
                 client.Dispose();
@@ -308,7 +373,7 @@ public sealed class ChatHub : IAsyncDisposable
             if (SendBufferForTest is { } size) client.Client.SendBufferSize = size;
             RoomChat.EnableKeepAlive(client.Client);
             var id = Guid.NewGuid();
-            var member = new Member(client, OutboxFrames, host, _cts.Token);
+            var member = new Member(client, OutboxFrames, host, _cts.Token) { LastActivity = Clock().UtcTicks };
             _members[id] = member;
             _ = ServeAsync(id, member);
         }
@@ -337,6 +402,7 @@ public sealed class ChatHub : IAsyncDisposable
                 if (frame is null) break;
                 var message = _cipher.Open(frame);
                 if (message is null) break;
+                Interlocked.Exchange(ref member.LastActivity, Clock().UtcTicks);
                 if (!member.Authenticated)
                 {
                     // 第一帧必须是加入；别的连接正在用这个 id 就不让进。
@@ -348,13 +414,25 @@ public sealed class ChatHub : IAsyncDisposable
                         member.Name = message.Name;
                         member.Authenticated = true;
                     }
-                    if (member.IsHost || PresenceLimiter.TryAcquire()) Broadcast(frame);
+                    if (member.IsHost || PresenceLimiter.TryAcquire())
+                    {
+                        member.JoinAnnounced = true;
+                        Broadcast(frame);
+                    }
+                    StartSweep();
+                    // 告诉这个客户端：这个转发支持心跳（旧客户端解不开，直接忽略）。
+                    member.Outbox.Writer.TryWrite(_cipher.Seal(new ChatMessage(ChatKind.Ping, HubSender, "", "", Clock())));
                     continue;
                 }
                 // 一条连接只能代表一个人：换 id、换名字、再发一次加入都断开。
                 if (message.SenderId != member.SenderId || message.Name != member.Name || message.Kind == ChatKind.Join) break;
                 if (message.Kind == ChatKind.Leave) break;
-                if (!member.Limiter.TryAcquire()) continue;
+                if (message.Kind == ChatKind.Ping)
+                {
+                    member.PingCapable = true;
+                    continue;
+                }
+                if (frame.Length > MaxForwardFrame || !member.Limiter.TryAcquire() || !MessageLimiter.TryAcquire()) continue;
                 Broadcast(frame);
             }
         }
@@ -369,7 +447,7 @@ public sealed class ChatHub : IAsyncDisposable
             member.Kick();
             try { await writer; } catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException) { }
             member.Cts.Dispose();
-            if (member.Authenticated && member.SenderId is { } sender && !_cts.IsCancellationRequested && (member.IsHost || PresenceLimiter.TryAcquire()))
+            if (member.Authenticated && member.JoinAnnounced && member.SenderId is { } sender && !_cts.IsCancellationRequested)
             {
                 var leave = _cipher.Seal(new ChatMessage(ChatKind.Leave, sender, member.Name ?? "", "", DateTimeOffset.UtcNow));
                 Broadcast(leave);
@@ -414,9 +492,11 @@ public sealed class ChatHub : IAsyncDisposable
         foreach (var l in _listeners) l.Stop();
         _hostListener.Stop();
         foreach (var m in _members.Values) m.Kick();
+        Task[] loops;
+        lock (_loops) loops = [.. _loops];
         try
         {
-            await Task.WhenAll(_loops);
+            await Task.WhenAll(loops);
         }
         catch (Exception e) when (e is OperationCanceledException or SocketException) { }
         _cts.Dispose();
@@ -434,6 +514,10 @@ public sealed class ChatClient : IAsyncDisposable
     private readonly Queue<string> _sentNonces = new();
     private readonly HashSet<string> _unmatchedNonces = new(StringComparer.Ordinal);
     private Task? _readLoop;
+    private Task? _pingLoop;
+
+    /// <summary>转发表示支持心跳后，多久发一次。</summary>
+    internal static TimeSpan PingInterval { get; set; } = TimeSpan.FromSeconds(30);
 
     public string SenderId { get; } = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
     public string Name { get; }
@@ -514,13 +598,33 @@ public sealed class ChatClient : IAsyncDisposable
             {
                 var frame = await RoomChat.ReadFrameAsync(stream, _cts.Token);
                 if (frame is null) break;
-                if (_cipher.Open(frame) is { } message) Received?.Invoke(message);
+                if (_cipher.Open(frame) is not { } message) continue;
+                if (message.Kind == ChatKind.Ping)
+                {
+                    // 转发支持心跳：开始定时发（只开一次）。心跳不交给界面。
+                    _pingLoop ??= PingLoopAsync();
+                    continue;
+                }
+                Received?.Invoke(message);
             }
         }
         catch (Exception e) when (e is IOException or InvalidDataException or OperationCanceledException or SocketException or ObjectDisposedException)
         {
         }
         if (!_cts.IsCancellationRequested) Disconnected?.Invoke();
+    }
+
+    private async Task PingLoopAsync()
+    {
+        try
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                await Task.Delay(PingInterval, _cts.Token);
+                await SendRawAsync(new ChatMessage(ChatKind.Ping, SenderId, Name, "", DateTimeOffset.UtcNow), _cts.Token);
+            }
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException or InvalidOperationException or SocketException) { }
     }
 
     public async ValueTask DisposeAsync()
@@ -540,6 +644,7 @@ public sealed class ChatClient : IAsyncDisposable
         {
             try { await _readLoop; } catch (Exception e) when (e is OperationCanceledException or IOException) { }
         }
+        if (_pingLoop is not null) await _pingLoop;
         _cts.Dispose();
     }
 }

@@ -243,20 +243,26 @@ public sealed class ChatHubHardeningTests
     [Fact]
     public async Task HostSlotIsReserved()
     {
-        await using var hub = new ChatHub(Room, 0) { AcceptsPerWindow = 1000 };
-        var clients = new List<TcpClient>();
+        await using var hub = new ChatHub(Room, 0);
+        var clients = new List<ChatClient>();
         try
         {
             for (var i = 0; i < ChatHub.MaxConnections + 3; i++)
             {
-                var c = new TcpClient();
-                await c.ConnectAsync("127.0.0.1", hub.Port);
-                clients.Add(c);
+                var (c, _) = NewClient("m" + i);
+                try
+                {
+                    await c.ConnectAsync("127.0.0.1", hub.Port);
+                    clients.Add(c);
+                }
+                catch (Exception e) when (e is IOException or SocketException) { await c.DisposeAsync(); }
+                await WaitAsync(() => hub.ConnectionCount == hub.MemberCount, 1000);
             }
-            Assert.True(await WaitAsync(() => hub.ConnectionCount == ChatHub.MaxConnections - 1));
+            Assert.True(await WaitAsync(() => hub.ConnectionCount == ChatHub.MaxConnections - 1), $"{hub.ConnectionCount}");
+            Assert.True(await WaitAsync(() => hub.MemberCount == ChatHub.MaxConnections - 1), $"{hub.MemberCount}");
             var (host, _) = NewClient("房主");
             await host.ConnectAsync("127.0.0.1", hub.HostPort);
-            Assert.True(await WaitAsync(() => hub.MemberCount == 1));
+            Assert.True(await WaitAsync(() => hub.MemberCount == ChatHub.MaxConnections));
             Assert.Equal(ChatHub.MaxConnections, hub.ConnectionCount);
 
             // 第二条连房主端口的被拒。
@@ -268,15 +274,15 @@ public sealed class ChatHubHardeningTests
         }
         finally
         {
-            foreach (var c in clients) c.Dispose();
+            foreach (var c in clients) await c.DisposeAsync();
         }
     }
 
-    /// <summary>R7：新连接和加入/离开通知整体限速：有人反复连上断开时，接受的连接和转发的通知都有上限。</summary>
+    /// <summary>R7：加入通知整体限速：有人反复连上断开时，转发的加入/离开通知有上限（宣布过加入的离开才宣布）；还没加入的连接有上限。</summary>
     [Fact]
     public async Task ChurnIsRateLimitedHubWide()
     {
-        await using var hub = new ChatHub(Room, 0) { AcceptsPerWindow = 1000, PresencePerWindow = 4 };
+        await using var hub = new ChatHub(Room, 0) { PresencePerWindow = 4 };
         var (watcher, inbox) = NewClient("W");
         await watcher.ConnectAsync("127.0.0.1", hub.Port);
         for (var i = 0; i < 10; i++)
@@ -286,22 +292,118 @@ public sealed class ChatHubHardeningTests
             await c.DisposeAsync();
         }
         await Task.Delay(500);
-        // 观察者自己的加入用了一个；剩下 3 个名额给 20 条加入/离开。
-        Assert.True(inbox.Count(m => m.Kind is ChatKind.Join or ChatKind.Leave) <= 4, $"presence {inbox.Count(m => m.Kind is ChatKind.Join or ChatKind.Leave)}");
+        // 观察者自己的加入用了一个；剩下 3 个名额：最多 3 次加入、对应 3 次离开。
+        var joins = inbox.Count(m => m.Kind == ChatKind.Join && m.SenderId != watcher.SenderId);
+        var leaves = inbox.Count(m => m.Kind == ChatKind.Leave);
+        Assert.True(joins <= 3 && leaves == joins, $"joins {joins} leaves {leaves}");
         await watcher.DisposeAsync();
 
-        await using var limited = new ChatHub(Room, 0) { AcceptsPerWindow = 3 };
-        var accepted = 0;
-        for (var i = 0; i < 8; i++)
+        // 还没加入的连接最多 MaxPending 条，多的直接断开；已经加入的人照样能连。
+        var silent = new List<TcpClient>();
+        try
         {
-            using var c = new TcpClient();
-            await c.ConnectAsync("127.0.0.1", limited.Port);
-            using var t = new CancellationTokenSource(300);
-            try { if (await c.GetStream().ReadAsync(new byte[1], t.Token) != 0) accepted++; }
-            catch (OperationCanceledException) { accepted++; }
-            catch (IOException) { }
+            for (var i = 0; i < ChatHub.MaxPending + 4; i++)
+            {
+                var c = new TcpClient();
+                await c.ConnectAsync("127.0.0.1", hub.Port);
+                silent.Add(c);
+            }
+            await Task.Delay(300);
+            Assert.True(hub.ConnectionCount <= ChatHub.MaxPending, $"{hub.ConnectionCount}");
         }
-        Assert.Equal(3, accepted);
+        finally
+        {
+            foreach (var c in silent) c.Dispose();
+        }
+    }
+
+    /// <summary>心跳：新转发在加入后发一个心跳，新客户端收到后定时发；支持心跳却太久没帧的成员被断开。心跳不交给界面。</summary>
+    [Fact]
+    public async Task PingCapableMembersAreReclaimed()
+    {
+        var old = ChatClient.PingInterval;
+        ChatClient.PingInterval = TimeSpan.FromMilliseconds(100);
+        try
+        {
+            await using var hub = new ChatHub(Room, 0) { PingTimeout = TimeSpan.FromMilliseconds(800), SweepInterval = TimeSpan.FromMilliseconds(100) };
+            var (live, inbox) = NewClient("L");
+            await live.ConnectAsync("127.0.0.1", hub.Port);
+
+            // 一个“死掉”的新客户端：先发过心跳，然后再也不发（模拟端口转发还连着、人已经不在）。
+            using var dead = new TcpClient();
+            await dead.ConnectAsync("127.0.0.1", hub.Port);
+            await WriteAsync(dead.GetStream(), Cipher.Seal(Msg(ChatKind.Join, "dead", "D")));
+            await WriteAsync(dead.GetStream(), Cipher.Seal(Msg(ChatKind.Ping, "dead", "D")));
+            Assert.True(await WaitAsync(() => hub.MemberCount == 2));
+            Assert.True(await WaitAsync(() => hub.MemberCount == 1, 5000), $"{hub.MemberCount}");
+            await Task.Delay(1200);
+            // 一直在发心跳的那个还在，界面也收不到心跳。
+            Assert.Equal(1, hub.MemberCount);
+            Assert.DoesNotContain(inbox, m => m.Kind == ChatKind.Ping);
+            await live.DisposeAsync();
+        }
+        finally
+        {
+            ChatClient.PingInterval = old;
+        }
+    }
+
+    /// <summary>旧版本（不发心跳）的成员不会因为不说话被断开；只有连接满了时，最久没动静的才被腾掉位子。</summary>
+    [Fact]
+    public async Task IdleLegacyMemberIsEvictedOnlyWhenFull()
+    {
+        var now = DateTimeOffset.UtcNow;
+        await using var hub = new ChatHub(Room, 0) { Clock = () => now, IdleEvictAfter = TimeSpan.FromMinutes(10) };
+        using var legacy = new TcpClient();
+        await legacy.ConnectAsync("127.0.0.1", hub.Port);
+        await WriteAsync(legacy.GetStream(), Cipher.Seal(Msg(ChatKind.Join, "legacy", "Old")));
+        Assert.True(await WaitAsync(() => hub.MemberCount == 1));
+        now += TimeSpan.FromHours(1);
+        var others = new List<TcpClient>();
+        try
+        {
+            for (var i = 0; i < ChatHub.MaxConnections - 2; i++)
+            {
+                var c = new TcpClient();
+                await c.ConnectAsync("127.0.0.1", hub.Port);
+                await WriteAsync(c.GetStream(), Cipher.Seal(Msg(ChatKind.Join, "o" + i, "O")));
+                others.Add(c);
+                await WaitAsync(() => hub.MemberCount == i + 2, 2000);
+            }
+            Assert.Equal(ChatHub.MaxConnections - 1, hub.MemberCount);
+            // 满了：再来一个时，一小时没动静的旧成员被腾掉（其他人刚连上，不动）。
+            using var late = new TcpClient();
+            await late.ConnectAsync("127.0.0.1", hub.Port);
+            await WriteAsync(late.GetStream(), Cipher.Seal(Msg(ChatKind.Join, "late", "Late")));
+            using var t = new CancellationTokenSource(5000);
+            var buffer = new byte[4096];
+            var stream = legacy.GetStream();
+            try { while (await stream.ReadAsync(buffer, t.Token) > 0) { } }
+            catch (IOException) { }
+            Assert.False(t.IsCancellationRequested, "旧成员应该被腾掉");
+        }
+        finally
+        {
+            foreach (var c in others) c.Dispose();
+        }
+    }
+
+    /// <summary>太长的消息帧不转发（连接不断，正常消息照常）。</summary>
+    [Fact]
+    public async Task OversizedMessageFrameIsDropped()
+    {
+        await using var hub = new ChatHub(Room, 0);
+        var (watcher, inbox) = NewClient("W");
+        await watcher.ConnectAsync("127.0.0.1", hub.Port);
+        using var raw = new TcpClient();
+        await raw.ConnectAsync("127.0.0.1", hub.Port);
+        await WriteAsync(raw.GetStream(), Cipher.Seal(Msg(ChatKind.Join, "big", "B")));
+        // 名字和文字都是自己拼的（正常客户端会截到 500 字）：帧超过 4 KB。
+        await WriteAsync(raw.GetStream(), Cipher.Seal(new ChatMessage(ChatKind.Message, "big", "B", new string('a', 3500), DateTimeOffset.UtcNow)));
+        await WriteAsync(raw.GetStream(), Cipher.Seal(Msg(ChatKind.Message, "big", "B", "短的")));
+        Assert.True(await WaitAsync(() => inbox.Any(m => m.Text == "短的")));
+        Assert.DoesNotContain(inbox, m => m.Text.Length > 100);
+        await watcher.DisposeAsync();
     }
 
     /// <summary>R5：别人把我发过的帧原样重放（或者同一条被转发两次），只有第一次算“自己的”；id 不是我的也不算。</summary>
