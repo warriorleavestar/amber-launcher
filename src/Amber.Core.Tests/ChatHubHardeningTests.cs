@@ -7,7 +7,12 @@ using Amber.Core.Multiplayer;
 
 namespace Amber.Core.Tests;
 
+/// <summary>会临时修改全局心跳间隔，并使用严格的网络超时；与其他测试隔离运行。</summary>
+[CollectionDefinition("ChatHubTiming", DisableParallelization = true)]
+public sealed class ChatHubTimingCollection;
+
 /// <summary>R5–R7：聊天转发不让人冒充别的成员、不转发没认证的连接、慢的成员不拖住别人，并有超时和连接上限。</summary>
+[Collection("ChatHubTiming")]
 public sealed class ChatHubHardeningTests
 {
     private static readonly RoomCode Room = new("K7Q2M9XD", "4HZP8RW2N6TC", 25565);
