@@ -8,4 +8,8 @@
   <PropertyGroup>
     <UsedAvaloniaProducts></UsedAvaloniaProducts>
   </PropertyGroup>
+  <!-- macOS 的旧 TLS 后端不支持 TLS 1.3，部分官方资源 CDN 会直接断开连接。 -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'osx-arm64' Or '$(RuntimeIdentifier)' == 'osx-x64' Or ('$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('OSX')))">
+    <RuntimeHostConfigurationOption Include="System.Net.Security.UseNetworkFramework" Value="true" />
+  </ItemGroup>
 </Project>
