@@ -52,7 +52,13 @@
               </Grid>
             </Border>
             <Border Classes="card">
-              <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+              <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                <!-- 无痕模式：游戏日志里不写聊天行 -->
+                <TextBlock Grid.Row="7" Text="{l:T settings.notrace.label}" VerticalAlignment="Top" Margin="0,12,0,0" />
+                <StackPanel Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,12,0,0" Spacing="4">
+                  <CheckBox x:Name="NoTraceBox" IsChecked="{Binding NoTrace}" Content="{l:T settings.notrace.toggle}" />
+                  <TextBlock Classes="hint" FontSize="12" Text="{l:T settings.notrace.hint}" TextWrapping="Wrap" />
+                </StackPanel>
                 <TextBlock Text="Java" VerticalAlignment="Center" />
                 <ComboBox Grid.Column="1" ItemsSource="{Binding JavaOptions}" SelectedItem="{Binding SelectedJava}"
                           HorizontalAlignment="Stretch">

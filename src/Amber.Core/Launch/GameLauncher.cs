@@ -30,6 +30,8 @@ public sealed record LaunchOptions
     public string? JoinWorld { get; init; }
     public IReadOnlyList<string> ExtraJvmArgs { get; init; } = [];
     public IReadOnlyList<string> ExtraGameArgs { get; init; } = [];
+    /// <summary>无痕模式：logs/latest.log 里不写聊天行（见 ChatLogFilter）。</summary>
+    public bool NoTrace { get; init; }
     public string LauncherName { get; init; } = "Amber";
     public string LauncherVersion { get; init; } = "0.1";
 }
@@ -107,7 +109,15 @@ public sealed class GameLauncher(GameDirectory dir)
         if (version.Logging?.GetValueOrDefault("client") is { Argument: { } logArg, File: { } logFile })
         {
             var logPath = dir.LoggingConfigPath(logFile.Id);
-            if (File.Exists(logPath)) args.Add(logArg.Replace("${path}", logPath));
+            if (File.Exists(logPath))
+            {
+                if (options.NoTrace) logPath = ChatLogFilter.Prepare(logPath);
+                args.Add(logArg.Replace("${path}", logPath));
+            }
+            else if (options.NoTrace)
+            {
+                throw new InvalidOperationException(L.T("core.launch.notrace.config_missing"));
+            }
         }
 
         if (version.Arguments?.Jvm is { Count: > 0 } jvm)
@@ -201,6 +211,8 @@ public sealed class GameLauncher(GameDirectory dir)
     private Process LaunchCore(LaunchOptions options, Action<string>? onOutput)
     {
         var version = dir.ResolveVersion(options.VersionId);
+        if (options.NoTrace)
+            onOutput?.Invoke(L.T(ChatLogFilter.Supported(version) ? "core.launch.notrace.on" : "core.launch.notrace.unsupported"));
         ExtractNatives(options.VersionId, version);
         var workDir = options.WorkingDirectory ?? dir.Root;
         Directory.CreateDirectory(workDir);

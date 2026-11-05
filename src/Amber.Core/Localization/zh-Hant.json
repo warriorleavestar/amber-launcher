@@ -1037,5 +1037,14 @@
   "tools.update.hint": "僅提供通知，不會自動下載或取代。",
   "tools.update.latest": "目前的 {0} 已是最新版本",
   "tools.update.no_feed": "目前版本為 {0}。未設定更新網址，因此不會連線檢查（可在設定頁填寫）。",
-  "tools.update.open_page": "開啟下載頁面"
+  "tools.update.open_page": "開啟下載頁面",
+  "core.mp.component.guardmismatch": "連上管道的不是 Amber 啟動的守護程式，已中止（沒有傳送房間金鑰）",
+  "core.mp.component.guardfailed": "完整區域網路模式的守護程式沒有連上：{0}",
+  "settings.notrace.label": "無痕模式",
+  "settings.notrace.toggle": "遊戲記錄裡不記聊天",
+  "settings.notrace.hint": "開啟後，遊戲的 logs/latest.log 裡不寫聊天內容（Amber 自己的啟動紀錄本來就只在記憶體裡）。當機分析看到的記錄會少一些。1.7 以前的舊版本沒有可改的記錄設定，不支援。",
+  "core.launch.notrace.on": "無痕模式：這次遊戲記錄不記聊天",
+  "core.launch.notrace.unsupported": "無痕模式：這個版本太舊，沒有可改的記錄設定，聊天仍會寫進遊戲記錄",
+  "core.launch.notrace.config_missing": "無痕模式：缺少這個版本的記錄設定檔，沒有啟動。請先補全檔案",
+  "core.launch.notrace.no_file_appender": "無痕模式：這個版本的記錄設定裡沒有寫檔案的部分，無法過濾聊天"
 }
