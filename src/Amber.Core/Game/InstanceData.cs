@@ -75,24 +75,35 @@ public static class WorldManager
     public static string Import(string zipPath, string savesDir)
     {
         using var zip = ZipFile.OpenRead(zipPath);
-        var level = zip.Entries.Where(e => e.Name == "level.dat").OrderBy(e => e.FullName.Length).FirstOrDefault()
-                    ?? throw new InvalidDataException(L.T("core.game.world.missinglevel"));
-        var prefix = level.FullName[..^"level.dat".Length];
+        // 先统一归档路径的两种分隔符，并在任何写入前验证全部路径。
+        var entries = zip.Entries.Select(e => (Entry: e, Name: ImportPath(e.FullName))).ToList();
+        var level = entries.Where(e => e.Name.Split('/').Last() == "level.dat").OrderBy(e => e.Name.Length).FirstOrDefault();
+        if (level.Entry is null) throw new InvalidDataException(L.T("core.game.world.missinglevel"));
+        var prefix = level.Name[..^"level.dat".Length];
         var baseName = prefix.TrimEnd('/').Split('/').LastOrDefault(s => s.Length > 0) ?? Path.GetFileNameWithoutExtension(zipPath);
+        GameDirectory.CheckId(baseName);
         var folder = baseName;
-        for (var i = 2; Directory.Exists(Path.Combine(savesDir, folder)); i++) folder = $"{baseName} ({i})";
+        for (var i = 2; Directory.Exists(GameDirectory.Contained(savesDir, folder)) || File.Exists(GameDirectory.Contained(savesDir, folder)); i++)
+            folder = $"{baseName} ({i})";
 
-        var target = Path.GetFullPath(Path.Combine(savesDir, folder));
-        var targetPrefix = target + Path.DirectorySeparatorChar;
-        foreach (var entry in zip.Entries)
+        var target = GameDirectory.Contained(savesDir, folder);
+        var files = entries.Where(e => e.Name.StartsWith(prefix, StringComparison.Ordinal) && !e.Name.EndsWith('/'))
+            .Select(e => (e.Entry, Path: GameDirectory.Contained(target, e.Name[prefix.Length..]))).ToList();
+        foreach (var (entry, path) in files)
         {
-            if (!entry.FullName.StartsWith(prefix, StringComparison.Ordinal) || entry.FullName.EndsWith('/')) continue;
-            var path = Path.GetFullPath(Path.Combine(target, entry.FullName[prefix.Length..].Replace('/', Path.DirectorySeparatorChar)));
-            if (!path.StartsWith(targetPrefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException(L.F("core.game.world.unsafepath", entry.FullName));
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             entry.ExtractToFile(path, true);
         }
         return folder;
+    }
+
+    private static string ImportPath(string name)
+    {
+        var normalized = name.Replace('\\', '/');
+        if (normalized.Length == 0 || normalized.StartsWith('/') || normalized.Contains(':'))
+            throw new InvalidDataException(L.F("core.game.world.unsafepath", name));
+        foreach (var part in normalized.TrimEnd('/').Split('/')) GameDirectory.CheckId(part);
+        return normalized;
     }
 }
 
@@ -103,6 +114,7 @@ public sealed record ServerStatus(bool Online, string? Motd, string? VersionName
 /// <summary>servers.dat：游戏的多人服务器列表。保留游戏写入的其他字段。</summary>
 public static class ServerList
 {
+    internal const int MaxStatusPacketBytes = 1024 * 1024;
     public static List<ServerEntry> Read(string workDir)
     {
         var path = Path.Combine(workDir, "servers.dat");
@@ -188,12 +200,7 @@ public static class ServerList
             await WritePacketAsync(stream, handshake.ToArray(), linked.Token);
             await WritePacketAsync(stream, [0x00], linked.Token);
 
-            await ReadVarIntAsync(stream, linked.Token);
-            await ReadVarIntAsync(stream, linked.Token);
-            var length = await ReadVarIntAsync(stream, linked.Token);
-            var buffer = new byte[length];
-            await stream.ReadExactlyAsync(buffer, linked.Token);
-            var json = JsonNode.Parse(buffer);
+            var json = await ReadStatusPacketAsync(stream, linked.Token);
 
             var watch = System.Diagnostics.Stopwatch.StartNew();
             var ping = new byte[9];
@@ -202,7 +209,8 @@ public static class ServerList
             long? ms = null;
             try
             {
-                await ReadVarIntAsync(stream, linked.Token);
+                var pong = await ReadPacketAsync(stream, 9, linked.Token);
+                if (!pong.AsSpan().SequenceEqual(ping)) throw InvalidStatus();
                 ms = watch.ElapsedMilliseconds;
             }
             catch (Exception e) when (e is EndOfStreamException or IOException) { /* 有的服务器不回 pong */ }
@@ -210,12 +218,34 @@ public static class ServerList
             return new ServerStatus(true, MotdText(json?["description"]), json?["version"]?["name"]?.GetValue<string>(),
                 json?["players"]?["online"]?.GetValue<int>(), json?["players"]?["max"]?.GetValue<int>(), ms, null);
         }
-        catch (Exception e) when (e is SocketException or IOException or OperationCanceledException or JsonException or EndOfStreamException or InvalidDataException)
+        catch (Exception e) when (e is SocketException or IOException or OperationCanceledException or JsonException or EndOfStreamException or InvalidDataException or InvalidOperationException or FormatException)
         {
             if (ct.IsCancellationRequested) throw;
             return new ServerStatus(false, null, null, null, null, null, e is OperationCanceledException ? L.T("core.mp.server.timeout") : e.Message);
         }
     }
+
+    // 状态包很小；先限制完整帧，再在帧内验证 ID 和字符串长度，绝不按内层声明另行分配。
+    internal static async Task<JsonObject> ReadStatusPacketAsync(Stream stream, CancellationToken ct = default)
+    {
+        var frame = await ReadPacketAsync(stream, MaxStatusPacketBytes, ct);
+        using var packet = new MemoryStream(frame, writable: false);
+        if (await ReadVarIntAsync(packet, ct) != 0) throw InvalidStatus();
+        var length = await ReadVarIntAsync(packet, ct);
+        if (length <= 0 || length != packet.Length - packet.Position) throw InvalidStatus();
+        return JsonNode.Parse(frame.AsSpan((int)packet.Position, length)) as JsonObject ?? throw InvalidStatus();
+    }
+
+    private static async Task<byte[]> ReadPacketAsync(Stream stream, int maxBytes, CancellationToken ct)
+    {
+        var length = await ReadVarIntAsync(stream, ct);
+        if (length <= 0 || length > maxBytes) throw InvalidStatus();
+        var frame = new byte[length];
+        await stream.ReadExactlyAsync(frame, ct);
+        return frame;
+    }
+
+    private static InvalidDataException InvalidStatus() => new(L.T("core.mp.server.invalidstatus"));
 
     private static string? MotdText(JsonNode? node)
     {
@@ -259,6 +289,7 @@ public static class ServerList
         for (var shift = 0; shift < 35; shift += 7)
         {
             await stream.ReadExactlyAsync(buffer, ct);
+            if (shift == 28 && (buffer[0] & 0xf0) != 0) throw InvalidStatus();
             result |= (buffer[0] & 0x7f) << shift;
             if ((buffer[0] & 0x80) == 0) return result;
         }

@@ -162,6 +162,20 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
     [RelayCommand]
     private void OpenUpdateUrl()
     {
-        if (UpdateUrl is { } url) Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        if (UpdateUrl is null) return;
+        if (!UpdateChecker.TryGetSafeUpdateUrl(UpdateUrl, out var uri))
+        {
+            UpdateStatus = L.F("tools.update.failed", L.T("tools.download.invalid_url"));
+            UpdateUrl = null;
+            return;
+        }
+        try
+        {
+            Process.Start(new ProcessStartInfo(uri!.AbsoluteUri) { UseShellExecute = true });
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            UpdateStatus = L.F("tools.update.failed", e.Message);
+        }
     }
 }

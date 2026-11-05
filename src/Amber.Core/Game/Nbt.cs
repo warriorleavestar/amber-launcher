@@ -9,6 +9,10 @@ namespace Amber.Core.Game;
 public static class Nbt
 {
     private const byte End = 0, Byte = 1, Short = 2, Int = 3, Long = 4, Float = 5, Double = 6, ByteArray = 7, String = 8, List = 9, Compound = 10, IntArray = 11, LongArray = 12;
+    // 这里只解析世界/服务器的元数据，不是区块；同时限制字节、嵌套和对象数量。
+    internal const int MaxFileBytes = 64 * 1024 * 1024;
+    internal const int MaxDepth = 64;
+    internal const int MaxTags = 250_000;
 
     public sealed class NbtList(byte elementType, List<object> items)
     {
@@ -19,13 +23,13 @@ public static class Nbt
     /// <summary>读文件，自动识别 gzip。根标签的名字被忽略。</summary>
     public static Dictionary<string, object> ReadFile(string path)
     {
-        var bytes = File.ReadAllBytes(path);
+        using var input = File.OpenRead(path);
+        if (input.Length > MaxFileBytes) throw InvalidData();
+        var bytes = ReadBounded(input);
         if (bytes.Length >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b)
         {
             using var gz = new GZipStream(new MemoryStream(bytes), CompressionMode.Decompress);
-            using var plain = new MemoryStream();
-            gz.CopyTo(plain);
-            bytes = plain.ToArray();
+            bytes = ReadBounded(gz);
         }
         var reader = new Reader(bytes);
         var type = reader.U8();
@@ -33,6 +37,21 @@ public static class Nbt
         reader.Str();
         return reader.ReadCompound();
     }
+
+    private static byte[] ReadBounded(Stream input)
+    {
+        using var output = new MemoryStream();
+        var buffer = new byte[8192];
+        int count;
+        while ((count = input.Read(buffer)) != 0)
+        {
+            if (count > MaxFileBytes - output.Length) throw InvalidData();
+            output.Write(buffer, 0, count);
+        }
+        return output.ToArray();
+    }
+
+    private static InvalidDataException InvalidData() => new(L.T("core.game.nbt.invaliddata"));
 
     /// <summary>写 NBT。servers.dat 不压缩，level.dat 要 gzip。</summary>
     public static void WriteFile(string path, Dictionary<string, object> root, bool gzip = false)
@@ -120,52 +139,62 @@ public static class Nbt
     private sealed class Reader(byte[] data)
     {
         private int _pos;
+        private int _remainingTags = MaxTags;
 
-        public byte U8() => data[_pos++];
+        private ReadOnlySpan<byte> Take(int count)
+        {
+            if (count < 0 || count > data.Length - _pos) throw InvalidData();
+            var value = data.AsSpan(_pos, count);
+            _pos += count;
+            return value;
+        }
+
+        public byte U8() => Take(1)[0];
 
         public short I16()
         {
-            var v = BinaryPrimitives.ReadInt16BigEndian(data.AsSpan(_pos));
-            _pos += 2;
-            return v;
+            return BinaryPrimitives.ReadInt16BigEndian(Take(2));
         }
 
         public int I32()
         {
-            var v = BinaryPrimitives.ReadInt32BigEndian(data.AsSpan(_pos));
-            _pos += 4;
-            return v;
+            return BinaryPrimitives.ReadInt32BigEndian(Take(4));
         }
 
         public long I64()
         {
-            var v = BinaryPrimitives.ReadInt64BigEndian(data.AsSpan(_pos));
-            _pos += 8;
-            return v;
+            return BinaryPrimitives.ReadInt64BigEndian(Take(8));
         }
 
         public string Str()
         {
             var length = (ushort)I16();
-            var s = DecodeModifiedUtf8(data.AsSpan(_pos, length));
-            _pos += length;
-            return s;
+            return DecodeModifiedUtf8(Take(length));
         }
 
-        public Dictionary<string, object> ReadCompound()
+        public Dictionary<string, object> ReadCompound(int depth = 0)
         {
+            if (depth > MaxDepth) throw InvalidData();
             var result = new Dictionary<string, object>();
             while (true)
             {
                 var type = U8();
                 if (type == End) return result;
                 var name = Str();
-                result[name] = ReadValue(type);
+                result[name] = ReadValue(type, depth + 1);
             }
         }
 
-        private object ReadValue(byte type)
+        private int ReadLength(int itemBytes)
         {
+            var length = I32();
+            if (length < 0 || length > (data.Length - _pos) / itemBytes) throw InvalidData();
+            return length;
+        }
+
+        private object ReadValue(byte type, int depth)
+        {
+            if (depth > MaxDepth || --_remainingTags < 0) throw InvalidData();
             switch (type)
             {
                 case Byte: return U8();
@@ -174,43 +203,37 @@ public static class Nbt
                 case Long: return I64();
                 case Float:
                 {
-                    var v = BinaryPrimitives.ReadSingleBigEndian(data.AsSpan(_pos));
-                    _pos += 4;
-                    return v;
+                    return BinaryPrimitives.ReadSingleBigEndian(Take(4));
                 }
                 case Double:
                 {
-                    var v = BinaryPrimitives.ReadDoubleBigEndian(data.AsSpan(_pos));
-                    _pos += 8;
-                    return v;
+                    return BinaryPrimitives.ReadDoubleBigEndian(Take(8));
                 }
                 case ByteArray:
                 {
-                    var length = I32();
-                    var v = data.AsSpan(_pos, length).ToArray();
-                    _pos += length;
-                    return v;
+                    return Take(ReadLength(1)).ToArray();
                 }
                 case String: return Str();
                 case List:
                 {
                     var element = U8();
-                    var length = I32();
-                    var items = new List<object>(Math.Max(length, 0));
-                    for (var i = 0; i < length; i++) items.Add(ReadValue(element));
+                    var length = ReadLength(1);
+                    if (length > _remainingTags || element > LongArray || (element == End && length != 0)) throw InvalidData();
+                    var items = new List<object>(length);
+                    for (var i = 0; i < length; i++) items.Add(ReadValue(element, depth + 1));
                     return new NbtList(element, items);
                 }
-                case Compound: return ReadCompound();
+                case Compound: return ReadCompound(depth);
                 case IntArray:
                 {
-                    var length = I32();
+                    var length = ReadLength(4);
                     var v = new int[length];
                     for (var i = 0; i < length; i++) v[i] = I32();
                     return v;
                 }
                 case LongArray:
                 {
-                    var length = I32();
+                    var length = ReadLength(8);
                     var v = new long[length];
                     for (var i = 0; i < length; i++) v[i] = I64();
                     return v;
