@@ -63,7 +63,7 @@ public sealed partial class HomeViewModel : PageViewModel
     private List<string> _lastRunFiles = [];
     private Queue<string> _lastRunOutput = new();
     private bool _refreshingAccounts;
-    private (string WorkDir, DateTime Started, string[] Output)? _crashInput;
+    private CrashInput? _crashInput;
     /// <summary>每次显示新的崩溃结果（或清掉）加一：换语言的重新分析只在期间没有新结果时才替换。</summary>
     private int _crashGeneration;
 
@@ -81,7 +81,21 @@ public sealed partial class HomeViewModel : PageViewModel
         public bool InGameGuessed { get; set; }
         public bool Exiting { get; set; }
         public Queue<string> Output { get; } = new();
+        /// <summary>这次启动自己的日志（多开时各存各的）。</summary>
+        public RunLog? Log { get; set; }
+        public string WorkDir { get; set; } = "";
+        /// <summary>运行期间有另一局游戏用着同一个游戏目录：latest.log、崩溃报告可能是那一局的。</summary>
+        public bool SharedWorkDir { get; set; }
     }
+
+    /// <summary>“强制结束”是给哪一局的（不是“最近一局”：期间可能又启动了一局）。</summary>
+    private GameRun? _forceKillRun;
+
+    /// <summary>运行计时上次写的状态：Tick 只覆盖自己写的，别的消息（第二局启动失败、崩溃）留着。</summary>
+    private StatusMessage? _ownedStatus;
+
+    /// <summary>崩溃卡对应的那一局的日志：“查看日志”打开它。</summary>
+    private RunLog? _crashLog;
 
     private readonly List<GameRun> _runs = [];
     private GameRun? Latest => _runs.Count > 0 ? _runs[^1] : null;
@@ -97,7 +111,7 @@ public sealed partial class HomeViewModel : PageViewModel
         UpdateRunState();
         if (Crash is null || _crashInput is not { } input) return;
         var generation = _crashGeneration;
-        _ = Task.Run(() => CrashAnalyzer.AnalyzeRun(input.WorkDir, input.Started, input.Output)).ContinueWith(
+        _ = Task.Run(input.Analyze).ContinueWith(
             t => { if (t.IsCompletedSuccessfully && Crash is not null && generation == _crashGeneration) Crash = t.Result; },
             TaskScheduler.FromCurrentSynchronizationContext());
     }
@@ -181,6 +195,9 @@ public sealed partial class HomeViewModel : PageViewModel
     public event Action? GameStarted;
     public event Action<bool>? GameExited;
 
+    /// <summary>某一局崩溃了（参数：实例）。多开时别的游戏还在跑，GameExited 不会来，窗口靠这个恢复。</summary>
+    public event Action<string>? GameCrashed;
+
     protected override StatusMessage? DefaultStatus => StatusMessage.Info("home.status.ready");
 
     private void SetIdleStatus(string key) => SetStatus(StatusMessage.Info(key));
@@ -216,6 +233,11 @@ public sealed partial class HomeViewModel : PageViewModel
         service.CurrentInstanceChanged += () => Dispatcher.UIThread.Post(() =>
         {
             if (_service.CurrentInstance is { } id && Versions.Contains(id)) SelectedVersion = id;
+        });
+        // 安装开始、完成、取消、失败、修复：“安装未完成”“修复后启动”这些标注和按钮文字跟着刷新。
+        service.InstanceStateChanged += id => Dispatcher.UIThread.Post(() =>
+        {
+            if (id == SelectedVersion) OnSelectedVersionChanged(SelectedVersion);
         });
         _clock.Tick += (_, _) => Tick();
         RefreshVersions();
@@ -296,7 +318,10 @@ public sealed partial class HomeViewModel : PageViewModel
         IsPreparing = run is { Game: null };
         IsRunning = run is { Game: not null };
         IsExiting = run is { Exiting: true };
-        if (run is null) ShowForceKill = false;
+        // “强制结束”只对给出它的那一局有效：它不再是最近一局、已经退出了，就收回。
+        if (_forceKillRun is { } offered && (offered != run || !_runs.Contains(offered) || offered.Game is not { HasExited: false }))
+            _forceKillRun = null;
+        ShowForceKill = _forceKillRun is not null;
         ShowProgress = run is not null && (run.Game is null || !run.InGame || run.Exiting);
         ProgressIndeterminate = run is not null && (run.Game is not null || Progress <= 0);
         PrimaryLabel = L.T(PrimaryKey(run));
@@ -391,19 +416,20 @@ public sealed partial class HomeViewModel : PageViewModel
         SelectedVersion = id;
         _service.SetCurrentInstance(id);
 
-        var run = new GameRun(id);
+        var workDir = _service.WorkDirFor(id);
+        var run = new GameRun(id) { WorkDir = workDir };
         _runs.Add(run);
         Crash = null;
         Progress = 0;
         UpdateRunState();
         var ct = run.Cts.Token;
-        var workDir = _service.WorkDirFor(id);
         var crashed = false;
         var gameStarted = false;
         try
         {
             var settings = _service.EffectiveSettings(id);
-            await RepairIfBrokenAsync(id, ct);
+            try { await RepairIfBrokenAsync(id, ct); }
+            finally { _service.NotifyInstanceStateChanged(id); }
             SetStatus(StatusMessage.Info("home.status.checking_game_files"));
             await _service.Installer.CompleteAsync(id, new Progress<InstallProgress>(p =>
             {
@@ -416,7 +442,7 @@ public sealed partial class HomeViewModel : PageViewModel
                 }
             }), ct);
             // 文件补齐了：上次没装完的实例到这里也算装完了。
-            try { _service.Directory.MarkInstallFinished(id); }
+            try { _service.MarkInstallFinished(id); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
 
             var version = _service.Directory.ResolveVersion(id);
@@ -443,17 +469,17 @@ public sealed partial class HomeViewModel : PageViewModel
             await using var relay = relayClient;
             var memory = options.MaxMemoryMb;
 
+            // 每局一份日志：多开时第二局不会清掉第一局的，也不会混在一起。
+            run.Log = _log.BeginRun(id, DateTimeOffset.Now);
             if (!string.IsNullOrWhiteSpace(settings.PreLaunchCommand))
             {
                 SetStatus(StatusMessage.Info("home.status.pre_launch_command"));
-                await RunUserCommandAsync(settings.PreLaunchCommand, id, workDir, ct);
+                await RunUserCommandAsync(settings.PreLaunchCommand, id, workDir, run.Log, ct);
             }
 
-            SetStatus(StatusMessage.Info("home.status.launching"));
-            _log.Clear();
-            _log.BeginRun(id, DateTimeOffset.Now);
-            _log.AddRaw(L.F("home.log.launch", id, javaPath, memory));
-            foreach (var note in _proxyNotes) _log.AddRaw(note);
+            SetOwnedStatus(StatusMessage.Info("home.status.launching"));
+            _log.AddRaw(run.Log, L.F("home.log.launch", id, javaPath, memory));
+            foreach (var note in _proxyNotes) _log.AddRaw(run.Log, note);
             var parser = new GameLogParser();
             var launcher = new GameLauncher(_service.Directory);
             using var running = _service.MarkRunning(workDir);
@@ -463,13 +489,16 @@ public sealed partial class HomeViewModel : PageViewModel
                 {
                     run.Output.Enqueue(line);
                     if (run.Output.Count > KeptOutputLines) run.Output.Dequeue();
-                    if (parser.Feed(line) is { } entry) _log.Add(entry);
+                    if (parser.Feed(line) is { } entry) _log.Add(run.Log, entry);
                 }
                 if (!run.InGame && IsEnterGameLine(line)) Dispatcher.UIThread.Post(() => EnterGame(run, guessed: false));
                 _service.NotifyGameOutput(id, line);
             });
             run.Started = DateTime.UtcNow;
             run.Game = game;
+            // 同一个游戏目录里同时开着两局：两局的崩溃报告、latest.log 分不清，崩溃分析只用各自的输出。
+            foreach (var sibling in _runs.Where(r => r != run && r.Game is not null && string.Equals(r.WorkDir, workDir, StringComparison.OrdinalIgnoreCase)))
+                sibling.SharedWorkDir = run.SharedWorkDir = true;
             UpdateRunState();
             Tick();
             gameStarted = true;
@@ -491,19 +520,22 @@ public sealed partial class HomeViewModel : PageViewModel
                 SetStatus(StatusMessage.Error("home.status.crashed", code));
                 string[] output;
                 lock (parser) output = run.Output.ToArray();
-                var analysis = await Task.Run(() => CrashAnalyzer.AnalyzeRun(workDir, run.Started, output));
+                var input = new CrashInput(workDir, run.Started, output, SafePid(game), run.SharedWorkDir);
+                var analysis = await Task.Run(() => input.Analyze());
                 // 崩溃分析的标题和建议是按当时的语言写的：记下输入，换语言时重新分析一遍。
-                _crashInput = (workDir, run.Started, output);
+                _crashInput = input;
+                _crashLog = run.Log;
                 _lastRunFiles = [.. analysis.SourceFiles];
                 _lastRunOutput = new Queue<string>(output);
-                _log.AddRaw(L.F("home.log.crash_analysis", analysis.Summary));
+                _log.AddRaw(run.Log, L.F("home.log.crash_analysis", analysis.Summary));
                 Crash = analysis;
                 // 玩家在别的页面：弹个 Toast，带“查看”。
                 if (!IsCurrent) Toasts.WithAction(L.F("home.crash.toast", id), L.T("home.crash.show"), () => NavigateHere?.Invoke());
+                GameCrashed?.Invoke(id);
             }
 
             if (!string.IsNullOrWhiteSpace(settings.PostExitCommand))
-                await RunUserCommandAsync(settings.PostExitCommand, id, workDir, CancellationToken.None);
+                await RunUserCommandAsync(settings.PostExitCommand, id, workDir, run.Log, CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
@@ -512,7 +544,7 @@ public sealed partial class HomeViewModel : PageViewModel
         catch (Exception e)
         {
             SetStatus(StatusMessage.Failure("home.status.launch_failed", e, ErrorText.Of(e)));
-            _log.AddRaw("[Amber] " + e);
+            _log.AddRaw(run.Log, "[Amber] " + e);
         }
         finally
         {
@@ -556,10 +588,20 @@ public sealed partial class HomeViewModel : PageViewModel
         Tick();
     }
 
-    /// <summary>每秒更新一次运行状态：加载中显示已等了多久，进了游戏显示运行时长。</summary>
+    private void SetOwnedStatus(StatusMessage message)
+    {
+        SetStatus(message);
+        _ownedStatus = message;
+    }
+
+    /// <summary>
+    /// 每秒更新一次运行状态：加载中显示已等了多久，进了游戏显示运行时长。
+    /// 只覆盖自己（或启动流程里“正在启动”这类）写的状态：另一局启动失败、崩溃的消息不能一秒后就被冲掉。
+    /// </summary>
     private void Tick()
     {
         if (Latest is not { Game: not null } run || run.Exiting) return;
+        if (!ReferenceEquals(StatusInfo, _ownedStatus)) return;
         var elapsed = DateTime.UtcNow - run.Started;
         if (!run.InGame && elapsed >= EnterGameFallback)
         {
@@ -567,11 +609,11 @@ public sealed partial class HomeViewModel : PageViewModel
             return;
         }
         if (!run.InGame)
-            SetStatus(StatusMessage.Info("home.status.loading_game", (int)elapsed.TotalSeconds));
+            SetOwnedStatus(StatusMessage.Info("home.status.loading_game", (int)elapsed.TotalSeconds));
         else if (run.InGameGuessed)
-            SetStatus(StatusMessage.Info("home.status.maybe_in_game", run.Id, (int)elapsed.TotalMinutes));
+            SetOwnedStatus(StatusMessage.Info("home.status.maybe_in_game", run.Id, (int)elapsed.TotalMinutes));
         else
-            SetStatus(StatusMessage.Info("home.status.in_game", run.Id, (int)elapsed.TotalMinutes));
+            SetOwnedStatus(StatusMessage.Info("home.status.in_game", run.Id, (int)elapsed.TotalMinutes));
     }
 
     private void CancelRun(GameRun run)
@@ -588,28 +630,41 @@ public sealed partial class HomeViewModel : PageViewModel
         run.StoppedByUser = true;
         run.Exiting = true;
         UpdateRunState();
-        SetStatus(StatusMessage.Info("home.status.exiting", run.Id));
+        SetOwnedStatus(StatusMessage.Info("home.status.exiting", run.Id));
         bool closed;
         try { closed = game.CloseMainWindow(); }
         catch (InvalidOperationException) { closed = false; }
         if (!closed)
         {
-            // 没有能关的主窗口（还在加载、或者是无窗口的老版本）：直接给出强制结束。
-            ShowForceKill = true;
+            // 没有能关的主窗口（还在加载、或者是无窗口的老版本）：游戏没收到退出请求，还在正常运行，
+            // “正在退出”撤回；直接给出这一局的强制结束。
+            run.StoppedByUser = false;
+            run.Exiting = false;
+            OfferForceKill(run);
+            Tick();
             return;
         }
         _ = Task.Delay(ForceKillDelay).ContinueWith(_ => Dispatcher.UIThread.Post(() =>
         {
-            if (_runs.Contains(run) && run.Game is { HasExited: false }) ShowForceKill = true;
+            if (_runs.Contains(run) && run.Exiting && run.Game is { HasExited: false }) OfferForceKill(run);
         }), TaskScheduler.Default);
     }
 
-    /// <summary>强制结束最近一次启动（Flyout 里确认过）：准备中就是取消。</summary>
+    private void OfferForceKill(GameRun run)
+    {
+        _forceKillRun = run;
+        UpdateRunState();
+    }
+
+    /// <summary>强制结束给出“强制结束”的那一局（Flyout 里确认过）。那一局已经结束、或者不再是显示的那一局时什么都不做。</summary>
     [RelayCommand]
     private void ForceKill()
     {
+        var run = _forceKillRun;
+        _forceKillRun = null;
         ShowForceKill = false;
-        Cancel();
+        if (run is null || !_runs.Contains(run)) return;
+        Kill(run);
     }
 
     /// <summary>立即结束最近一次启动：准备中取消，运行中结束进程（自检和强制结束用）。</summary>
@@ -617,6 +672,11 @@ public sealed partial class HomeViewModel : PageViewModel
     private void Cancel()
     {
         if (Latest is not { } run) return;
+        Kill(run);
+    }
+
+    private void Kill(GameRun run)
+    {
         CancelRun(run);
         try
         {
@@ -625,16 +685,52 @@ public sealed partial class HomeViewModel : PageViewModel
         catch (InvalidOperationException) { }
     }
 
+    // ---- 测试用：不真的启动游戏，直接放进一局 ----
+
+    internal object AddRunForTest(string id, Process game, string workDir = "")
+    {
+        var run = new GameRun(id) { Game = game, WorkDir = workDir, Started = DateTime.UtcNow };
+        _runs.Add(run);
+        UpdateRunState();
+        return run;
+    }
+
+    internal void RemoveRunForTest(object run)
+    {
+        _runs.Remove((GameRun)run);
+        UpdateRunState();
+    }
+
+    internal void ExitGameForTest(object run) => ExitGame((GameRun)run);
+    internal void OfferForceKillForTest(object run) => OfferForceKill((GameRun)run);
+    internal static bool IsExitingForTest(object run) => ((GameRun)run).Exiting;
+    internal static bool StoppedByUserForTest(object run) => ((GameRun)run).StoppedByUser;
+    internal void TickForTest() => Tick();
+    internal void SetOwnedStatusForTest(StatusMessage message) => SetOwnedStatus(message);
+
+    private static int? SafePid(Process game)
+    {
+        try { return game.Id; }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    /// <summary>崩溃分析的输入（换语言时用同样的输入再分析一遍）。</summary>
+    private sealed record CrashInput(string WorkDir, DateTime Started, string[] Output, int? Pid, bool SharedWorkDir)
+    {
+        public CrashAnalysis Analyze() => CrashAnalyzer.AnalyzeRun(WorkDir, Started, Output, Pid, SharedWorkDir);
+    }
+
     /// <summary>崩溃卡上的“查看日志”：打开日志页，只看警告和错误。</summary>
     [RelayCommand]
     private void ViewLog()
     {
+        _log.Show(_crashLog);
         _log.OnlyProblems = true;
         NavigateToLog?.Invoke();
     }
 
     /// <summary>用户自己配置的启动前 / 退出后命令。命令失败只记日志，不拦启动。</summary>
-    private async Task RunUserCommandAsync(string command, string id, string workDir, CancellationToken ct)
+    private async Task RunUserCommandAsync(string command, string id, string workDir, RunLog? log, CancellationToken ct)
     {
         // cmd 不按 C 规则解析引号，整条命令要原样放在 /s /c "…" 里。
         var psi = OperatingSystem.IsWindows()
@@ -651,11 +747,11 @@ public sealed partial class HomeViewModel : PageViewModel
             using var process = Process.Start(psi);
             if (process is null) return;
             await process.WaitForExitAsync(ct);
-            _log.AddRaw(L.F("home.log.command_exited", command, process.ExitCode));
+            _log.AddRaw(log, L.F("home.log.command_exited", command, process.ExitCode));
         }
         catch (System.ComponentModel.Win32Exception e)
         {
-            _log.AddRaw(L.F("home.log.command_failed", command, e.Message));
+            _log.AddRaw(log, L.F("home.log.command_failed", command, e.Message));
         }
     }
 

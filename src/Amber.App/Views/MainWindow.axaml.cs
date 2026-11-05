@@ -160,6 +160,35 @@ public partial class MainWindow : Window
             }
             _minimizedForGame = false;
         });
+        // 多开时一局崩了、另一局还在跑：GameExited 不会来，这里单独把窗口拿回来并提示。
+        home.GameCrashed += id => Dispatcher.UIThread.Post(() => OnGameCrashed(home, id));
+        home.Service.SettingsSaveFailed += e => Dispatcher.UIThread.Post(() => OnSettingsSaveFailed(e));
+    }
+
+    private void OnGameCrashed(HomeViewModel home, string id)
+    {
+        var wasHidden = WindowState == WindowState.Minimized || !IsActive;
+        if (Environment.GetEnvironmentVariable("AMBER_SELFTEST") is not { Length: > 0 })
+        {
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
+        }
+        // 不在启动页时启动页自己已经弹了 Toast；在启动页但窗口刚才看不见时，这里补一条。
+        if (wasHidden && home.IsCurrent) Toasts.WithAction(L.F("home.crash.toast", id), L.T("home.crash.show"), () => home.NavigateHere?.Invoke());
+        CrashToastsShown++;
+    }
+
+    /// <summary>崩溃时窗口这边处理过几次（自检用）。</summary>
+    internal int CrashToastsShown { get; private set; }
+
+    private DateTime _lastSaveWarning;
+
+    /// <summary>设置文件写不进去：提醒一声（30 秒内只提醒一次），不挡操作。</summary>
+    private void OnSettingsSaveFailed(Exception e)
+    {
+        if (DateTime.UtcNow - _lastSaveWarning < TimeSpan.FromSeconds(30)) return;
+        _lastSaveWarning = DateTime.UtcNow;
+        Toasts.Show(L.F("settings.save_failed", ErrorText.Describe(e)), Avalonia.Controls.Notifications.NotificationType.Warning);
     }
 
     private void RememberPlacement()

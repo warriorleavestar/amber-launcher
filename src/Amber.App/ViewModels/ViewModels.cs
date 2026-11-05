@@ -56,9 +56,16 @@ public abstract class PageViewModel : ObservableObject
         get => _isCurrent;
         set
         {
-            if (SetProperty(ref _isCurrent, value) && value) Badge = 0;
+            if (SetProperty(ref _isCurrent, value) && value)
+            {
+                Badge = 0;
+                OnBecameCurrent();
+            }
         }
     }
+
+    /// <summary>切到这一页时调用（每次）。</summary>
+    protected virtual void OnBecameCurrent() { }
 
     /// <summary>页面第一次显示时调用一次。启动时不联网、不扫描，都放在这里。</summary>
     public void Activate()
@@ -348,9 +355,32 @@ public sealed record LogEntry(DateTimeOffset Timestamp, string Level, string Mes
     public bool IsMuted => Severity <= GameLogLevel.Debug;
 }
 
+/// <summary>一次启动的日志。多开时各存各的，日志页选看哪一个。</summary>
+public sealed class RunLog : ObservableObject
+{
+    public RunLog(string? instance, DateTimeOffset startedAt)
+    {
+        Instance = instance;
+        StartedAt = startedAt;
+    }
+
+    /// <summary>启动的实例；null 是不属于任何一次启动的日志（还没启动过游戏时）。</summary>
+    public string? Instance { get; }
+    public DateTimeOffset StartedAt { get; }
+    internal List<LogEntry> All { get; } = [];
+
+    /// <summary>“实例 · 开始时间”，日志页页头和选择框里显示。</summary>
+    public string Label => Instance is null ? "" : L.F("log.run_summary", Instance, Fmt.Time(StartedAt));
+
+    internal void RefreshLabel() => OnPropertyChanged(nameof(Label));
+}
+
 public sealed partial class LogViewModel : PageViewModel
 {
     private const int MaxLines = 5000;
+
+    /// <summary>最多留几次启动的日志（多开测联机时够用）。</summary>
+    internal const int KeptRuns = 6;
 
     public override string Title => L.T("log.title");
     public override string Icon => "M4 5h16v2H4zM4 11h16v2H4zM4 17h11v2H4z";
@@ -363,10 +393,33 @@ public sealed partial class LogViewModel : PageViewModel
     [ObservableProperty]
     public partial bool FollowLatest { get; set; } = true;
 
-    private readonly List<LogEntry> _all = [];
-    private readonly List<LogEntry> _pending = [];
+    /// <summary>还没启动过游戏时的日志。</summary>
+    private readonly RunLog _launcher = new(null, DateTimeOffset.Now);
+
+    /// <summary>最近几次启动的日志，最新的在最后。</summary>
+    public ObservableCollection<RunLog> Runs { get; } = [];
+
+    /// <summary>日志页正在看的那次启动。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasRun), nameof(RunSummary))]
+    public partial RunLog? SelectedRun { get; set; }
+
+    public bool HasSeveralRuns => Runs.Count > 1;
+
+    private RunLog Shown => SelectedRun ?? _launcher;
+    private List<LogEntry> _all => Shown.All;
+
+    /// <summary>待进界面的日志行和它属于哪次启动（null：正在看的那次）。</summary>
+    private readonly List<(RunLog? Target, LogEntry Entry)> _pending = [];
     private bool _flushQueued;
+    private RunLog? _clearTarget;
     private bool _clearPending;
+
+    partial void OnSelectedRunChanged(RunLog? value)
+    {
+        Recount();
+        Rebuild();
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ErrorSummary))]
@@ -385,38 +438,67 @@ public sealed partial class LogViewModel : PageViewModel
     protected override void OnLanguageChanged()
     {
         Rebuild();
+        foreach (var run in Runs) run.RefreshLabel();
+        OnPropertyChanged(nameof(RunSummary));
         OnPropertyChanged(nameof(CopyLabel));
     }
 
-    public void Add(GameLogLine line)
+    public void Add(GameLogLine line) => Add(null, line);
+
+    /// <summary>加到某次启动的日志里（多开时游戏输出各进各的）；run 为 null 时加到正在看的那次。</summary>
+    public void Add(RunLog? run, GameLogLine line)
     {
         var level = LogLevelParser.Parse(line.Message, line.Level);
-        Post(new LogEntry(line.Time, level.ToString().ToUpperInvariant(), line.Message, level));
+        Post(run, new LogEntry(line.Time, level.ToString().ToUpperInvariant(), line.Message, level));
     }
 
-    public void AddRaw(string message)
+    public void AddRaw(string message) => AddRaw(null, message);
+
+    public void AddRaw(RunLog? run, string message)
     {
         var level = LogLevelParser.Parse(message);
-        Post(new LogEntry(DateTimeOffset.Now, level == GameLogLevel.Info ? "AMBER" : level.ToString().ToUpperInvariant(), message, level));
+        Post(run, new LogEntry(DateTimeOffset.Now, level == GameLogLevel.Info ? "AMBER" : level.ToString().ToUpperInvariant(), message, level));
     }
 
+    /// <summary>清空正在看的那次启动的日志（别的启动的不动）。</summary>
     public void Clear()
     {
         lock (_pending)
         {
-            _pending.Clear();
+            var target = Shown;
+            _pending.RemoveAll(p => (p.Target ?? target) == target);
+            _clearTarget = target;
             _clearPending = true;
         }
         // 清空和新到的日志在同一批中按顺序处理，旧的延迟回调不能把它们混在一起。
         Dispatcher.UIThread.Post(Flush);
     }
 
+    /// <summary>
+    /// 开始一次启动的日志（在界面线程上调）：新开一份，日志页切过去看它。别的还在运行的游戏的日志留着，页头可以切回去。
+    /// </summary>
+    public RunLog BeginRun(string instance, DateTimeOffset startedAt)
+    {
+        var run = new RunLog(instance, startedAt);
+        Runs.Add(run);
+        while (Runs.Count > KeptRuns) Runs.RemoveAt(0);
+        OnPropertyChanged(nameof(HasSeveralRuns));
+        SelectedRun = run;
+        return run;
+    }
+
+    /// <summary>日志页显示某次启动的日志（崩溃卡的“查看日志”看崩的那一个）。已经不在列表里的不换。</summary>
+    public void Show(RunLog? run)
+    {
+        if (run is not null && Runs.Contains(run)) SelectedRun = run;
+    }
+
     /// <summary>模组加载时日志一秒上千行，攒成一批再进界面，不然界面会卡。</summary>
-    private void Post(LogEntry entry)
+    private void Post(RunLog? target, LogEntry entry)
     {
         lock (_pending)
         {
-            _pending.Add(entry);
+            _pending.Add((target, entry));
             if (_flushQueued) return;
             _flushQueued = true;
         }
@@ -426,23 +508,38 @@ public sealed partial class LogViewModel : PageViewModel
 
     internal void Flush()
     {
-        List<LogEntry> batch;
-        bool clear;
+        List<(RunLog? Target, LogEntry Entry)> pending;
+        RunLog? clear;
         lock (_pending)
         {
-            batch = [.. _pending];
+            pending = [.. _pending];
             _pending.Clear();
             _flushQueued = false;
-            clear = _clearPending;
+            clear = _clearPending ? _clearTarget : null;
             _clearPending = false;
+            _clearTarget = null;
         }
-        if (clear)
+        if (clear is not null)
         {
-            _all.Clear();
-            Lines.Clear();
-            ErrorCount = WarningCount = Badge = 0;
-            OnPropertyChanged(nameof(EmptyMessage));
+            clear.All.Clear();
+            if (clear == Shown)
+            {
+                Lines.Clear();
+                ErrorCount = WarningCount = Badge = 0;
+                OnPropertyChanged(nameof(EmptyMessage));
+            }
         }
+        if (pending.Count == 0) return;
+
+        var shown = Shown;
+        if (!IsCurrent) Badge += pending.Count(p => p.Entry.IsError);
+        // 别的启动的日志只存起来，正在看的那次才进界面。
+        foreach (var group in pending.Where(p => (p.Target ?? shown) != shown).GroupBy(p => p.Target!))
+        {
+            group.Key.All.AddRange(group.Select(p => p.Entry));
+            if (group.Key.All.Count > MaxLines) group.Key.All.RemoveRange(0, group.Key.All.Count - MaxLines);
+        }
+        var batch = pending.Where(p => (p.Target ?? shown) == shown).Select(p => p.Entry).ToList();
         if (batch.Count == 0) return;
 
         var previousCount = _all.Count;
@@ -455,9 +552,13 @@ public sealed partial class LogViewModel : PageViewModel
             _all.RemoveRange(0, removed);
         }
         foreach (var entry in batch.Skip(Math.Max(0, removed - previousCount)).Where(Visible)) Lines.Add(entry);
+        Recount();
+    }
+
+    private void Recount()
+    {
         ErrorCount = _all.Count(e => e.IsError);
         WarningCount = _all.Count(e => e.IsWarning);
-        if (!IsCurrent) Badge += batch.Count(e => e.IsError);
         OnPropertyChanged(nameof(EmptyMessage));
     }
 
@@ -500,22 +601,10 @@ public sealed partial class LogViewModel : PageViewModel
     /// <summary>“复制全部”按钮的文字：点了之后短暂显示“已复制”或“复制失败”。存翻译键，换语言跟着换。</summary>
     public string CopyLabel => L.T(_copyLabelKey);
 
-    // ---- 这次运行的实例和开始时间（页头小字） ----
+    // ---- 正在看的那次启动的实例和开始时间（页头小字） ----
 
-    private string? _runInstance;
-    private DateTimeOffset _runStartedAt;
-
-    /// <summary>游戏开始启动时调用（在 Clear 之后）：页头显示“实例 · 开始时间”。</summary>
-    public void BeginRun(string instance, DateTimeOffset startedAt)
-    {
-        _runInstance = instance;
-        _runStartedAt = startedAt;
-        OnPropertyChanged(nameof(RunSummary));
-        OnPropertyChanged(nameof(HasRun));
-    }
-
-    public bool HasRun => _runInstance is not null;
-    public string RunSummary => _runInstance is null ? "" : L.F("log.run_summary", _runInstance, Fmt.Time(_runStartedAt));
+    public bool HasRun => SelectedRun is not null;
+    public string RunSummary => SelectedRun?.Label ?? "";
 
     // ---- 跳到下一个错误 / 警告 ----
 

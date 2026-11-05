@@ -120,12 +120,16 @@ public sealed class AppSettings
         return new AppSettings();
     }
 
+    /// <summary>测试用：这份设置存到别的文件（不序列化）。</summary>
+    internal string? SavePathForTest { get; set; }
+
     public void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        var temp = FilePath + ".tmp";
+        var path = SavePathForTest ?? FilePath;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(this, JsonOptions.Info<AppSettings>()));
-        File.Move(temp, FilePath, true);
+        File.Move(temp, path, true);
     }
 }
 

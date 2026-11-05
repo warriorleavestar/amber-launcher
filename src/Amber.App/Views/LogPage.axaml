@@ -30,6 +30,15 @@
     <StackPanel>
       <TextBlock Classes="h1" Text="{l:T log.heading}" Margin="0,0,0,2" />
       <TextBlock Classes="caption" Text="{Binding RunSummary}" IsVisible="{Binding HasRun}" TextWrapping="Wrap" Margin="0,0,0,10" />
+      <!-- 多开时选看哪一次启动的日志。 -->
+      <ComboBox x:Name="RunPicker" ItemsSource="{Binding Runs}" SelectedItem="{Binding SelectedRun}" IsVisible="{Binding HasSeveralRuns}"
+                MinWidth="240" MaxWidth="480" Margin="0,0,0,10" AutomationProperties.Name="{l:T log.pick_run}">
+        <ComboBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:RunLog">
+            <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
     </StackPanel>
     <!-- 计数芯片也是按钮：点一次跳到下一个错误 / 警告，到末尾回到第一个。 -->
     <WrapPanel Grid.Row="1" Margin="0,0,0,4">

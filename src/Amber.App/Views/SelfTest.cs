@@ -405,10 +405,23 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
 
         var home = Page<HomeViewModel>();
         main.CurrentPage = home;
+        var crashedIds = new List<string>();
+        void OnCrashed(string id) => crashedIds.Add(id);
+        home.GameCrashed += OnCrashed;
         await home.LaunchCommand.ExecuteAsync(null);
+        home.GameCrashed -= OnCrashed;
         var found = home.Crash?.Findings.Any(f => f.Title.Contains("JVM 参数")) == true;
         Check("崩溃分析识别出坏的 JVM 参数", found, home.Crash?.Summary ?? home.Status);
+        Check("崩溃时发出这一局的崩溃事件（多开时窗口靠它恢复）", crashedIds.SequenceEqual([FabricName]), string.Join(", ", crashedIds));
         await ShotAsync("崩溃分析");
+
+        // 崩溃卡的“查看日志”打开崩的那一局的日志。
+        var log = Page<LogViewModel>();
+        home.ViewLogCommand.Execute(null);
+        await WaitAsync(() => main.CurrentPage == log, 5);
+        Check("崩溃卡“查看日志”打开崩的那一局", log.SelectedRun?.Instance == FabricName && log.OnlyProblems, log.RunSummary);
+        log.OnlyProblems = false;
+        main.CurrentPage = home;
 
         var bundle = Path.Combine(reportDir, "error.zip");
         home.ExportCrashBundle(bundle);

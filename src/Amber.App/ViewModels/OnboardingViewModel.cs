@@ -319,7 +319,7 @@ public sealed partial class OnboardingViewModel : ObservableObject
                 if (chosen is null) Message = StatusMessage.Warning("onboarding.install.no_loader", kind, mcVersion);
             }
             expectedId = chosen?.DefaultId ?? mcVersion;
-            try { _service.Directory.MarkInstallStarted(expectedId); }
+            try { _service.MarkInstallStarted(expectedId); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
 
             if (chosen is not null)
@@ -364,8 +364,8 @@ public sealed partial class OnboardingViewModel : ObservableObject
                 java.Status = null;
             }
 
-            _service.Directory.MarkInstallFinished(id);
-            if (id != expectedId) _service.Directory.MarkInstallFinished(expectedId);
+            _service.MarkInstallFinished(id);
+            if (id != expectedId) _service.MarkInstallFinished(expectedId);
             SetStage("onboarding.stage.done", 100, indeterminate: false);
             DetailText = "";
             Message ??= StatusMessage.Success("onboarding.install.done", id, (long)Math.Round(_waited.Elapsed.TotalSeconds));
@@ -390,6 +390,8 @@ public sealed partial class OnboardingViewModel : ObservableObject
         }
         finally
         {
+            // 取消、失败时“安装未完成”标记留着：通知界面刷新标注。
+            if (expectedId is not null) _service.NotifyInstanceStateChanged(expectedId);
             _clock.Stop();
             _waited.Stop();
             ShowSlowHint = false;

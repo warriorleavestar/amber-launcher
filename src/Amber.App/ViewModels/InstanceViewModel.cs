@@ -191,9 +191,15 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     {
         _service = service;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
+        // 别处（启动页、后台装完的安装）换了当前实例：这一页正在用、或者正在做事（导出、导入世界、改设置）时不跟着换，
+        // 免得操作落到别的实例上；下次打开这一页再跟上。
         service.CurrentInstanceChanged += () => Dispatcher.UIThread.Post(() =>
         {
-            if (_active && _service.CurrentInstance is { } id && Instances.Contains(id)) SelectedId = id;
+            if (_active && !IsCurrent && !IsBusy && _service.CurrentInstance is { } id && Instances.Contains(id)) SelectedId = id;
+        });
+        service.InstanceStateChanged += id => Dispatcher.UIThread.Post(() =>
+        {
+            if (Current?.Id == id) UpdateInfoText();
         });
         service.ContentChanged += () => Dispatcher.UIThread.Post(() => { _loadedTabs.Clear(); LoadTab(TabIndex); });
     }
@@ -209,9 +215,17 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private void RefreshInstances()
     {
         if (!_active) return;
+        // 列表变了（比如后台装完一个新实例）：正在看、正在做事时留在原来的实例上。
+        var keep = IsCurrent || IsBusy ? SelectedId : null;
         Instances.Clear();
         foreach (var v in _service.InstalledVersions()) Instances.Add(v);
-        SelectedId = _service.CurrentOr(Instances, Instances.FirstOrDefault());
+        SelectedId = keep is not null && Instances.Contains(keep) ? keep : _service.CurrentOr(Instances, Instances.FirstOrDefault());
+    }
+
+    protected override void OnBecameCurrent()
+    {
+        // 回到这一页：跟上别处换的当前实例。
+        if (_active && !IsBusy && _service.CurrentInstance is { } id && Instances.Contains(id) && id != SelectedId) SelectedId = id;
     }
 
     partial void OnSelectedIdChanged(string? value)
@@ -307,7 +321,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             }), ct);
             await Ui.FlushAsync();
             // 补全完了，上次没装完的实例也就装完了。
-            _service.Directory.MarkInstallFinished(c.Id);
+            _service.MarkInstallFinished(c.Id);
             UpdateInfoText();
             SetStatus(StatusMessage.Success("instance.files.complete_status"));
         });

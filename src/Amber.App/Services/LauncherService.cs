@@ -128,8 +128,36 @@ public sealed class LauncherService : IDisposable
     {
         if (id is null || id == Settings.LastVersion) return;
         Settings.LastVersion = id;
-        Settings.Save();
+        // 写不了设置文件（被占用、没权限）：内存里照样切过去，只是下次启动不记得；提醒一声，不拦着。
+        try { Settings.Save(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            System.Diagnostics.Trace.WriteLine("Amber: saving current instance failed: " + e);
+            SettingsSaveFailed?.Invoke(e);
+        }
         CurrentInstanceChanged?.Invoke();
+    }
+
+    /// <summary>设置文件写不进去（参数：异常）。界面弹个不挡操作的提示。</summary>
+    public event Action<Exception>? SettingsSaveFailed;
+
+    /// <summary>实例的状态（安装未完成、已损坏）可能变了：安装开始、完成、取消、失败、修复之后调用。参数：实例 ID。</summary>
+    public event Action<string>? InstanceStateChanged;
+
+    public void NotifyInstanceStateChanged(string id) => InstanceStateChanged?.Invoke(id);
+
+    /// <summary>放“安装未完成”标记并通知界面。</summary>
+    public void MarkInstallStarted(string id)
+    {
+        try { Directory.MarkInstallStarted(id); }
+        finally { NotifyInstanceStateChanged(id); }
+    }
+
+    /// <summary>去掉“安装未完成”标记并通知界面。</summary>
+    public void MarkInstallFinished(string id)
+    {
+        try { Directory.MarkInstallFinished(id); }
+        finally { NotifyInstanceStateChanged(id); }
     }
 
     /// <summary>当前实例还装着就返回它，否则返回 fallback（比如列表第一项）。</summary>
