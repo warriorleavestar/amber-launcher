@@ -456,8 +456,9 @@ public sealed class DirectBridge : IAsyncDisposable
             case Probe:
                 // 对方是同一侧（房主收到房主的探测）就不理，防止自己连自己。
                 if (payload.Length >= 1 && payload[0] == (_isHost ? 1 : 0)) break;
+                // 先登记再回确认：不接（人满、路径没开）就不回，对方不会以为连上了。
+                if (!Accept(from)) break;
                 await SendRawAsync(Seal(ProbeAck, payload), from, _cts.Token);
-                Accept(from);
                 break;
             case ProbeAck:
                 Accept(from);
@@ -485,25 +486,34 @@ public sealed class DirectBridge : IAsyncDisposable
     /// <summary>房主最多同时接这么多个加入方（每个一个本机套接字和一个转发循环）。</summary>
     public const int MaxHostPeers = 32;
 
-    private void Accept(IPEndPoint from)
+    /// <summary>房主：加入方这么久没有任何回应就移除（腾出位子，也关掉它的本机套接字和转发循环）。</summary>
+    internal TimeSpan PeerTimeout { get; init; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>登记一个对方。已经登记过返回 true；不接（加入方已经有房主、人满、路径没开、建不了套接字）返回 false。</summary>
+    private bool Accept(IPEndPoint from)
     {
         if (_peers.TryGetValue(from, out var known))
         {
             // 已经连着的对方回了探测（心跳断了之后补发的探测）：算它还活着。
             known.LastSeen = DateTime.UtcNow;
-            return;
+            return true;
         }
-        if (!_isHost && !_peers.IsEmpty) return;
+        if (!_isHost && !_peers.IsEmpty) return false;
         if (_isHost && _peers.Count >= MaxHostPeers)
         {
-            _log(L.F("core.mp.punch.toomanypeers", from, MaxHostPeers));
-            return;
+            // 人满时先清掉已经不回应的，再看还有没有位子。
+            EvictStale();
+            if (_peers.Count >= MaxHostPeers)
+            {
+                _log(L.F("core.mp.punch.toomanypeers", from, MaxHostPeers));
+                return false;
+            }
         }
         var peer = new DirectPeer { Remote = from, Path = Classify(from), ConnectedMs = _clock.ElapsedMilliseconds };
         if (!AllowedPaths.Contains(peer.Path) && !(peer.Path == PathKind.Punch && AllowedPaths.Contains(PathKind.PunchSpray)))
         {
             _log(L.F("core.mp.punch.disabled", from, DirectText.Path(peer.Path)));
-            return;
+            return false;
         }
         if (_isHost)
         {
@@ -520,22 +530,36 @@ public sealed class DirectBridge : IAsyncDisposable
             {
                 local?.Dispose();
                 _log(L.F("core.mp.punch.localerror", e.GetType().Name));
-                return;
+                return false;
             }
             peer.Local = local;
             if (!_peers.TryAdd(from, peer))
             {
                 local.Dispose();
-                return;
+                return true;
             }
             _loops.Add(HostLocalLoopAsync(peer));
         }
         else if (!_peers.TryAdd(from, peer))
         {
-            return;
+            return true;
         }
         _log(L.F("core.mp.punch.connected", from, DirectText.Path(peer.Path)));
         Connected?.Invoke(peer);
+        return true;
+    }
+
+    /// <summary>房主：移除超过 PeerTimeout 没有任何回应的加入方（离开了、换了地址、掉线了）。</summary>
+    private void EvictStale()
+    {
+        if (!_isHost) return;
+        var now = DateTime.UtcNow;
+        foreach (var (endpoint, peer) in _peers)
+        {
+            if (now - peer.LastSeen <= PeerTimeout || !_peers.TryRemove(endpoint, out var removed)) continue;
+            removed.Local?.Dispose();
+            _log(L.F("core.mp.punch.peerevicted", endpoint));
+        }
     }
 
     private async Task ForwardToLocalAsync(DirectPeer peer, byte[] data)
@@ -618,6 +642,7 @@ public sealed class DirectBridge : IAsyncDisposable
             {
                 return;
             }
+            EvictStale();
             foreach (var peer in _peers.Values)
             {
                 seq++;
@@ -642,8 +667,9 @@ public sealed class DirectBridge : IAsyncDisposable
     /// <summary>断开所有对方（测试矩阵换路径时用），套接字保留。</summary>
     public void DropPeers()
     {
-        foreach (var peer in _peers.Values) peer.Local?.Dispose();
-        _peers.Clear();
+        // 一个一个摘下来再关：和正在登记的新对方赛跑时，不会把刚登记的那个清掉却不关它的套接字。
+        foreach (var endpoint in _peers.Keys)
+            if (_peers.TryRemove(endpoint, out var peer)) peer.Local?.Dispose();
     }
 
     public async ValueTask DisposeAsync()

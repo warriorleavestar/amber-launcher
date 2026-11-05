@@ -45,14 +45,25 @@ public sealed class GameDirectory(string root)
         if (string.IsNullOrEmpty(relative) || relative.Contains(':') || relative.StartsWith('/') || relative.StartsWith('\\') || Path.IsPathRooted(relative)
             || relative.Split('/', '\\').Any(s => s == ".."))
             throw new InvalidDataException(L.F("core.game.directory.unsafepath", relative));
-        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(baseDir));
+        var root = Path.GetFullPath(baseDir);
         var full = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
-        if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        if (!IsWithin(root, full))
             throw new InvalidDataException(L.F("core.game.directory.unsafepath", relative));
         return full;
     }
 
-    /// <summary>默认目录：Windows 为 %APPDATA%\.minecraft。</summary>
+    /// <summary>
+    /// full 是不是在 root 里面（不等于 root 本身）。root 可以是盘符根目录（“D:\”）：那时不能再拼一个分隔符，
+    /// 否则“D:\\”谁都不匹配。full 和 root 都要先规范化。
+    /// </summary>
+    public static bool IsWithin(string root, string full)
+    {
+        root = Path.GetFullPath(root);
+        var prefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+        return full.Length > prefix.Length && full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>当前系统的 Minecraft 官方默认目录。</summary>
     public static string DefaultRoot() =>
         OperatingSystem.IsWindows()
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft")

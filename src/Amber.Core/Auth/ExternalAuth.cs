@@ -131,11 +131,41 @@ public sealed class ExternalAuth(HttpClient http)
     /// <summary>API 根地址返回的元数据原文，启动时要预取给 authlib-injector。</summary>
     public async Task<string> GetMetadataAsync(string apiRoot, CancellationToken ct = default)
     {
-        var uri = CheckSecure(apiRoot + "/");
-        using var response = await http.GetAsync(uri, ct);
-        CheckSameOrigin(uri, response);
+        using var response = await GetSameOriginAsync(CheckSecure(apiRoot + "/"), ct);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStringAsync(ct);
+    }
+
+    /// <summary>
+    /// 不带密码和令牌的 GET（元数据、皮肤资料）：允许同一服务器内的跳转（比如补一个结尾斜杠），本机 http 也可以升到 https；
+    /// 换服务器、降到 http 都不跟。最多跟 MaxDiscoveryRedirects 次。
+    /// </summary>
+    private async Task<HttpResponseMessage> GetSameOriginAsync(Uri start, CancellationToken ct)
+    {
+        var current = start;
+        for (var hop = 0; ; hop++)
+        {
+            var response = await http.GetAsync(current, ct);
+            if ((int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is { } next && hop < MaxDiscoveryRedirects)
+            {
+                var target = new Uri(current, next);
+                response.Dispose();
+                CheckNoDowngrade(current, target);
+                CheckSameOrigin(current, target);
+                current = target;
+                continue;
+            }
+            try
+            {
+                CheckSameOrigin(current, response);
+            }
+            catch
+            {
+                response.Dispose();
+                throw;
+            }
+            return response;
+        }
     }
 
     /// <summary>请求被跳转到了别的地方（3xx，或者传进来的 HttpClient 自己跟随了跳转）：不认，令牌和密码只发给用户填的那个服务器。</summary>
@@ -145,9 +175,16 @@ public sealed class ExternalAuth(HttpClient http)
         if (response.RequestMessage?.RequestUri is { } final) CheckSameOrigin(requested, final);
     }
 
+    /// <summary>
+    /// 同一服务器：协议、主机、端口都一样。唯一的例外是本机回环的 http 升到同一主机的 https（升级不降级，
+    /// 端口按协议默认值变化也算同一台）。
+    /// </summary>
     private static void CheckSameOrigin(Uri requested, Uri final)
     {
-        if (final.Scheme != requested.Scheme || !string.Equals(final.Authority, requested.Authority, StringComparison.OrdinalIgnoreCase))
+        var same = final.Scheme == requested.Scheme && string.Equals(final.Authority, requested.Authority, StringComparison.OrdinalIgnoreCase);
+        var upgrade = requested.Scheme == Uri.UriSchemeHttp && final.Scheme == Uri.UriSchemeHttps && IsLoopbackHost(requested)
+                      && string.Equals(final.DnsSafeHost, requested.DnsSafeHost, StringComparison.OrdinalIgnoreCase);
+        if (!same && !upgrade)
             throw new InvalidOperationException(L.F("core.auth.external.redirected", final.GetLeftPart(UriPartial.Authority)));
     }
 
@@ -241,8 +278,7 @@ public sealed class ExternalAuth(HttpClient http)
     public async Task LoadSkinAsync(Account account, CancellationToken ct = default)
     {
         var profileUri = CheckSecure($"{account.ServerUrl}/sessionserver/session/minecraft/profile/{account.Uuid:N}");
-        using var profileResponse = await http.GetAsync(profileUri, ct);
-        CheckSameOrigin(profileUri, profileResponse);
+        using var profileResponse = await GetSameOriginAsync(profileUri, ct);
         profileResponse.EnsureSuccessStatusCode();
         var text = await profileResponse.Content.ReadAsStringAsync(ct);
         var profile = JsonNode.Parse(text);

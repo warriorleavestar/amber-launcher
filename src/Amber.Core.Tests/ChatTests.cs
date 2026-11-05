@@ -21,6 +21,43 @@ public class ChatTests
         Assert.NotEqual(frame, cipher.Seal(message));
     }
 
+    /// <summary>按最坏的每单元 6 字节 JSON 转义算上标签、Base64、发送者和外层字段，合法消息仍小于旧协议的 8 KiB。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Cipher_MaximumUnicodeFieldsFitLegacyFrameLimit(bool latestTime)
+    {
+        const int jsonAllowance = 64;
+        var maxPlainBytes = 6 * (RoomChat.MaxTextLength + RoomChat.MaxNameLength) + jsonAllowance;
+        var maxCipherBase64Bytes = 4 * ((maxPlainBytes + 16 + 2) / 3);
+        var maxEnvelopeBytes = maxCipherBase64Bytes + 6 * RoomChat.MaxSenderLength + jsonAllowance;
+        Assert.True(maxEnvelopeBytes < RoomChat.MaxFrameBytes);
+        Assert.Equal(RoomChat.MaxFrameBytes, ChatHub.MaxForwardFrame);
+
+        var cipher = new ChatCipher(Room);
+        var message = new ChatMessage(ChatKind.Message, new string('\uffff', RoomChat.MaxSenderLength),
+            new string('\uffff', RoomChat.MaxNameLength), new string('\uffff', RoomChat.MaxTextLength),
+            latestTime ? DateTimeOffset.MaxValue.AddTicks(-9999) : DateTimeOffset.MinValue);
+        var frame = cipher.Seal(message);
+        Assert.InRange(frame.Length, 1, maxEnvelopeBytes);
+        // Base64 是 TCP JSON 的普通字符串，不需要 HTML 转义；否则上述 Base64 上界不成立。
+        Assert.DoesNotContain("\\u002B", Encoding.UTF8.GetString(frame));
+        Assert.Equal(message, cipher.Open(frame)! with { Nonce = "" });
+    }
+
+    /// <summary>解密后先查原始长度，再做显示清理，不能将恶意超长内容截断后当成合法帧。</summary>
+    [Theory]
+    [InlineData(65, 32, 500)]
+    [InlineData(64, 33, 500)]
+    [InlineData(64, 32, 501)]
+    public void Cipher_RejectsFieldsBeyondProtocolLimits(int senderLength, int nameLength, int textLength)
+    {
+        var cipher = new ChatCipher(Room);
+        var frame = cipher.Seal(new ChatMessage(ChatKind.Message, new string('s', senderLength),
+            new string('n', nameLength), new string('t', textLength), DateTimeOffset.UnixEpoch));
+        Assert.Null(cipher.Open(frame));
+    }
+
     [Fact]
     public void Cipher_RejectsWrongKeyTamperingAndSenderSwap()
     {

@@ -23,17 +23,58 @@ public static class OtherLauncherSettings
 
         var pcl = Path.Combine(versionDir, "PCL");
         var hmcl = Path.Combine(versionDir, "hmclversion.cfg");
-        var hmclNew = Path.Combine(versionDir, "instance-game-settings.json");
+        var hmclCurrent = Path.Combine(versionDir, ".hmcl", "config", "instance-game-settings.json");
+        var hmclFlat = Path.Combine(versionDir, "instance-game-settings.json");
+        var hmclNew = File.Exists(hmclCurrent) ? hmclCurrent : File.Exists(hmclFlat) ? hmclFlat : null;
         var fromPcl = PclIsolation(Path.Combine(pcl, "Setup.ini"));
         if (fromPcl is not null) return fromPcl;
-        var fromHmcl = HmclIsolation(hmcl);
-        if (fromHmcl is not null) return fromHmcl;
+        if (hmclNew is not null)
+        {
+            var (overridden, isolated) = CurrentHmclIsolation(hmclNew, dir.Root, versionDir);
+            // 自定义目录无法用 Isolate 表达；也不能再让旧配置或内容推断覆盖它。
+            if (overridden) return isolated;
+        }
+        else
+        {
+            var fromHmcl = HmclIsolation(hmcl);
+            if (fromHmcl is not null) return fromHmcl;
+        }
 
         // 其他启动器建的版本、但没写明（跟随它自己的全局设置）：版本目录里已经有游戏内容，就说明它一直是隔离着玩的。
-        if (!Directory.Exists(pcl) && !File.Exists(hmcl) && !File.Exists(hmclNew)) return null;
+        if (!Directory.Exists(pcl) && !File.Exists(hmcl) && hmclNew is null) return null;
         string[] content = ["mods", "saves", "config", "resourcepacks"];
         if (content.Any(c => Directory.Exists(Path.Combine(versionDir, c))) || File.Exists(Path.Combine(versionDir, "options.txt"))) return true;
         return null;
+    }
+
+    /// <summary>
+    /// HMCL 当前的实例设置在 .hmcl/config/instance-game-settings.json。
+    /// overrideProperties 包含 runningDirectory 且路径为空时使用版本目录；非空只识别共享根和版本目录。
+    /// </summary>
+    private static (bool Overridden, bool? Isolated) CurrentHmclIsolation(string path, string gameRoot, string versionDir)
+    {
+        var overridden = false;
+        try
+        {
+            if (JsonNode.Parse(File.ReadAllText(path)) is not JsonObject obj
+                || obj["overrideProperties"] is not JsonArray overrides
+                || !overrides.Any(v => v is JsonValue value && value.TryGetValue<string>(out var name) && name == "runningDirectory"))
+                return (false, null);
+            overridden = true;
+            if (obj["runningDirectory"] is null) return (true, true);
+            if (obj["runningDirectory"] is not JsonValue directory || !directory.TryGetValue<string>(out var text)) return (true, null);
+            if (string.IsNullOrWhiteSpace(text)) return (true, true);
+            if (!Path.IsPathFullyQualified(text)) return (true, null);
+            var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(text));
+            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (full.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(versionDir)), comparison)) return (true, true);
+            if (full.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(gameRoot)), comparison)) return (true, false);
+            return (true, null);
+        }
+        catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return (overridden, null);
+        }
     }
 
     /// <summary>PCL 的版本设置：versions/X/PCL/Setup.ini，每行“键:值”。新版是 VersionArgumentIndieV2（True/False），旧版是 VersionArgumentIndie（1 隔离，2 不隔离）。</summary>

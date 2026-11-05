@@ -1,3 +1,5 @@
+using System.IO.Compression;
+using System.Reflection;
 using Amber.Core.Content;
 using Amber.Core.Launch;
 
@@ -90,6 +92,40 @@ public sealed class PackTargetTests
     [InlineData("mods/sodium-fabric-0.5.8~1.20.jar")]
     [InlineData("config/natives/settings.toml")]
     public void NormalFilesAreKept(string relative) => Assert.StartsWith(VersionDir, Isolated.Resolve(relative));
+
+    /// <summary>版本名带非 ASCII 字符时，NFD 写法（macOS 上和 NFC 是同一个文件）也算版本文件。</summary>
+    [Theory]
+    [InlineData("Cafe\u0301.json")]
+    [InlineData("CAFE\u0301.JAR")]
+    [InlineData("Caf\u00e9.json")]
+    public void NfdAliasOfVersionFileIsSkipped(string relative)
+    {
+        var dir = Path.Combine(Root, "versions", "Caf\u00e9");
+        Assert.Null(new ModpackService.PackTarget(dir, dir, "Caf\u00e9").Resolve(relative));
+    }
+
+    /// <summary>前缀后面多一个斜杠（“overrides//mods/a.jar”）照常释放，不让整个导入失败。</summary>
+    [Fact]
+    public void ExtraSlashAfterPrefixIsTolerated()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "amber-pack-slash-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var stream = new MemoryStream();
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Create, true))
+            using (var writer = new StreamWriter(zip.CreateEntry("overrides//mods/a.jar").Open()))
+                writer.Write("x");
+            stream.Position = 0;
+            using var read = new ZipArchive(stream, ZipArchiveMode.Read);
+            var extract = typeof(ModpackService).GetMethod("ExtractPrefix", BindingFlags.NonPublic | BindingFlags.Static)!;
+            extract.Invoke(null, [read, "overrides/", new ModpackService.PackTarget(dir, dir, "Pack"), null, null]);
+            Assert.True(File.Exists(Path.Combine(dir, "mods", "a.jar")));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        }
+    }
 
     [Fact]
     public void MultiMcJvmArgsAreNotImported()

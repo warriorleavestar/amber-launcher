@@ -8,7 +8,7 @@ No telemetry, no remote switches. Download, unzip, run.
 
 [![Latest release](https://img.shields.io/github/v/release/warriorleavestar/amber-launcher?color=d98a1f)](https://github.com/warriorleavestar/amber-launcher/releases/latest)
 [![License](https://img.shields.io/github/license/warriorleavestar/amber-launcher)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-Windows%20x64-blue)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
 [简体中文](README.md) | English
 
@@ -16,17 +16,24 @@ No telemetry, no remote switches. Download, unzip, run.
 
 </div>
 
-> The Amber interface is currently in Simplified Chinese only.
-
 ## Download
 
-1. Get `Amber-win-x64-aot.zip` (recommended) from [Releases](https://github.com/warriorleavestar/amber-launcher/releases/latest).
-2. Unzip it anywhere and run `Amber.exe` inside. There is nothing to install, and you don't need .NET.
+Get the package for your computer from [Releases](https://github.com/warriorleavestar/amber-launcher/releases/latest):
+
+| System | File | Run |
+|---|---|---|
+| Windows 10+ x64 | `Amber-win-x64-aot.zip` (recommended) | Unzip and run `Amber.exe` |
+| Apple silicon Mac | `Amber-osx-arm64.tar.gz` | Extract and run `./Amber` in Terminal |
+| Intel Mac | `Amber-osx-x64.tar.gz` | Extract and run `./Amber` in Terminal |
+| Linux x64 | `Amber-linux-x64.tar.gz` | Extract and run `./Amber` |
+| Linux ARM64 | `Amber-linux-arm64.tar.gz` | Extract and run `./Amber`; install Java through your distribution |
 
 The recommended zip is compiled ahead of time to native code (Native AOT): the window opens in about 0.3 seconds and it uses less memory. It unzips to 4 files that must stay in the same folder.
 Each release also has a single-file `Amber.exe` that runs straight after download if you prefer one file; it starts a little slower. Both builds have the same features and share the same data, so you can switch at any time.
 
-Amber needs 64-bit Windows 10 or later. You don't need to set up Java either: Amber picks a suitable local Java for each game version and downloads one if none fits.
+The packages include .NET. Amber selects a suitable local Java for each game version and downloads one when Mojang publishes a runtime for that platform. Linux ARM64 needs a compatible 64-bit Java installed through the system.
+
+The macOS and Linux builds are currently unsigned. If Gatekeeper blocks the first macOS launch, approve it under System Settings → Privacy & Security. Full-LAN and exit-node modes remain Windows-only; ordinary rooms, direct connections, chat and game-only forwarding work across platforms.
 
 ## Features
 
@@ -41,7 +48,7 @@ Amber needs 64-bit Windows 10 or later. You don't need to set up Java either: Am
 
 - Microsoft (device code), authlib-injector and offline accounts
 - Multiple accounts and skin preview
-- Passwords are never stored, and login tokens are encrypted with Windows DPAPI
+- Passwords are never stored. Login tokens use Windows DPAPI on Windows and a per-user local encryption key on macOS/Linux
 
 ### Mods and modpacks
 
@@ -102,24 +109,24 @@ Most features need no setup. Both of these are optional:
 | Microsoft Client ID | Accounts page | `AMBER_MS_CLIENT_ID` | A built-in default is used if empty. Order: UI, then environment variable, then default |
 | CurseForge API key | Settings page | `AMBER_CF_KEY` | Free from [console.curseforge.com](https://console.curseforge.com). CurseForge is unavailable without one; everything else still works |
 
-Settings are stored in `%APPDATA%\Amber\settings.json`.
+Settings are stored under the system application-data directory in `Amber/settings.json` (`%APPDATA%\Amber` on Windows, `~/Library/Application Support/Amber` on macOS, and usually `~/.config/Amber` on Linux).
 
 ## Build from source
 
 You need the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
-```powershell
+```shell
 git clone https://github.com/warriorleavestar/amber-launcher.git
-cd amber-launcher\src
+cd amber-launcher/src
 dotnet build
 dotnet test
 dotnet run --project Amber.App
 ```
 
-To package a single exe:
+To publish a single-file build, replace the RID with `win-x64`, `osx-arm64`, `osx-x64`, `linux-x64` or `linux-arm64`:
 
-```powershell
-dotnet publish Amber.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishReadyToRun=true -p:DebugType=none -o ..\publish
+```shell
+dotnet publish Amber.App -c Release -r osx-arm64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishReadyToRun=true -p:DebugType=none -o ../publish
 ```
 
 There is also a command-line version, for example `dotnet run --project Amber.Cli -- list-remote`.
@@ -147,7 +154,7 @@ The CurseForge API needs a key; see [Configuration](#configuration). Modrinth do
 Switch the download source on the Settings page and try the official source or the BMCLAPI mirror.
 
 **Does it run on macOS or Linux?**
-Only Windows builds are available for now.
+Yes: Intel and Apple silicon Macs, plus Linux x64 and ARM64. Full-LAN, exit-node and Extreme encryption modes still depend on Windows system capabilities; the other main features are cross-platform.
 
 **What can't it do?**
 Run Forge mods on Fabric / Quilt: there is no reliable compatibility layer, and Amber says so plainly.

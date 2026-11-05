@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Amber.Core.Net;
 
@@ -16,13 +17,41 @@ namespace Amber.Core.Multiplayer;
 public static class EasyTierRelease
 {
     public const string Version = "2.6.4";
-    public const string AssetName = "easytier-windows-x86_64-v2.6.4.zip";
-    public const string Url = "https://github.com/EasyTier/EasyTier/releases/download/v2.6.4/" + AssetName;
-    /// <summary>GitHub 发布页给出的 SHA-256。</summary>
-    public const string Sha256 = "27af91e270e554709b048bd32327fefd2dfce5062ae1e8701af7550c6f525f84";
-    public const long Size = 32_657_720;
+    private const string BaseUrl = "https://github.com/EasyTier/EasyTier/releases/download/v2.6.4/";
     public const string License = "LGPL-3.0";
     public const string ProjectUrl = "https://github.com/EasyTier/EasyTier";
+
+    public sealed record Asset(string Platform, string Name, string Sha256, long Size, string CoreName, string CliName)
+    {
+        public string Url => BaseUrl + Name;
+    }
+
+    /// <summary>当前系统对应的官方命令行包。哈希和大小来自 EasyTier 的 GitHub Release。</summary>
+    public static Asset Current => ForCurrentPlatform();
+
+    internal static Asset For(string os, Architecture arch) => (os, arch) switch
+    {
+        ("windows", Architecture.X64) => A("windows-x86_64", "27af91e270e554709b048bd32327fefd2dfce5062ae1e8701af7550c6f525f84", 32_657_720, true),
+        ("windows", Architecture.Arm64) => A("windows-arm64", "37023f8a3451c9234b17ee2089a03dc344ce90d803b5b359cb6c46682b0549b4", 30_136_892, true),
+        ("windows", Architecture.X86) => A("windows-i686", "bf557daeccc5525d95b8a230c339d75554fb52d82d1e050e9a5202c92c02e09e", 30_881_261, true),
+        ("macos", Architecture.X64) => A("macos-x86_64", "89fc28a6e6995259d76ce3f11775220e8a21c760e94df91a6a9db30a69b6982e", 33_733_545),
+        ("macos", Architecture.Arm64) => A("macos-aarch64", "4be1882d1aa36d31c1d6ba0596f2cf8a097e371f8da124212324b2e0f8df7e4b", 30_174_017),
+        ("linux", Architecture.X64) => A("linux-x86_64", "61b659eaedba658fa66fe47d17e1426cdd77e5d02fa15fed447bb4357c09dfd6", 25_506_523),
+        ("linux", Architecture.Arm64) => A("linux-aarch64", "f533ec25a7ea714e09f645615012200278058525795cc3bb690ff011aec1a70f", 20_487_230),
+        _ => throw new PlatformNotSupportedException(L.F("core.mp.component.unsupportedplatform", os, arch)),
+    };
+
+    private static Asset ForCurrentPlatform()
+    {
+        var os = OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : OperatingSystem.IsLinux() ? "linux" : "unknown";
+        return For(os, RuntimeInformation.OSArchitecture);
+    }
+
+    private static Asset A(string platform, string sha256, long size, bool exe = false)
+    {
+        var suffix = exe ? ".exe" : "";
+        return new Asset(platform, $"easytier-{platform}-v{Version}.zip", sha256, size, "easytier-core" + suffix, "easytier-cli" + suffix);
+    }
 
     /// <summary>
     /// 默认没有节点：EasyTier 官方文档没有给出固定的公共节点地址（安装脚本里写的 public.easytier.top 已经解析不到），
@@ -33,9 +62,10 @@ public static class EasyTierRelease
 
 public sealed class EasyTierInstaller(Downloader downloader, string dataDir)
 {
-    public string InstallDir => Path.Combine(dataDir, "easytier", EasyTierRelease.Version);
-    public string CorePath => Path.Combine(InstallDir, "easytier-core.exe");
-    public string CliPath => Path.Combine(InstallDir, "easytier-cli.exe");
+    private EasyTierRelease.Asset Asset => EasyTierRelease.Current;
+    public string InstallDir => Path.Combine(dataDir, "easytier", EasyTierRelease.Version, Asset.Platform);
+    public string CorePath => Path.Combine(InstallDir, Asset.CoreName);
+    public string CliPath => Path.Combine(InstallDir, Asset.CliName);
     /// <summary>WinDivert64.sys 是完整局域网模式转发游戏局域网广播要用的驱动文件，缺了也重新解压。</summary>
     public bool IsInstalled => File.Exists(CorePath) && File.Exists(CliPath) && (!OperatingSystem.IsWindows() || File.Exists(Path.Combine(InstallDir, "WinDivert64.sys")));
 
@@ -46,15 +76,17 @@ public sealed class EasyTierInstaller(Downloader downloader, string dataDir)
         Directory.CreateDirectory(work);
         try
         {
-            var zip = Path.Combine(work, EasyTierRelease.AssetName);
-            await downloader.DownloadAllAsync([new DownloadItem(EasyTierRelease.Url, zip, null, EasyTierRelease.Size)], progress, ct);
+            var zip = Path.Combine(work, Asset.Name);
+            await downloader.DownloadAllAsync([new DownloadItem(Asset.Url, zip, null, Asset.Size)], progress, ct);
             await using (var stream = File.OpenRead(zip))
             {
                 var hash = Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, ct));
-                if (hash != EasyTierRelease.Sha256)
+                if (hash != Asset.Sha256)
                     throw new InvalidDataException(L.F("core.mp.component.hashfailed", hash));
             }
-            Extract(zip, InstallDir);
+            Extract(zip, InstallDir, Asset);
+            MakeExecutable(CorePath);
+            MakeExecutable(CliPath);
             if (!IsInstalled) throw new InvalidDataException(L.T("core.mp.component.missingexecutable"));
         }
         finally
@@ -64,7 +96,7 @@ public sealed class EasyTierInstaller(Downloader downloader, string dataDir)
     }
 
     /// <summary>安装包里文件放在一层子文件夹下，拍平到安装目录。</summary>
-    internal static void Extract(string zipPath, string target)
+    internal static void Extract(string zipPath, string target, EasyTierRelease.Asset asset)
     {
         var temp = target + ".tmp";
         if (Directory.Exists(temp)) Directory.Delete(temp, true);
@@ -77,12 +109,22 @@ public sealed class EasyTierInstaller(Downloader downloader, string dataDir)
                 var name = Path.GetFileName(entry.FullName);
                 if (name.Length == 0 || name.Contains("..")) continue;
                 // 只要命令行程序、它们用的库和 WinDivert 驱动文件（完整局域网模式转发广播用）；网页控制台用不到。
-                if (name is not ("easytier-core.exe" or "easytier-cli.exe" or "WinDivert64.sys") && !name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) continue;
+                if (name != asset.CoreName && name != asset.CliName && name != "WinDivert64.sys"
+                    && !name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+                    && !name.EndsWith(".so", StringComparison.Ordinal)
+                    && !name.EndsWith(".dylib", StringComparison.Ordinal)) continue;
                 entry.ExtractToFile(Path.Combine(temp, name), true);
             }
         }
         if (Directory.Exists(target)) Directory.Delete(target, true);
         Directory.Move(temp, target);
+    }
+
+    private static void MakeExecutable(string path)
+    {
+        if (OperatingSystem.IsWindows() || !File.Exists(path)) return;
+        File.SetUnixFileMode(path, File.GetUnixFileMode(path)
+            | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
     }
 }
 
@@ -127,12 +169,18 @@ public static class EasyTierArgs
     /// 加入方把本机端口转发到房主虚拟地址上的游戏端口；房主那边由 EasyTier 把发往自己虚拟地址的连接交给本机端口。
     /// 默认不监听公网端口（--no-listener），避免弹防火墙；连不通时数据经中继节点转发。
     /// </summary>
+    /// <summary>easytier-core 的环境变量名：房间密钥（2.6.4 的 --network-secret 也认这个环境变量）。</summary>
+    public const string SecretVariable = "ET_NETWORK_SECRET";
+
+    /// <summary>经环境变量传给 easytier-core 的值。</summary>
+    public static Dictionary<string, string> Environment(EasyTierOptions o) => new() { [SecretVariable] = o.Room.EasyTierSecret };
+
     public static List<string> Build(EasyTierOptions o)
     {
+        // 房间密钥不放命令行（别的程序能读到进程命令行，开了命令行审计还会记进系统日志），经环境变量 ET_NETWORK_SECRET 传，见 Environment。
         var args = new List<string>
         {
             "--network-name", o.Room.EasyTierNetworkName,
-            "--network-secret", o.Room.EasyTierSecret,
             "--ipv4", o.IsHost ? HostIp : Subnet + JoinerHost(o.MachineId),
             "--rpc-portal", $"127.0.0.1:{o.RpcPort}",
             "--hostname", o.IsHost ? "amber-host" : "amber-guest",
@@ -228,7 +276,7 @@ public static class EasyTierArgs
     /// <summary>加入方地址的最后一段：2–254，按机器标识稳定地选，避免每次变。</summary>
     internal static int JoinerHost(string? machineId)
     {
-        var seed = machineId ?? Environment.MachineName;
+        var seed = machineId ?? System.Environment.MachineName;
         var hash = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(seed));
         return 2 + hash[0] % 253;
     }
@@ -291,6 +339,7 @@ public sealed class EasyTierSession : IEasyTierSession
             RedirectStandardError = true,
         };
         foreach (var a in EasyTierArgs.Build(options)) info.ArgumentList.Add(a);
+        foreach (var (name, value) in EasyTierArgs.Environment(options)) info.Environment[name] = value;
         var process = Process.Start(info) ?? throw new InvalidOperationException(L.T("core.mp.component.startfailed"));
         ProcessJob? job = null;
         if (OperatingSystem.IsWindows())

@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using Amber.Core.Auth;
@@ -169,6 +169,25 @@ public sealed class ExternalAuthRedirectTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => auth.ResolveApiRootAsync(skin.Root + "/loop"));
     }
 
+    /// <summary>不带密码令牌的 GET（元数据、皮肤资料）可以跟同一服务器内的跳转；跳到别的服务器照样拒绝。</summary>
+    [Fact]
+    public async Task MetadataGetFollowsSameOriginRedirectOnly()
+    {
+        await using var evil = new TestServer((_, _) => Json("""{"meta":{"serverName":"evil"}}"""));
+        await using var skin = new TestServer((path, _) => path switch
+        {
+            "/api/" => Redirect(301, "/api/index"),
+            "/api/index" => Json("""{"meta":{"serverName":"ok"}}"""),
+            "/away/" => Redirect(302, evil.Root + "/"),
+            _ => (404, [], ""),
+        });
+        using var http = ExternalAuth.CreateHttpClient();
+        var auth = new ExternalAuth(http);
+        Assert.Equal("ok", await auth.GetServerNameAsync(skin.Root + "/api"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => auth.GetMetadataAsync(skin.Root + "/away"));
+        Assert.Empty(evil.Requests);
+    }
+
     [Theory]
     [InlineData("http://loopback/api")]
     [InlineData("http://LOOPBACK:8080/api")]
@@ -188,5 +207,24 @@ public sealed class ExternalAuthRedirectTests
         Assert.True(ExternalAuth.HasInsecureServer(new Account { Kind = AccountKind.External, Name = "A", ServerUrl = "http://skin.example/api" }));
         Assert.False(ExternalAuth.HasInsecureServer(new Account { Kind = AccountKind.External, Name = "A", ServerUrl = "https://skin.example/api" }));
         Assert.False(ExternalAuth.HasInsecureServer(new Account { Kind = AccountKind.Offline, Name = "A" }));
+    }
+
+    /// <summary>启动时用旧的 http 外置账号：不发任何请求，直接说明原因（不只在账号页提示）。</summary>
+    [Fact]
+    public async Task LaunchWithInsecureSavedAccountExplains()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "amber-insecure-account-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var service = new AccountService(new HttpClient(), new AccountStore(Path.Combine(dir, "accounts.json")), dir, () => null);
+            var account = new Account { Kind = AccountKind.External, Name = "Steve", ServerUrl = "http://skin.example/api", AccessToken = "t" };
+            var e = await Assert.ThrowsAsync<InvalidOperationException>(() => service.ResolveAsync(account));
+            Assert.Contains("Steve", e.Message);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
     }
 }

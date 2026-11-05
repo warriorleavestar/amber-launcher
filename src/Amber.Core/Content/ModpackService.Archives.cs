@@ -104,7 +104,7 @@ public sealed partial class ModpackService
     /// <summary>
     /// 直接压缩的游戏文件夹。版本文件只用来认出游戏版本和加载器，加载器由 Amber 重新安装，
     /// 压缩包里的版本文件、库和 JVM 参数都不用（和其他格式一样，不让压缩包决定 Java 怎么启动）。
-    /// 有多个版本时，优先选版本目录里带模组的那个。
+    /// 有多个版本时，优先选版本目录里带模组的那个；模组在共享目录时，加载器版本优先于它依赖的原版。
     /// </summary>
     internal static ModpackInfo? InspectGameFolder(ZipArchive zip)
     {
@@ -117,9 +117,15 @@ public sealed partial class ModpackService
         if (candidates.Count == 0) return null;
 
         bool Has(string prefix) => zip.Entries.Any(e => e.FullName.StartsWith(prefix, StringComparison.Ordinal));
+        bool HasLoader(ZipArchiveEntry entry)
+        {
+            try { return FromLibraries(ReadJson(entry)).Loader is not null; }
+            catch (Exception e) when (e is System.Text.Json.JsonException or InvalidDataException or InvalidOperationException) { return false; }
+        }
         var picked = candidates
             .OrderByDescending(c => Has($"{c.Root}versions/{c.Id}/mods/"))
             .ThenBy(c => c.Root.Length)
+            .ThenByDescending(c => Has(c.Root + "mods/") && HasLoader(c.Entry))
             .ThenBy(c => c.Id, StringComparer.Ordinal)
             .First();
 

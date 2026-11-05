@@ -147,6 +147,20 @@ public sealed class PackCompatTests : IDisposable
         Assert.Equal(("1.12.2", LoaderKind.Forge, "1.12.2-14.23.5.2860", ".minecraft/"), (info.McVersion, info.Loader!.Value, info.LoaderVersion, info.Overrides));
     }
 
+    /// <summary>共享 mods 的整合包通常同时带原版及加载器版本，不能因原版 id 排在前面而丢掉 Forge。</summary>
+    [Fact]
+    public void Inspect_SharedModsPreferLoaderOverVanillaParent()
+    {
+        var path = MakeZip("shared-forge.zip",
+            (".minecraft/versions/1.20.1/1.20.1.json", """{"id":"1.20.1"}"""),
+            (".minecraft/versions/1.20.1-forge/1.20.1-forge.json",
+                """{"id":"1.20.1-forge","inheritsFrom":"1.20.1","libraries":[{"name":"net.minecraftforge:forge:1.20.1-47.2.0"}]}"""),
+            (".minecraft/mods/a.jar", "mod"));
+        var info = ModpackService.Inspect(path);
+        Assert.Equal(("1.20.1-forge", "1.20.1", LoaderKind.Forge, ".minecraft/"),
+            (info.Name, info.McVersion, info.Loader!.Value, info.Overrides));
+    }
+
     [Fact]
     public void Inspect_GameFolderWithoutVersionFails()
     {
@@ -218,6 +232,34 @@ public sealed class PackCompatTests : IDisposable
         Assert.Equal(["config/a.toml", "mods/a.jar", "options.txt", "saves/w/level.dat"], files);
     }
 
+    /// <summary>过滤账号、启动器和旧版本文件时，与实际解压使用同一份规范化路径。</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void GameFolderFiltersNormalizedPaths(bool isolated)
+    {
+        var prefix = isolated ? ".minecraft/versions/V/" : ".minecraft/";
+        var path = MakeZip($"normalized-{isolated}.zip",
+            (".minecraft/versions/V/V.json", """{"id":"V","inheritsFrom":"1.20.1"}"""),
+            (prefix + "mods/a.jar", "mod"),
+            (prefix + "./launcher_accounts.json", "token"),
+            (prefix + "config/../launcher_profiles.json", "token"),
+            (prefix + "PCL./Setup.ini", "settings"),
+            (prefix + ".hmcl. /accounts.json", "token"),
+            (prefix + "logs\\latest.log", "log"),
+            (prefix + "natives./lwjgl.dll", "dll"),
+            (prefix + (isolated ? "./V.jar" : "libraries./old.jar"), "jar"),
+            (prefix + (isolated ? "sub/../V.json" : "versions./Other/Other.json"), "old"));
+        using var zip = ZipFile.OpenRead(path);
+        var info = ModpackService.InspectGameFolder(zip)!;
+        Assert.Equal(prefix, info.Overrides);
+        var target = Path.Combine(_root, "normalized", "Imported");
+        ModpackService.ExtractGameFolder(zip, info, new ModpackService.PackTarget(target, target, "Imported"));
+        var files = Directory.EnumerateFiles(target, "*", SearchOption.AllDirectories)
+            .Select(f => Path.GetRelativePath(target, f).Replace('\\', '/')).ToArray();
+        Assert.Equal(["mods/a.jar"], files);
+    }
+
     // ---- PCL / HMCL 的版本隔离 ----
 
     private GameDirectory MakeVersion(string id, params (string Relative, string Text)[] files)
@@ -259,6 +301,57 @@ public sealed class PackCompatTests : IDisposable
     {
         var dir = MakeVersion("H", ("hmclversion.cfg", cfg));
         Assert.Equal(expected, OtherLauncherSettings.Isolation(dir, "H"));
+    }
+
+    [Theory]
+    [InlineData("""{"overrideProperties":["runningDirectory"],"runningDirectory":""}""", true)]
+    [InlineData("""{"overrideProperties":["runningDirectory"]}""", true)]
+    [InlineData("""{"overrideProperties":["runningDirectory"],"runningDirectory":null}""", true)]
+    [InlineData("""{"overrideProperties":["runningDirectory"],"runningDirectory":5}""", null)]
+    [InlineData("""{"overrideProperties":[],"runningDirectory":""}""", null)]
+    [InlineData("""{"runningDirectory":""}""", null)]
+    [InlineData("not json", null)]
+    public void CurrentHmclIsolation(string cfg, bool? expected)
+    {
+        var dir = MakeVersion("H", (".hmcl/config/instance-game-settings.json", cfg));
+        Assert.Equal(expected, OtherLauncherSettings.Isolation(dir, "H"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CurrentHmclRecognizesExplicitKnownDirectories(bool isolated)
+    {
+        var dir = MakeVersion("H", ("hmclversion.cfg", """{"gameDirType":1}"""));
+        var cfg = new JsonObject
+        {
+            ["overrideProperties"] = new JsonArray("runningDirectory"),
+            ["runningDirectory"] = isolated ? dir.VersionDir("H") : dir.Root,
+        };
+        var path = Path.Combine(dir.VersionDir("H"), ".hmcl", "config", "instance-game-settings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, cfg.ToJsonString());
+        Assert.Equal(isolated, OtherLauncherSettings.Isolation(dir, "H"));
+    }
+
+    [Fact]
+    public void CurrentHmclCustomDirectoryIsNotOverriddenByLegacySettingsOrContent()
+    {
+        var cfg = new JsonObject
+        {
+            ["overrideProperties"] = new JsonArray("runningDirectory"),
+            ["runningDirectory"] = Path.Combine(_root, "custom-game"),
+        };
+        var dir = MakeVersion("H", (".hmcl/config/instance-game-settings.json", cfg.ToJsonString()),
+            ("hmclversion.cfg", """{"gameDirType":1}"""), ("mods/a.jar", "x"));
+        Assert.Null(OtherLauncherSettings.Isolation(dir, "H"));
+    }
+
+    [Fact]
+    public void CurrentHmclInheritedSettingCanUseExistingVersionContent()
+    {
+        var dir = MakeVersion("H", (".hmcl/config/instance-game-settings.json", """{"overrideProperties":[]}"""), ("mods/a.jar", "x"));
+        Assert.True(OtherLauncherSettings.Isolation(dir, "H"));
     }
 
     [Fact]

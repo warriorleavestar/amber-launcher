@@ -177,7 +177,8 @@ public abstract partial class ForgeLikeInstaller(LoaderContext ctx) : ILoaderIns
             && outputIndex >= 0 && outputIndex + 1 < args.Count
             && vanilla.Downloads?.GetValueOrDefault("client_mappings") is { Url: { } mappingsUrl } mappings)
         {
-            await Ctx.Downloader.DownloadOneAsync(new DownloadItem(mappingsUrl, args[outputIndex + 1], mappings.Sha1, mappings.Size), ct);
+            // 输出路径来自安装器的配置（不可信）：必须在 libraries 里。
+            await Ctx.Downloader.DownloadOneAsync(new DownloadItem(mappingsUrl, Path.GetFullPath(args[outputIndex + 1]), mappings.Sha1, mappings.Size, Within: dir.LibrariesDir), ct);
             return;
         }
 

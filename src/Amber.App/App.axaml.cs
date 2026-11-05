@@ -41,6 +41,8 @@ public sealed class App : Application
             desktop.MainWindow = new MainWindow(settings) { DataContext = viewModel };
             StartupTrace.Mark("window");
             desktop.Exit += (_, _) => service.Dispose();
+            // 清掉以前留下的无痕模式临时配置（Amber 没等到游戏退出就关了、崩溃了之类）。
+            _ = Task.Run(() => Amber.Core.Launch.GameLauncher.SweepNoTrace());
         }
         base.OnFrameworkInitializationCompleted();
     }

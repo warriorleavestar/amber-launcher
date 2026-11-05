@@ -4,7 +4,7 @@ using Amber.Core.Launch;
 
 namespace Amber.App.Services;
 
-/// <summary>启动器设置，保存在 %APPDATA%\Amber\settings.json。</summary>
+/// <summary>启动器设置，保存在系统应用数据目录的 Amber/settings.json。</summary>
 public sealed class AppSettings
 {
     public string GameDirectory { get; set; } = Amber.Core.Game.GameDirectory.DefaultRoot();
@@ -22,6 +22,9 @@ public sealed class AppSettings
     public bool AutoMemory { get; set; } = true;
     public int MaxMemoryMb { get; set; } = 4096;
     public bool IsolateVersions { get; set; } = true;
+
+    /// <summary>无痕模式：游戏日志（logs/latest.log）里不写聊天行。默认关。</summary>
+    public bool NoTrace { get; set; }
     public string PlayerName { get; set; } = "Player";
     public string? LastVersion { get; set; }
     public int? WindowWidth { get; set; }

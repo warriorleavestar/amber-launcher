@@ -96,24 +96,60 @@ public static class Toolbox
         var builder = new StringBuilder();
         if (OperatingSystem.IsWindows())
         {
-            builder.AppendLine("@echo off").AppendLine("chcp 65001 >nul");
-            builder.AppendLine($"cd /d \"{workDir}\"");
-            builder.Append($"\"{javaPath}\"");
+            builder.AppendLine("@echo off").AppendLine("setlocal DisableDelayedExpansion").AppendLine("chcp 65001 >nul");
+            // 路径不能含双引号；其余 cmd 元字符留在引号内，百分号仍需按批处理规则加倍。
+            builder.AppendLine($"cd /d \"{workDir.Replace("%", "%%")}\"");
+            builder.Append($"\"{javaPath.Replace("%", "%%")}\"");
         }
         else
         {
             builder.AppendLine("#!/bin/sh");
-            builder.AppendLine($"cd \"{workDir}\"");
-            builder.Append($"\"{javaPath}\"");
+            builder.AppendLine($"cd {ShellQuote(workDir)}");
+            builder.Append(ShellQuote(javaPath));
         }
         foreach (var arg in args)
         {
-            var value = accessToken.Length > 0 ? arg.Replace(accessToken, "REPLACE_WITH_TOKEN") : arg;
-            builder.Append(' ').Append(value.Contains(' ') ? $"\"{value}\"" : value);
+            // 离线账号的“0”只是占位符，不能把内存大小、版本号和文件路径里的 0 也替换掉。
+            var value = accessToken.Length > 0 && accessToken != "0" ? arg.Replace(accessToken, "REPLACE_WITH_TOKEN") : arg;
+            builder.Append(' ').Append(OperatingSystem.IsWindows() ? WindowsBatchArgument(value) : ShellQuote(value));
         }
         builder.AppendLine();
         File.WriteAllText(path, builder.ToString(), new UTF8Encoding(false));
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, File.GetUnixFileMode(path)
+                | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
         return path;
+    }
+
+    private static string ShellQuote(string value) => "'" + value.Replace("'", "'\"'\"'") + "'";
+
+    /// <summary>
+    /// 先按 Windows argv 规则处理内嵌引号和反斜杠，再转义 cmd 元字符（包括所有引号）。
+    /// cmd 去掉 caret 后，Java 收到的仍是完整的 Windows 引号表达式；百分号加倍，感叹号由脚本关闭延迟展开保护。
+    /// </summary>
+    private static string WindowsBatchArgument(string value)
+    {
+        var quoted = new StringBuilder().Append('"');
+        var slashes = 0;
+        foreach (var c in value)
+        {
+            if (c == '\\') { slashes++; continue; }
+            quoted.Append('\\', c == '"' ? slashes * 2 + 1 : slashes).Append(c);
+            slashes = 0;
+        }
+        quoted.Append('\\', slashes * 2).Append('"');
+
+        var batch = new StringBuilder();
+        foreach (var c in quoted.ToString())
+        {
+            if (c == '%') batch.Append("%%");
+            else
+            {
+                if (c is '^' or '&' or '|' or '<' or '>' or '(' or ')' or '"') batch.Append('^');
+                batch.Append(c);
+            }
+        }
+        return batch.ToString();
     }
 
     /// <summary>版本文件的大小统计，用于实例页显示。</summary>

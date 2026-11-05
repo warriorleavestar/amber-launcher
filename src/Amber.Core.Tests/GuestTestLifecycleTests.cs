@@ -60,7 +60,7 @@ public sealed class GuestTestLifecycleTests : IDisposable
         var step = session.StartForRunAsync("run-0001", Step);
         await stepStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var ended = 0;
-        session.TestEnded += () => ended++;
+        session.TestEnded += _ => ended++;
         await session.EndGuestTestAsync("run-0001");
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => step);
@@ -91,6 +91,97 @@ public sealed class GuestTestLifecycleTests : IDisposable
         await session.EndGuestTestAsync("run-0002");
         Assert.Equal(Original.Peers, session.EasyTier!.Options.Peers);
         Assert.Equal(3, starts.Count);
+    }
+
+    /// <summary>恢复前、恢复途中、结束通知期间都不能接受新测试；重复结束不会提前放开，也不会重复通知。</summary>
+    [Fact]
+    public async Task NewRunWaitsUntilRestoreAndNotificationComplete()
+    {
+        var restoring = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowRestore = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var session = NewSession(async (o, ct) =>
+        {
+            if (o.Peers.SequenceEqual(Original.Peers) && o.RpcPort != Original.RpcPort)
+            {
+                restoring.TrySetResult();
+                await allowRestore.Task.WaitAsync(ct);
+            }
+            return new FakeEasyTier(o);
+        });
+        await session.StartEasyTierAsync(Original, default);
+        Accept(session, "old-0001");
+        await session.StartForRunAsync("old-0001", Step with { Tun = true, ExitNode = EasyTierArgs.HostIp });
+        var endedRuns = new List<string?>();
+        session.TestEnded += run =>
+        {
+            endedRuns.Add(run);
+            Assert.False(session.TestConsent.Request(new TestRequest("new-0002", false)));
+        };
+        var blockedBeforeRestore = false;
+        var end = session.EndGuestTestAsync("old-0001", beforeRestore: () =>
+        {
+            blockedBeforeRestore = !session.TestConsent.Request(new TestRequest("new-0002", false));
+            return Task.CompletedTask;
+        });
+        try
+        {
+            await restoring.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(blockedBeforeRestore);
+            Assert.Null(session.TestConsent.ActiveRun);
+            Assert.Equal("old-0001", session.TestConsent.RestoringRun);
+            Assert.False(session.TestConsent.Request(new TestRequest("new-0002", false)));
+            await session.EndGuestTestAsync("old-0001");
+            await session.EndGuestTestAsync("another-run");
+            Assert.Empty(endedRuns);
+            Assert.Equal("old-0001", session.TestConsent.RestoringRun);
+        }
+        finally
+        {
+            allowRestore.TrySetResult();
+            await end;
+        }
+        Assert.Equal(new[] { "old-0001" }, endedRuns);
+        Assert.Null(session.TestConsent.RestoringRun);
+        Assert.False(session.EasyTier!.Options.Tun);
+        Assert.Null(session.EasyTier.Options.ExitNode);
+
+        // 之后的测试保存的是已恢复的设置，旧结束通知带着自己的编号，不会被误认成这一次。
+        Accept(session, "new-0002");
+        await session.StartForRunAsync("new-0002", Step);
+        await session.EndGuestTestAsync("new-0002");
+        Assert.Equal(new[] { "old-0001", "new-0002" }, endedRuns);
+        Assert.Equal(Original.Peers, session.EasyTier!.Options.Peers);
+        Assert.False(session.EasyTier.Options.Tun);
+        Assert.Null(session.EasyTier.Options.ExitNode);
+    }
+
+    /// <summary>通知处理器出错也不留下永远恢复中的状态，恢复完成的配置仍然可用于下一次测试。</summary>
+    [Fact]
+    public async Task NotificationFailureStillCompletesRestore()
+    {
+        await using var session = NewSession((o, _) => Task.FromResult<IEasyTierSession>(new FakeEasyTier(o)));
+        await session.StartEasyTierAsync(Original, default);
+        Accept(session, "run-notify");
+        await session.StartForRunAsync("run-notify", Step);
+        session.TestEnded += _ => throw new InvalidOperationException("notification failed");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.EndGuestTestAsync("run-notify"));
+        Assert.Null(session.TestConsent.RestoringRun);
+        Assert.Equal(Original.Peers, session.EasyTier!.Options.Peers);
+        Assert.True(session.TestConsent.Request(new TestRequest("run-next", false)));
+    }
+
+    /// <summary>恢复连接或通知房主失败，仍然恢复本机设置并解除恢复状态。</summary>
+    [Fact]
+    public async Task BeforeRestoreFailureStillRestoresSettings()
+    {
+        await using var session = NewSession((o, _) => Task.FromResult<IEasyTierSession>(new FakeEasyTier(o)));
+        await session.StartEasyTierAsync(Original, default);
+        Accept(session, "run-restore");
+        await session.StartForRunAsync("run-restore", Step);
+        await session.EndGuestTestAsync("run-restore", beforeRestore: () => throw new IOException("connection failed"));
+        Assert.Null(session.TestConsent.RestoringRun);
+        Assert.Equal(Original.Peers, session.EasyTier!.Options.Peers);
+        Assert.True(session.TestConsent.Request(new TestRequest("run-next", false)));
     }
 
     /// <summary>同时来的几个切换一次只做一个。</summary>
@@ -134,7 +225,7 @@ public sealed class GuestTestLifecycleTests : IDisposable
         await session.StartEasyTierAsync(Original, default);
         Assert.True(session.TestConsent.Request(new TestRequest("run-0004", true)));
         var ended = false;
-        session.TestEnded += () => ended = true;
+        session.TestEnded += _ => ended = true;
         await session.AnswerTestRequestAsync(true, true, true);
         Assert.Null(session.TestConsent.Pending);
         Assert.Null(session.TestConsent.ActiveRun);
@@ -169,6 +260,181 @@ public sealed class GuestTestLifecycleTests : IDisposable
         Assert.True(consent2.IsIdle(out var run));
         Assert.Equal("run-0006", run);
         Assert.NotNull(consent2.BeginStep("run-0006", 99, false, false));
+    }
+
+    /// <summary>恢复时出了没预料到的错（比如没权限写运行目录）：同意照样清掉，界面照样收到“测试结束”。</summary>
+    [Fact]
+    public async Task RestoreFailureStillEndsTest()
+    {
+        await using var session = NewSession((o, _) => IsStep(o) || o.RpcPort == 1
+            ? Task.FromResult<IEasyTierSession>(new FakeEasyTier(o))
+            : throw new UnauthorizedAccessException("denied"));
+        await session.StartEasyTierAsync(Original, default);
+        Accept(session, "run-0007");
+        await session.StartForRunAsync("run-0007", Step);
+        var temporary = session.EasyTier!;
+        var ended = 0;
+        session.TestEnded += _ => ended++;
+        await session.EndGuestTestAsync("run-0007");
+        Assert.Equal(1, ended);
+        Assert.Null(session.TestConsent.ActiveRun);
+        Assert.Null(session.TestConsent.RestoringRun);
+        Assert.True(temporary.HasExited);
+        Assert.Null(session.EasyTier);
+        Assert.True(session.TestConsent.Request(new TestRequest("run-after-failure", false)));
+    }
+
+    /// <summary>提权守护已退出：恢复普通模式必须创建普通会话，不能沿用“曾经提权”的状态。</summary>
+    [Fact]
+    public async Task ExitedElevatedSessionRestoresWithPlainProcess()
+    {
+        var modes = new List<bool>();
+        await using var session = new DirectSession(null!, _dir, Room, false, Options, new DiagnosticLog())
+        {
+            CreateSessionForTest = (elevated, o) =>
+            {
+                modes.Add(elevated);
+                if (elevated && !o.Tun) throw new ArgumentException("elevation requires tun");
+                return new FakeEasyTier(o);
+            },
+        };
+        await session.StartEasyTierAsync(Original, default);
+        Accept(session, "run-recreate");
+        await session.StartForRunAsync("run-recreate", Step with { Tun = true, ExitNode = EasyTierArgs.HostIp });
+        session.EasyTier!.Dispose();
+
+        await session.EndGuestTestAsync("run-recreate");
+
+        Assert.Equal(new[] { false, true, false }, modes);
+        Assert.NotNull(session.EasyTier);
+        Assert.False(session.EasyTier.HasExited);
+        Assert.False(session.EasyTier.Options.Tun);
+        Assert.Null(session.EasyTier.Options.ExitNode);
+    }
+
+    /// <summary>恢复失败清空会话后，仍能重新创建普通会话；测试在模式选择之后替代进程创建。</summary>
+    [Fact]
+    public async Task FailedElevatedRestoreCanRetryWithoutElevation()
+    {
+        var modes = new List<bool>();
+        var failNext = false;
+        await using var session = new DirectSession(null!, _dir, Room, false, Options, new DiagnosticLog())
+        {
+            CreateSessionForTest = (elevated, o) =>
+            {
+                modes.Add(elevated);
+                if (elevated && !o.Tun) throw new ArgumentException("elevation requires tun");
+                if (failNext) { failNext = false; throw new IOException("start failed"); }
+                return new FakeEasyTier(o);
+            },
+        };
+        await session.StartEasyTierAsync(Original, default);
+        Accept(session, "run-retry");
+        await session.StartForRunAsync("run-retry", Step with { Tun = true });
+        session.EasyTier!.Dispose();
+        failNext = true;
+        await session.EndGuestTestAsync("run-retry");
+        Assert.Null(session.EasyTier);
+
+        await session.StartEasyTierAsync(Original, default);
+
+        Assert.Equal(new[] { false, true, false, false }, modes);
+        Assert.False(session.EasyTier!.HasExited);
+        Assert.False(session.EasyTier.Options.Tun);
+    }
+
+    /// <summary>房主和加入方都以当前存活会话判断提权：还活着时复用，退出后必须重新创建。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnsureElevationRecreatesExitedGuard(bool isHost)
+    {
+        var modes = new List<bool>();
+        await using var session = new DirectSession(null!, _dir, Room, isHost, Options, new DiagnosticLog())
+        {
+            CreateSessionForTest = (elevated, o) =>
+            {
+                modes.Add(elevated);
+                Assert.True(o.Tun);
+                return new FakeEasyTier(o);
+            },
+        };
+        await session.EnsureElevatedAsync(default);
+        var first = session.EasyTier!;
+        await session.EnsureElevatedAsync(default);
+        Assert.Same(first, session.EasyTier);
+        Assert.Single(modes);
+        first.Dispose();
+
+        await session.EnsureElevatedAsync(default);
+
+        Assert.Equal(new[] { true, true }, modes);
+        Assert.NotSame(first, session.EasyTier);
+        Assert.False(session.EasyTier!.HasExited);
+    }
+
+    /// <summary>别的测试编号的“结束”：不动正在进行的测试，也不让界面收起。</summary>
+    [Fact]
+    public async Task WrongRunEndIsIgnored()
+    {
+        await using var session = NewSession((o, _) => Task.FromResult<IEasyTierSession>(new FakeEasyTier(o)));
+        await session.StartEasyTierAsync(Original, default);
+        Accept(session, "run-0008");
+        var ended = 0;
+        session.TestEnded += _ => ended++;
+        await session.EndGuestTestAsync("run-other");
+        Assert.Equal(0, ended);
+        Assert.Equal("run-0008", session.TestConsent.ActiveRun);
+    }
+
+    /// <summary>等确认的请求放久了作废：不能再同意，也不挡住房主下一次请求。</summary>
+    [Fact]
+    public void PendingRequestExpires()
+    {
+        var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var consent = new GuestTestConsent(() => now);
+        Assert.True(consent.Request(new TestRequest("run-0009", false)));
+        Assert.False(consent.ExpirePending("run-0009"));
+        now += GuestTestConsent.PendingLimit + TimeSpan.FromSeconds(1);
+        Assert.True(consent.ExpirePending("run-0009"));
+        Assert.Null(consent.Pending);
+        Assert.Null(consent.Answer(true, false, false, null));
+        Assert.True(consent.Request(new TestRequest("run-0010", false)));
+        Assert.True(consent.Withdraw("run-0010"));
+        Assert.False(consent.Withdraw("run-0010"));
+    }
+
+    /// <summary>还没同意时点“停止测试”：当作拒绝，请求清掉。</summary>
+    [Fact]
+    public async Task StopBeforeAnswerDeclines()
+    {
+        await using var session = NewSession((o, _) => Task.FromResult<IEasyTierSession>(new FakeEasyTier(o)));
+        await session.StartEasyTierAsync(Original, default);
+        Assert.True(session.TestConsent.Request(new TestRequest("run-0011", true)));
+        await session.StopGuestTestAsync();
+        Assert.Null(session.TestConsent.Pending);
+        Assert.Null(session.TestConsent.ActiveRun);
+    }
+
+    /// <summary>启动途中（比如在等权限确认）会话已经关了：刚起来的 EasyTier 马上关掉。</summary>
+    [Fact]
+    public async Task StartFinishingAfterDisposeIsStopped()
+    {
+        var gate = new TaskCompletionSource();
+        var started = new TaskCompletionSource();
+        FakeEasyTier? late = null;
+        var session = NewSession(async (o, _) =>
+        {
+            started.TrySetResult();
+            await gate.Task;
+            return late = new FakeEasyTier(o);
+        });
+        var start = session.StartEasyTierAsync(Original, default);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await session.DisposeAsync();
+        gate.SetResult();
+        await start;
+        Assert.True(late!.HasExited);
     }
 
     /// <summary>认得出 0.5.9 以前的 hello（带完整码、没有会话 id）；新版本的不算。</summary>

@@ -205,8 +205,10 @@ public sealed partial class ModpackService
         if (Directory.Exists(mods) && Directory.EnumerateFiles(mods, "*OptiFine*.jar").Any()) return;
         progress?.Report(new(L.T("core.install.optifine.download")));
         Directory.CreateDirectory(mods);
+        // 版本号来自整合包：拼成文件名前先确认是单个文件名，并且在 mods 里。
+        var name = Game.GameDirectory.CheckId($"OptiFine_{info.McVersion}_{optifine}.jar");
         await new OptiFineInstaller(ctx).DownloadJarAsync(new LoaderVersion(LoaderKind.OptiFine, info.McVersion, optifine),
-            Path.Combine(mods, $"OptiFine_{info.McVersion}_{optifine}.jar"), ct);
+            Game.GameDirectory.Contained(mods, name), ct);
     }
 
     private static string? OptiFineAddon(JsonArray? addons, string mc) =>
