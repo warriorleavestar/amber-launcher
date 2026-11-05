@@ -155,14 +155,21 @@ public sealed class ChatHubHardeningTests
         var (fast, inbox) = NewClient("fast");
         await fast.ConnectAsync("127.0.0.1", hub.Port);
         Assert.True(await WaitAsync(() => hub.MemberCount == 2));
+        Assert.True(await WaitAsync(() => inbox.Any(m => m.Kind == ChatKind.Join && m.SenderId == fast.SenderId)));
 
         // 几个发送者各发 5 条长消息（每个人限速内），慢的那个一直不读。
         var senders = new List<ChatClient>();
+        var readingInboxes = new List<ConcurrentQueue<ChatMessage>> { inbox };
         for (var s = 0; s < 6; s++)
         {
-            var (c, _) = NewClient("s" + s);
+            var (c, senderInbox) = NewClient("s" + s);
             await c.ConnectAsync("127.0.0.1", hub.Port);
             senders.Add(c);
+            readingInboxes.Add(senderInbox);
+            // 先让所有正常读取者处理加入通知，避免接入突发触发测试中零宽限的踢人规则。
+            Assert.True(await WaitAsync(() => readingInboxes.All(messages =>
+                messages.Any(m => m.Kind == ChatKind.Join && m.SenderId == c.SenderId))),
+                $"加入通知未送达所有正常读取者：{c.Name}");
         }
         var text = new string('x', RoomChat.MaxTextLength);
         // 一条一条发，等快的那个收到再发下一条：快的人队列不会满，慢的人越积越多。
