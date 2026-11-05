@@ -647,7 +647,14 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("直连：聊天连上", await WaitAsync(() => host.ChatReady && guest.ChatReady, 40), guest.ChatStatus);
 
         main.CurrentPage = host;
-        await host.RunMatrixCommand.ExecuteAsync(null);
+        var matrix = host.RunMatrixCommand.ExecuteAsync(null);
+        // 加入方要先确认：确认前房主一步也不发。
+        Check("直连：全条件测试先请加入方确认", await WaitAsync(() => guest.TestRequestPending, 20) && host.MatrixLines.Count == 0, guest.Status);
+        main.CurrentPage = guest;
+        await ShotAsync("直连测试请求");
+        main.CurrentPage = host;
+        await guest.AcceptTestRequestCommand.ExecuteAsync(null);
+        await matrix;
         Check("直连：全条件测试（模拟）跑完", host.MatrixLines.Count >= 2 && host.MatrixLines.Skip(1).All(l => l.Contains("（模拟）")), string.Join(" / ", host.MatrixLines));
         Check("直连：模拟的局域网路径通过", host.MatrixLines.Any(l => l.Contains("同一局域网") && l.Contains("通过")), host.Status);
         await ShotAsync("直连全条件测试");

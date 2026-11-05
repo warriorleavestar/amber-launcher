@@ -1037,5 +1037,22 @@
   "tools.update.hint": "通知のみで、自動ダウンロードや置き換えは行いません。",
   "tools.update.latest": "現在のバージョン {0} は最新です",
   "tools.update.no_feed": "現在のバージョンは {0} です。更新URLが未設定のため、オンラインでの確認は行いません。「設定」ページで入力できます。",
-  "tools.update.open_page": "ダウンロードページを開く"
+  "tools.update.open_page": "ダウンロードページを開く",
+  "core.mp.matrix.requested": "ホストが全条件テストを求めています。確認を待っています",
+  "core.mp.matrix.accepted": "全条件テストに同意しました。終了後に元の設定へ戻します",
+  "core.mp.matrix.consentexpired": "全条件テストで長時間動きがないため、終了とみなしました",
+  "core.mp.matrix.restored": "全条件テストが終わり、元のマルチプレイ設定に戻しました",
+  "core.mp.matrix.restorefailedsettings": "全条件テストは終わりましたが、元のマルチプレイ設定に戻せませんでした：",
+  "core.mp.matrix.requesttimeout": "参加者がテストの依頼に応答しませんでした",
+  "core.mp.matrix.declined": "参加者が全条件テストに同意しませんでした",
+  "core.mp.matrix.notconsented": "参加者がこのステップに同意していません",
+  "core.mp.matrix.steprefused": "ステップ {0} は実行しませんでした（{1}）",
+  "multiplayer.matrix.waiting_guest": "全条件テスト：参加者の確認を待っています…",
+  "multiplayer.matrix.request_title": "ホストが全条件テストを行おうとしています",
+  "multiplayer.matrix.request_hint": "同意すると、Amber はホストの指示どおりに接続方法を順番に切り替えます。途中で一時的に切断されることがあります。終了後は元の設定に戻ります。下の項目はチェックしたときだけテストします。",
+  "multiplayer.matrix.allow_full_lan": "フルLANモードもテストする（管理者権限が必要）",
+  "multiplayer.matrix.allow_exit": "ホストを出口にするテストも行う（そのステップの間、通信はホストを経由します）",
+  "multiplayer.matrix.accept": "同意する",
+  "multiplayer.matrix.decline": "同意しない",
+  "multiplayer.matrix.request_status": "ホストが全条件テストを求めています。直接接続のカードで確認してください"
 }

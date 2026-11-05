@@ -1037,5 +1037,22 @@
   "tools.update.hint": "僅提供通知，不會自動下載或取代。",
   "tools.update.latest": "目前的 {0} 已是最新版本",
   "tools.update.no_feed": "目前版本為 {0}。未設定更新網址，因此不會連線檢查（可在設定頁填寫）。",
-  "tools.update.open_page": "開啟下載頁面"
+  "tools.update.open_page": "開啟下載頁面",
+  "core.mp.matrix.requested": "房主請求所有條件測試，等待你確認",
+  "core.mp.matrix.accepted": "已同意所有條件測試，測完恢復原本的設定",
+  "core.mp.matrix.consentexpired": "所有條件測試太久沒有動靜，視為結束",
+  "core.mp.matrix.restored": "所有條件測試結束，已恢復原本的連線設定",
+  "core.mp.matrix.restorefailedsettings": "所有條件測試結束，但恢復原本的連線設定失敗：",
+  "core.mp.matrix.requesttimeout": "加入方沒有回應測試請求",
+  "core.mp.matrix.declined": "加入方沒有同意所有條件測試",
+  "core.mp.matrix.notconsented": "加入方沒有同意這一步",
+  "core.mp.matrix.steprefused": "第 {0} 步沒有執行（{1}）",
+  "multiplayer.matrix.waiting_guest": "所有條件測試：等待加入方確認……",
+  "multiplayer.matrix.request_title": "房主想執行一次所有條件測試",
+  "multiplayer.matrix.request_hint": "同意後，Amber 會依房主的安排依序切換連線方式，過程中可能短暫斷線；測完自動恢復原本的設定。下面的選項只有勾選才會測試。",
+  "multiplayer.matrix.allow_full_lan": "也測試完整區域網路模式（需要系統管理員權限）",
+  "multiplayer.matrix.allow_exit": "也測試把房主當作出口（這幾步裡你的網路流量會經過房主）",
+  "multiplayer.matrix.accept": "同意測試",
+  "multiplayer.matrix.decline": "不同意",
+  "multiplayer.matrix.request_status": "房主請求所有條件測試，請在直連卡片中確認"
 }

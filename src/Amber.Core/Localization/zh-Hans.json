@@ -1037,5 +1037,22 @@
   "tools.update.hint": "只提示，不会自动下载或替换。",
   "tools.update.latest": "当前版本 {0} 已是最新",
   "tools.update.no_feed": "当前版本 {0}。没有配置更新地址，所以不会联网检查（可以在设置页填写）。",
-  "tools.update.open_page": "打开下载页"
+  "tools.update.open_page": "打开下载页",
+  "core.mp.matrix.requested": "房主请求全条件测试，等你确认",
+  "core.mp.matrix.accepted": "已同意全条件测试，测完恢复原来的设置",
+  "core.mp.matrix.consentexpired": "全条件测试太久没有动静，当作结束",
+  "core.mp.matrix.restored": "全条件测试结束，已恢复原来的联机设置",
+  "core.mp.matrix.restorefailedsettings": "全条件测试结束，但恢复原来的联机设置失败：",
+  "core.mp.matrix.requesttimeout": "加入方没有回应测试请求",
+  "core.mp.matrix.declined": "加入方没有同意全条件测试",
+  "core.mp.matrix.notconsented": "加入方没有同意这一步",
+  "core.mp.matrix.steprefused": "第 {0} 步没有执行（{1}）",
+  "multiplayer.matrix.waiting_guest": "全条件测试：等加入方确认……",
+  "multiplayer.matrix.request_title": "房主想跑一次全条件测试",
+  "multiplayer.matrix.request_hint": "同意后，Amber 会按房主的安排依次切换连接方式，中间可能短暂断线；测完自动恢复原来的设置。下面的选项只有勾上才会测。",
+  "multiplayer.matrix.allow_full_lan": "也测完整局域网模式（要管理员权限）",
+  "multiplayer.matrix.allow_exit": "也测把房主当出口（这几步里你的网络流量会经过房主）",
+  "multiplayer.matrix.accept": "同意测试",
+  "multiplayer.matrix.decline": "不同意",
+  "multiplayer.matrix.request_status": "房主请求全条件测试，请在直连卡片里确认"
 }

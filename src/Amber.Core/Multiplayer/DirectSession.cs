@@ -38,6 +38,18 @@ public sealed class DirectSession : IAsyncDisposable
     private bool _speedOnVirtualIp;
     private readonly Dictionary<int, TaskCompletionSource<JsonObject>> _pending = [];
     private TaskCompletionSource<bool>? _elevateReply;
+    private TaskCompletionSource<JsonObject>? _testAnswer;
+    private string? _hostRun;
+    private Timer? _consentWatch;
+
+    /// <summary>加入方：全条件测试要本机用户同意（见 <see cref="GuestTestConsent"/>）。</summary>
+    public GuestTestConsent TestConsent { get; } = new();
+
+    /// <summary>加入方：房主请求全条件测试，界面要问用户。</summary>
+    public event Action<TestRequest>? TestRequested;
+
+    /// <summary>加入方：测试结束（或请求被撤回），界面收起确认。</summary>
+    public event Action? TestEnded;
 
     public RoomCode Room { get; }
     public bool IsHost { get; }
@@ -244,21 +256,103 @@ public sealed class DirectSession : IAsyncDisposable
                     Log(L.T("core.mp.session.guestaddresses") + string.Join(L.T("core.mp.format.listseparator"), candidates));
                 }
                 break;
+            case "test-request" when !IsHost:
+                if (Str(message, "run") is { } requestRun && TestConsent.Request(new TestRequest(requestRun, Bool(message, "fullLan") == true)))
+                {
+                    Log(L.T("core.mp.matrix.requested"));
+                    TestRequested?.Invoke(TestConsent.Pending!);
+                }
+                break;
+            case "test-end" when !IsHost:
+                TestConsent.Withdraw(Str(message, "run") ?? "");
+                _ = EndGuestTestAsync(Str(message, "run"));
+                break;
             case "step" when !IsHost:
                 _ = GuestStepAsync(peer, message);
                 break;
             case "elevate" when !IsHost:
-                _ = GuestElevateAsync(peer);
+                _ = GuestElevateAsync(peer, Str(message, "run"));
+                break;
+            case "test-answer" when IsHost:
+                if (Str(message, "run") is { } answerRun && answerRun == _hostRun) _testAnswer?.TrySetResult(message);
                 break;
             case "elevated" when IsHost:
-                _elevateReply?.TrySetResult(message["ok"]?.GetValue<bool>() == true);
+                if (Str(message, "run") == _hostRun) _elevateReply?.TrySetResult(Bool(message, "ok") == true);
                 break;
             case "result" when IsHost:
-                var index = message["i"]?.GetValue<int>() ?? -1;
+                if (Str(message, "run") != _hostRun) break;
+                var index = Int(message, "i") ?? -1;
                 lock (_pending)
                     if (_pending.Remove(index, out var tcs)) tcs.TrySetResult(message);
                 break;
         }
+    }
+
+    // 对方发来的 JSON 字段类型不对时当作没有，不抛异常。
+    private static string? Str(JsonObject m, string key) => (m[key] as JsonValue)?.TryGetValue<string>(out var v) == true ? v : null;
+    private static bool? Bool(JsonObject m, string key) => (m[key] as JsonValue)?.TryGetValue<bool>(out var v) == true ? v : null;
+    private static int? Int(JsonObject m, string key) => (m[key] as JsonValue)?.TryGetValue<int>(out var v) == true ? v : null;
+    private static long? Long(JsonObject m, string key) => (m[key] as JsonValue)?.TryGetValue<long>(out var v) == true ? v : null;
+    private static double? Double(JsonObject m, string key) => (m[key] as JsonValue)?.TryGetValue<double>(out var v) == true ? v : null;
+
+    /// <summary>
+    /// 加入方：用户回答房主的测试请求。同意时只同意勾上的部分（完整局域网、把房主当出口），记下现在的联机设置，测完恢复。
+    /// </summary>
+    public async Task AnswerTestRequestAsync(bool accept, bool allowFullLan, bool allowExit)
+    {
+        var run = TestConsent.Pending?.Run;
+        var answer = TestConsent.Answer(accept, allowFullLan, allowExit, _currentOptions);
+        if (run is null || Bridge?.Peers.FirstOrDefault() is not { } peer) return;
+        if (answer is { } a)
+        {
+            Log(L.T("core.mp.matrix.accepted"));
+            _consentWatch?.Dispose();
+            _consentWatch = new Timer(_ =>
+            {
+                if (TestConsent.IsIdle(out var idleRun))
+                {
+                    Log(L.T("core.mp.matrix.consentexpired"));
+                    _ = EndGuestTestAsync(idleRun);
+                }
+            }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+        }
+        await Bridge.SendControlAsync(peer, new JsonObject
+        {
+            ["op"] = "test-answer",
+            ["run"] = run,
+            ["ok"] = answer is not null,
+            ["fullLan"] = answer?.FullLan == true,
+            ["exit"] = answer?.Exit == true,
+        });
+    }
+
+    /// <summary>加入方：测试结束（房主说结束、太久没动静）：清掉同意，恢复所有路径和原来的联机设置。</summary>
+    private async Task EndGuestTestAsync(string? run)
+    {
+        var ended = TestConsent.End(run, out var original);
+        if (ended)
+        {
+            _consentWatch?.Dispose();
+            _consentWatch = null;
+            if (Bridge is { } bridge)
+            {
+                bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
+                bridge.SprayPorts = 256;
+            }
+            if (original is not null)
+            {
+                try
+                {
+                    await StartEasyTierAsync(original with { RpcPort = EasyTierArgs.FreeTcpPort() }, CancellationToken.None);
+                    Log(L.T("core.mp.matrix.restored"));
+                }
+                catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
+                {
+                    Log(L.T("core.mp.matrix.restorefailedsettings") + e.Message);
+                }
+            }
+        }
+        TestEnded?.Invoke();
     }
 
     /// <summary>当前连接走的路径，界面显示用。</summary>
@@ -278,25 +372,60 @@ public sealed class DirectSession : IAsyncDisposable
 
     // ---------------- 全条件测试 ----------------
 
-    /// <summary>房主：先问双方能不能提权（完整局域网和出口要用），然后排出步骤依次执行。</summary>
+    /// <summary>房主：等加入方确认多久。</summary>
+    public static readonly TimeSpan TestAnswerTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// 房主：先请加入方确认（加入方用户点了同意才开始，完整局域网和出口要它分别勾选），
+    /// 再问双方能不能提权，然后排出步骤依次执行。结束、出错、取消都通知加入方结束并恢复原来的设置。
+    /// </summary>
     public async Task<List<MatrixResult>> RunMatrixAsync(bool wantFullLan, IProgress<MatrixResult>? progress, Func<MatrixStep, bool, CancellationToken, Task<bool?>>? chatProbe, CancellationToken ct)
     {
         if (!IsHost || Bridge?.Peers.FirstOrDefault() is not { } peer) throw new InvalidOperationException(L.T("core.mp.matrix.peerrequired"));
-        var fullLan = false;
-        if (wantFullLan)
+        var run = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
+        _hostRun = run;
+        _testAnswer = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
         {
-            fullLan = await ElevateBothAsync(peer, ct);
-            Log(fullLan ? L.T("core.mp.matrix.elevated") : L.T("core.mp.matrix.elevationdeclined"));
+            await Bridge.SendControlAsync(peer, new JsonObject { ["op"] = "test-request", ["run"] = run, ["fullLan"] = wantFullLan });
+            JsonObject answer;
+            try
+            {
+                answer = await _testAnswer.Task.WaitAsync(TestAnswerTimeout, ct);
+            }
+            catch (TimeoutException)
+            {
+                throw new InvalidOperationException(L.T("core.mp.matrix.requesttimeout"));
+            }
+            if (Bool(answer, "ok") != true) throw new InvalidOperationException(L.T("core.mp.matrix.declined"));
+            var guestFullLan = Bool(answer, "fullLan") == true;
+            var guestExit = Bool(answer, "exit") == true;
+            var fullLan = false;
+            if (wantFullLan && guestFullLan)
+            {
+                fullLan = await ElevateBothAsync(peer, run, ct);
+                Log(fullLan ? L.T("core.mp.matrix.elevated") : L.T("core.mp.matrix.elevationdeclined"));
+            }
+            var members = (await (EasyTier?.PeersAsync(ct) ?? Task.FromResult(new List<PeerInfo>()))).Count(p => p.Ip.StartsWith(EasyTierArgs.Subnet, StringComparison.Ordinal));
+            var plan = TestMatrix.Plan(new MatrixInputs(_gathered!.Candidates, _guestCandidates, members, Options.FallbackNodes.Count > 0, fullLan, Options.Simulated));
+            // 加入方没同意把房主当出口：出口那几步不测。
+            if (!guestExit) plan = [.. plan.Where(s => !s.Exit).Select((s, i) => s with { Index = i + 1 })];
+            Log(L.P("core.mp.matrix.plan", plan.Count, plan.Count));
+            _chatProbe = chatProbe;
+            return await TestMatrix.RunAsync(plan, new HostRunner(this, run), TimeSpan.FromSeconds(120), progress, Options.Simulated, ct);
         }
-        var members = (await (EasyTier?.PeersAsync(ct) ?? Task.FromResult(new List<PeerInfo>()))).Count(p => p.Ip.StartsWith(EasyTierArgs.Subnet, StringComparison.Ordinal));
-        var plan = TestMatrix.Plan(new MatrixInputs(_gathered!.Candidates, _guestCandidates, members, Options.FallbackNodes.Count > 0, fullLan, Options.Simulated));
-        Log(L.P("core.mp.matrix.plan", plan.Count, plan.Count));
-        _chatProbe = chatProbe;
-        var results = await TestMatrix.RunAsync(plan, new HostRunner(this), TimeSpan.FromSeconds(120), progress, Options.Simulated, ct);
-        // 恢复：所有路径、原来的模式。
-        Bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
-        await StartEasyTierAsync(HostOptions(Options.FullLan, Options.AllowExit), ct);
-        return results;
+        finally
+        {
+            _hostRun = null;
+            // 恢复：所有路径、原来的模式；通知加入方结束（它会恢复自己的设置）。
+            Bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
+            if (Bridge.Peers.FirstOrDefault() is { } back)
+            {
+                try { await Bridge.SendControlAsync(back, new JsonObject { ["op"] = "test-end", ["run"] = run }); }
+                catch (Exception e) when (e is SocketException or ObjectDisposedException or OperationCanceledException) { }
+            }
+            await StartEasyTierAsync(HostOptions(Options.FullLan, Options.AllowExit), CancellationToken.None);
+        }
     }
 
     private Func<MatrixStep, bool, CancellationToken, Task<bool?>>? _chatProbe;
@@ -304,7 +433,7 @@ public sealed class DirectSession : IAsyncDisposable
     /// <summary>加入方的聊天探测（界面设置）：发一条消息、等回显。</summary>
     public Func<MatrixStep, CancellationToken, Task<bool?>>? GuestChatProbe { get; set; }
 
-    private async Task<bool> ElevateBothAsync(DirectPeer peer, CancellationToken ct)
+    private async Task<bool> ElevateBothAsync(DirectPeer peer, string run, CancellationToken ct)
     {
         try
         {
@@ -315,7 +444,7 @@ public sealed class DirectSession : IAsyncDisposable
             return false;
         }
         _elevateReply = new TaskCompletionSource<bool>();
-        await Bridge!.SendControlAsync(peer, new JsonObject { ["op"] = "elevate" });
+        await Bridge!.SendControlAsync(peer, new JsonObject { ["op"] = "elevate", ["run"] = run });
         try
         {
             return await _elevateReply.Task.WaitAsync(TimeSpan.FromSeconds(90), ct);
@@ -326,22 +455,27 @@ public sealed class DirectSession : IAsyncDisposable
         }
     }
 
-    private async Task GuestElevateAsync(DirectPeer peer)
+    /// <summary>加入方：房主要提权。只在用户同意了这次测试、并且勾了完整局域网时执行。</summary>
+    private async Task GuestElevateAsync(DirectPeer peer, string? run)
     {
-        var ok = true;
-        try
+        var ok = TestConsent.AllowsElevate(run);
+        if (!ok) Log(L.T("core.mp.matrix.notconsented"));
+        else
         {
-            if (!_elevated) await StartEasyTierAsync(GuestOptions(!UsingFallbackNode, true, null), CancellationToken.None);
+            try
+            {
+                if (!_elevated) await StartEasyTierAsync(GuestOptions(!UsingFallbackNode, true, null), CancellationToken.None);
+            }
+            catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
+            {
+                ok = false;
+                Log(L.T("core.mp.matrix.elevationfailed") + e.Message);
+            }
         }
-        catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
-        {
-            ok = false;
-            Log(L.T("core.mp.matrix.elevationfailed") + e.Message);
-        }
-        await Bridge!.SendControlAsync(peer, new JsonObject { ["op"] = "elevated", ["ok"] = ok });
+        await Bridge!.SendControlAsync(peer, new JsonObject { ["op"] = "elevated", ["run"] = run, ["ok"] = ok });
     }
 
-    private sealed class HostRunner(DirectSession s) : IMatrixStepRunner
+    private sealed class HostRunner(DirectSession s, string run) : IMatrixStepRunner
     {
         public async Task<MatrixResult> RunAsync(MatrixStep step, CancellationToken ct)
         {
@@ -352,6 +486,7 @@ public sealed class DirectSession : IAsyncDisposable
             await s.Bridge.SendControlAsync(peer, new JsonObject
             {
                 ["op"] = "step",
+                ["run"] = run,
                 ["i"] = step.Index,
                 ["route"] = step.Route.ToString(),
                 ["path"] = step.Path?.ToString(),
@@ -378,13 +513,13 @@ public sealed class DirectSession : IAsyncDisposable
             var message = await reply.Task.WaitAsync(ct);
             s.Bridge.AllowedPaths.UnionWith(Enum.GetValues<PathKind>());
             return new MatrixResult(step,
-                message["passed"]?.GetValue<bool?>(),
-                message["connectMs"]?.GetValue<long?>(),
-                message["latency"]?.GetValue<double?>(),
-                message["mbps"]?.GetValue<double?>(),
-                message["chat"]?.GetValue<bool?>(),
-                message["exit"]?.GetValue<bool?>(),
-                message["reason"]?.GetValue<string>() ?? "");
+                Bool(message, "passed"),
+                Long(message, "connectMs"),
+                Double(message, "latency"),
+                Double(message, "mbps"),
+                Bool(message, "chat"),
+                Bool(message, "exit"),
+                Str(message, "reason") ?? "");
         }
     }
 
@@ -411,17 +546,46 @@ public sealed class DirectSession : IAsyncDisposable
         else await StartEasyTierAsync(GuestOptions(step.Route != RouteKind.Node, step.FullLan, step.Exit ? EasyTierArgs.HostIp : null, relay, step.Route != RouteKind.Direct), ct);
     }
 
+    /// <summary>解析房主发来的一步；字段缺失或类型不对时返回 null。</summary>
+    internal static MatrixStep? ParseStep(JsonObject message)
+    {
+        if (Int(message, "i") is not { } index || Str(message, "route") is not { } routeText
+            || !Enum.TryParse<RouteKind>(routeText, out var route) || !Enum.IsDefined(route)) return null;
+        PathKind? path = null;
+        if (Str(message, "path") is { } pathText)
+        {
+            if (!Enum.TryParse<PathKind>(pathText, out var parsed) || !Enum.IsDefined(parsed)) return null;
+            path = parsed;
+        }
+        if (route == RouteKind.Direct && path is null) return null;
+        return new MatrixStep(index, route, path, Bool(message, "fullLan") == true, Bool(message, "exit") == true);
+    }
+
     private async Task GuestStepAsync(DirectPeer controlPeer, JsonObject message)
     {
-        var step = new MatrixStep(
-            message["i"]!.GetValue<int>(),
-            Enum.Parse<RouteKind>(message["route"]!.GetValue<string>()),
-            message["path"]?.GetValue<string>() is { } p ? Enum.Parse<PathKind>(p) : null,
-            message["fullLan"]!.GetValue<bool>(),
-            message["exit"]!.GetValue<bool>());
-        var hostIp = message["hostIp"]?.GetValue<string>();
+        var run = Str(message, "run");
+        if (ParseStep(message) is not { } step) return;
+        // 没同意、旧的、重复的、乱序的、超出同意范围（完整局域网、出口）的一步都不执行，只回一个失败。
+        if (TestConsent.BeginStep(run, step.Index, step.FullLan, step.Exit) is { } refused)
+        {
+            Log(L.F("core.mp.matrix.steprefused", step.Index, refused));
+            await Bridge!.SendControlAsync(controlPeer, new JsonObject { ["op"] = "result", ["run"] = run, ["i"] = step.Index, ["passed"] = false, ["reason"] = L.T("core.mp.matrix.notconsented") });
+            return;
+        }
+        try
+        {
+            await GuestRunStepAsync(step, Str(message, "hostIp"), run);
+        }
+        finally
+        {
+            TestConsent.EndStep(run);
+        }
+    }
+
+    private async Task GuestRunStepAsync(MatrixStep step, string? hostIp, string? run)
+    {
         Log(L.F("core.mp.matrix.step", step.Index, step.Label));
-        var result = new JsonObject { ["op"] = "result", ["i"] = step.Index };
+        var result = new JsonObject { ["op"] = "result", ["run"] = run, ["i"] = step.Index };
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(100));
         var watch = Stopwatch.StartNew();
         try
@@ -480,7 +644,7 @@ public sealed class DirectSession : IAsyncDisposable
                     else if (mapped.Address.ToString() != hostIp) result["reason"] = L.T("core.mp.matrix.exitwrongip");
                 }
             }
-            result["passed"] = result["exit"]?.GetValue<bool?>() != false;
+            result["passed"] = Bool(result, "exit") != false;
         }
         catch (Exception e) when (e is DirectFailedException or OperationCanceledException or IOException or SocketException or InvalidOperationException)
         {
@@ -499,6 +663,7 @@ public sealed class DirectSession : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _consentWatch?.Dispose();
         EasyTier?.Dispose();
         if (_speed is not null) await _speed.DisposeAsync();
         if (Bridge is not null) await Bridge.DisposeAsync();

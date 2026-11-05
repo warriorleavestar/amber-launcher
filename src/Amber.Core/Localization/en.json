@@ -1065,5 +1065,22 @@
   "tools.update.hint": "Notifications only; no automatic downloads or replacements.",
   "tools.update.latest": "Version {0} is up to date",
   "tools.update.no_feed": "Current version: {0}. No update URL is configured, so no online check will run. You can add one in Settings.",
-  "tools.update.open_page": "Open download page"
+  "tools.update.open_page": "Open download page",
+  "core.mp.matrix.requested": "The host asked for an all-condition test. Waiting for your confirmation",
+  "core.mp.matrix.accepted": "All-condition test accepted. Your original settings will be restored afterwards",
+  "core.mp.matrix.consentexpired": "Nothing happened in the all-condition test for too long. Treating it as finished",
+  "core.mp.matrix.restored": "All-condition test finished. Your original multiplayer settings were restored",
+  "core.mp.matrix.restorefailedsettings": "All-condition test finished, but restoring your original multiplayer settings failed: ",
+  "core.mp.matrix.requesttimeout": "The guest didn't respond to the test request",
+  "core.mp.matrix.declined": "The guest didn't agree to the all-condition test",
+  "core.mp.matrix.notconsented": "The guest didn't agree to this step",
+  "core.mp.matrix.steprefused": "Step {0} wasn't run ({1})",
+  "multiplayer.matrix.waiting_guest": "All-condition test: waiting for the guest to confirm…",
+  "multiplayer.matrix.request_title": "The host wants to run an all-condition test",
+  "multiplayer.matrix.request_hint": "If you agree, Amber switches connection methods one by one as the host arranges, and you may briefly lose the connection. Your original settings are restored afterwards. The options below are tested only if you tick them.",
+  "multiplayer.matrix.allow_full_lan": "Also test full LAN mode (needs administrator access)",
+  "multiplayer.matrix.allow_exit": "Also test using the host as the exit node (your network traffic goes through the host during those steps)",
+  "multiplayer.matrix.accept": "Agree",
+  "multiplayer.matrix.decline": "Decline",
+  "multiplayer.matrix.request_status": "The host asked for an all-condition test. Confirm it in the direct connection card"
 }

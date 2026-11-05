@@ -35,6 +35,17 @@ public sealed partial class MultiplayerViewModel
     [ObservableProperty] public partial bool MatrixRunning { get; set; }
     [ObservableProperty] public partial bool MatrixFullLan { get; set; }
 
+    /// <summary>加入方：房主请求全条件测试，等用户确认。</summary>
+    [ObservableProperty] public partial bool TestRequestPending { get; set; }
+    [ObservableProperty] public partial bool TestRequestWantsFullLan { get; set; }
+    [ObservableProperty] public partial bool TestAllowFullLan { get; set; }
+    [ObservableProperty] public partial bool TestAllowExit { get; set; }
+
+    partial void OnTestAllowFullLanChanged(bool value)
+    {
+        if (!value) TestAllowExit = false;
+    }
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDirectHost))]
     public partial bool IsDirect { get; set; }
@@ -198,6 +209,15 @@ public sealed partial class MultiplayerViewModel
             ChatStatus = L.T("multiplayer.chat.awaiting_host");
             Status = direct.UsingFallbackNode ? L.T("multiplayer.direct.fallback") : L.T("multiplayer.direct.connected");
             direct.GuestChatProbe = ChatProbeAsync;
+            direct.TestRequested += request => Dispatcher.UIThread.Post(() =>
+            {
+                TestRequestWantsFullLan = request.WantsFullLan;
+                TestAllowFullLan = false;
+                TestAllowExit = false;
+                TestRequestPending = true;
+                Status = L.T("multiplayer.matrix.request_status");
+            });
+            direct.TestEnded += () => Dispatcher.UIThread.Post(() => TestRequestPending = false);
         }
         catch (Exception e) when (e is DirectFailedException or OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
@@ -280,7 +300,7 @@ public sealed partial class MultiplayerViewModel
         var results = new List<MatrixResult>();
         try
         {
-            Status = MatrixFullLan ? L.T("multiplayer.matrix.requesting_admin") : L.T("multiplayer.matrix.running");
+            Status = L.T("multiplayer.matrix.waiting_guest");
             var progress = new Progress<MatrixResult>(r =>
             {
                 results.Add(r);
@@ -309,6 +329,21 @@ public sealed partial class MultiplayerViewModel
 
     [RelayCommand]
     private void CancelMatrix() => _matrixCts?.Cancel();
+
+    /// <summary>加入方：同意房主的全条件测试（只同意勾上的部分）。</summary>
+    [RelayCommand]
+    private Task AcceptTestRequestAsync() => AnswerTestRequestAsync(true);
+
+    [RelayCommand]
+    private Task DeclineTestRequestAsync() => AnswerTestRequestAsync(false);
+
+    private async Task AnswerTestRequestAsync(bool accept)
+    {
+        if (_direct is not { IsHost: false } direct || !TestRequestPending) return;
+        TestRequestPending = false;
+        await direct.AnswerTestRequestAsync(accept, TestRequestWantsFullLan && TestAllowFullLan, TestRequestWantsFullLan && TestAllowFullLan && TestAllowExit);
+        Status = L.T(accept ? "multiplayer.matrix.running" : "multiplayer.matrix.cancelled");
+    }
 
     [RelayCommand]
     private async Task CopyDirectCodeAsync()
