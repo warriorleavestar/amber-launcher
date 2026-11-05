@@ -46,6 +46,7 @@ public sealed class JavaRuntimeInstaller(Downloader downloader, string gameRoot)
         Game.GameDirectory.CheckId(name);
         var home = Path.Combine(gameRoot, "runtime", name, Platform, name);
         var items = new List<DownloadItem>();
+        var executableFiles = new List<string>();
         foreach (var file in manifest.RootElement.GetProperty("files").EnumerateObject())
         {
             var local = Game.GameDirectory.Contained(home, file.Name);
@@ -57,15 +58,22 @@ public sealed class JavaRuntimeInstaller(Downloader downloader, string gameRoot)
                 case "file":
                     var raw = file.Value.GetProperty("downloads").GetProperty("raw");
                     items.Add(new DownloadItem(raw.GetProperty("url").GetString()!, local, raw.GetProperty("sha1").GetString(), raw.GetProperty("size").GetInt64(), Within: home));
+                    if (file.Value.TryGetProperty("executable", out var executable) && executable.GetBoolean())
+                        executableFiles.Add(local);
                     break;
             }
         }
         await downloader.DownloadAllAsync(items, progress, ct);
 
         var exe = Path.Combine(home, "bin", OperatingSystem.IsWindows() ? "java.exe" : "java");
+        if (OperatingSystem.IsMacOS()) exe = Path.Combine(home, "jre.bundle", "Contents", "Home", "bin", "java");
         if (!File.Exists(exe)) throw new FileNotFoundException(L.T("core.java.install.missingexecutable"), exe);
         if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(exe, File.GetUnixFileMode(exe) | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+        {
+            executableFiles.Add(exe);
+            foreach (var path in executableFiles.Distinct())
+                File.SetUnixFileMode(path, File.GetUnixFileMode(path) | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+        }
         return exe;
     }
 
