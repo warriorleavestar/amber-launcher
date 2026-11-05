@@ -27,6 +27,7 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
 {
     private readonly string _cliPath;
     private readonly ElevatedGuard _guard;
+    private readonly SemaphoreSlim _restartLock = new(1, 1);
 
     public EasyTierOptions Options { get; private set; }
 
@@ -50,15 +51,32 @@ public sealed class EasyTierElevatedSession : IEasyTierSession
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException(L.T("core.mp.component.windowsonly"));
         if (!options.Tun) throw new ArgumentException(L.T("core.mp.component.tunrequired"));
         LegacyFiles.Remove(workDir);
-        var guard = ElevatedGuard.Start(installer.CorePath, EasyTierArgs.Build(options), EasyTierArgs.Environment(options), elevate: true);
+        var guard = ElevatedGuard.Start(installer.CorePath, EasyTierArgs.Build(options), EasyTierArgs.Environment(options), elevate: true, network: ExitNetworkPlan.Create(options));
         return new EasyTierElevatedSession(options, installer.CliPath, guard);
     }
 
     /// <summary>换参数重启 easytier-core（换出口、换路径、测试矩阵用），不用再弹权限确认：经命令管道发新参数。</summary>
-    public void Restart(EasyTierOptions options)
+    public void Restart(EasyTierOptions options) => RestartAsync(options).GetAwaiter().GetResult();
+
+    /// <summary>等核心和出口网络真正就绪后才提交新配置；取消会停止整个会话，避免后台悄悄启用出口。</summary>
+    public async Task RestartAsync(EasyTierOptions options, CancellationToken ct = default)
     {
-        _guard.Start(EasyTierArgs.Build(options), EasyTierArgs.Environment(options));
-        Options = options;
+        await _restartLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            var ready = _guard.StartAsync(EasyTierArgs.Build(options), EasyTierArgs.Environment(options), ExitNetworkPlan.Create(options));
+            await ready.WaitAsync(ct).ConfigureAwait(false);
+            Options = options;
+        }
+        catch (OperationCanceledException) { _guard.Dispose(); throw; }
+        finally { _restartLock.Release(); }
+    }
+
+    public async Task WaitForReadyAsync(CancellationToken ct = default)
+    {
+        try { await _guard.WaitForReadyAsync(ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { _guard.Dispose(); throw; }
     }
 
     /// <summary>守护脚本还没按最近一次的参数重启好。</summary>
@@ -174,6 +192,8 @@ internal sealed class ElevatedGuard : IDisposable
     private StreamWriter? _cmdWriter;
     private int _sent;
     private int _acked;
+    private readonly Dictionary<int, TaskCompletionSource> _starts = new();
+    private Task _ready = Task.CompletedTask;
     private volatile bool _disposed;
     private readonly TimeSpan _connectTimeout;
 
@@ -193,8 +213,9 @@ internal sealed class ElevatedGuard : IDisposable
         [
             ReadLinesAsync(pipes[1], Keep),
             ReadLinesAsync(pipes[2], Keep),
-            ReadLinesAsync(pipes[3], line => { if (line.StartsWith("started ", StringComparison.Ordinal) && int.TryParse(line[8..], out var n)) Volatile.Write(ref _acked, n); }),
+            ReadLinesAsync(pipes[3], ReceiveAck),
         ];
+        _ = ObserveExitAsync();
     }
 
     /// <summary>守护脚本已经退出（它退出前会结束 easytier-core）。</summary>
@@ -216,6 +237,51 @@ internal sealed class ElevatedGuard : IDisposable
         }
     }
 
+    private void ReceiveAck(string line)
+    {
+        var parts = line.Split(' ', 3);
+        if (parts.Length >= 2 && int.TryParse(parts[1], out var n) && parts[0] is "started" or "failed")
+        {
+            lock (_gate)
+            {
+                if (!_starts.Remove(n, out var completion)) return;
+                Volatile.Write(ref _acked, n);
+                if (parts[0] == "started") completion.TrySetResult();
+                else
+                {
+                    var reason = parts.Length == 3 ? DecodeError(parts[2]) : "EasyTier network setup failed";
+                    Keep(reason);
+                    completion.TrySetException(new IOException(reason));
+                }
+            }
+        }
+        else if (line.StartsWith("error ", StringComparison.Ordinal)) Keep(DecodeError(line[6..]));
+    }
+
+    private static string DecodeError(string value)
+    {
+        try { return Utf8.GetString(Convert.FromBase64String(value)); }
+        catch (FormatException) { return "EasyTier guard error"; }
+    }
+
+    private async Task ObserveExitAsync()
+    {
+        await _process.WaitForExitAsync().ConfigureAwait(false);
+        // 已经写出的最后一个回执先读完，避免极短命核心的 started 被退出通知抢走。
+        await Task.WhenAll(_readers).ConfigureAwait(false);
+        FailStarts(new IOException(L.T("core.mp.guard.exited")));
+        foreach (var pipe in _pipes) pipe.Dispose();
+    }
+
+    private void FailStarts(Exception exception)
+    {
+        lock (_gate)
+        {
+            foreach (var completion in _starts.Values) completion.TrySetException(exception);
+            _starts.Clear();
+        }
+    }
+
     /// <summary>Amber 等守护脚本连上四根管道的总时间。守护脚本自己的连接期限更短，先放弃。</summary>
     internal static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(30);
 
@@ -227,7 +293,7 @@ internal sealed class ElevatedGuard : IDisposable
     /// env 是给 easytier-core 的环境变量（房间密钥），和参数一样只经管道传。serverPidForTest：测试用，让守护脚本以为管道该由别的进程建。
     /// </summary>
     public static ElevatedGuard Start(string corePath, IReadOnlyList<string> args, IReadOnlyDictionary<string, string> env, bool elevate, int? serverPidForTest = null,
-        TimeSpan? connectTimeoutForTest = null)
+        TimeSpan? connectTimeoutForTest = null, ExitNetworkPlan? network = null)
     {
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         string Name(string kind) => $"amber-et-{id}-{kind}";
@@ -246,6 +312,7 @@ internal sealed class ElevatedGuard : IDisposable
                 .Replace("__AMBERPID__", (serverPidForTest ?? Environment.ProcessId).ToString(System.Globalization.CultureInfo.InvariantCulture))
                 .Replace("__SID__", WindowsIdentity.GetCurrent().User!.Value)
                 .Replace("__TIMEOUT__", GuardConnectSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                .Replace("__SETUPHASH__", Convert.ToHexStringLower(SHA256.HashData(Utf8.GetBytes(SetupScript))))
                 .Replace("__CORE64__", Convert.ToBase64String(Encoding.Unicode.GetBytes(corePath)));
             var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
             var commandLine = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + encoded;
@@ -266,7 +333,7 @@ internal sealed class ElevatedGuard : IDisposable
                 throw new OperationCanceledException(L.T("core.mp.component.elevationdeclined"));
             }
             var guard = new ElevatedGuard(process, commandLine, pipes, connectTimeoutForTest ?? ConnectTimeout) { PipeId = id };
-            guard.Start(args, env);
+            guard.Start(args, env, network);
             return guard;
         }
         catch
@@ -301,6 +368,7 @@ internal sealed class ElevatedGuard : IDisposable
         catch (Exception e)
         {
             Keep(L.F("core.mp.component.guardfailed", e.Message));
+            FailStarts(new IOException(L.T("core.mp.guard.pipefailed"), e));
             _ = RejectLateGuardAsync();
             throw;
         }
@@ -341,17 +409,35 @@ internal sealed class ElevatedGuard : IDisposable
                 if (!_connect.IsCompletedSuccessfully || _cmdWriter is not { } writer) return;
                 if (isStart && _disposed) return;
                 try { write(writer); }
-                catch (Exception e) when (e is IOException or ObjectDisposedException) { }
+                catch (Exception e) when (e is IOException or ObjectDisposedException) { FailStarts(new IOException(L.T("core.mp.guard.sendfailed"), e)); }
             }, TaskScheduler.Default);
         }
     }
 
     /// <summary>（重新）启动 easytier-core：参数和环境变量只经管道传过去。</summary>
-    public void Start(IReadOnlyList<string> args, IReadOnlyDictionary<string, string> env)
+    public void Start(IReadOnlyList<string> args, IReadOnlyDictionary<string, string> env, ExitNetworkPlan? network = null) => _ = StartAsync(args, env, network);
+
+    public Task StartAsync(IReadOnlyList<string> args, IReadOnlyDictionary<string, string> env, ExitNetworkPlan? network = null)
     {
-        var n = Interlocked.Increment(ref _sent);
-        var message = JsonSerializer.Serialize(new GuardCommand("start", n, WindowsCommandLine.Join(args), new Dictionary<string, string>(env)), AmberJsonContext.Default.GuardCommand);
-        Enqueue(w => w.WriteLine(message), isStart: true);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var n = Interlocked.Increment(ref _sent);
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _starts.Add(n, completion);
+            _ready = completion.Task;
+            // 即使旧同步调用者没有等待，也观察异常；异步调用者仍会得到原始错误。
+            _ = _ready.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+            var message = JsonSerializer.Serialize(new GuardCommand("start", n, WindowsCommandLine.Join(args), new Dictionary<string, string>(env), network, SetupScript), AmberJsonContext.Default.GuardCommand);
+            Enqueue(w => w.WriteLine(message), isStart: true);
+            if (ConnectFailed || HasExited) completion.TrySetException(new IOException(L.T("core.mp.guard.unavailable")));
+            return _ready;
+        }
+    }
+
+    public Task WaitForReadyAsync(CancellationToken ct = default)
+    {
+        lock (_gate) return _ready.WaitAsync(ct);
     }
 
     /// <summary>
@@ -361,6 +447,7 @@ internal sealed class ElevatedGuard : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        FailStarts(new ObjectDisposedException(nameof(ElevatedGuard)));
         var stop = JsonSerializer.Serialize(new GuardCommand("stop", 0, "", null), AmberJsonContext.Default.GuardCommand);
         Enqueue(w =>
         {
@@ -411,6 +498,9 @@ internal sealed class ElevatedGuard : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetNamedPipeClientProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe, out uint clientProcessId);
 
+    // 可增长的逻辑不放在 Windows 命令行：命令行只带固定摘要，内容经已认证管道加载。
+    internal const string SetupScript = ExitRoutingScript.Script + "\n" + ExitDnsScript.Script + "\n" + ExitTrafficPolicyScript.Script;
+
     /// <summary>
     /// 守护脚本（Windows PowerShell 5.1，以管理员身份运行）：连上四根管道，按命令启动、重启、结束 easytier-core，
     /// 输出原样经管道送回。命令管道断开（Amber 退出或崩溃）或 easytier-core 自己退出时结束。不写任何文件。
@@ -450,13 +540,37 @@ internal sealed class ElevatedGuard : IDisposable
         $ack.AutoFlush = $true
         $script:p = $null
         $script:copies = @()
+        $setupLoaded = $false
+        function Write-GuardError([string]$message) {
+            $ack.WriteLine('error ' + [Convert]::ToBase64String($enc.GetBytes($message)))
+        }
+        function Forward-Warning($item) {
+            if ($item -is [System.Management.Automation.WarningRecord]) { Write-GuardError ([string]$item) }
+        }
         function Stop-Core {
             if ($script:p -and -not $script:p.HasExited) {
-                try { $script:p.Kill() } catch {}
-                $script:p.WaitForExit(5000) | Out-Null
+                $script:p.Kill()
+                if (-not $script:p.WaitForExit(5000)) { throw 'Core did not stop; bypass leases retained' }
             }
             foreach ($c in $script:copies) { try { $c.Wait(3000) | Out-Null } catch {} }
             $script:copies = @()
+            $script:p = $null
+        }
+        function Stop-Session {
+            $dnsFailure = $null
+            try {
+                if ($setupLoaded) {
+                    try { Exit-ExitDns 3>&1 | ForEach-Object { Forward-Warning $_ } }
+                    catch { $dnsFailure = $_.Exception.Message; Write-GuardError $dnsFailure }
+                }
+                # Restore DNS while the adapter still exists; release underlay bypasses only after the core and capture routes are gone.
+                Stop-Core
+                if ($setupLoaded) { Wait-ExitReleased; Exit-ExitRoutes }
+                if ($dnsFailure) { throw $dnsFailure }
+            } finally {
+                # Release the dynamic WFP session last; even a partial cleanup failure must still try to restore normal networking.
+                if ($setupLoaded) { Exit-ExitTrafficPolicy }
+            }
         }
         function Start-Core([string]$arguments, $env) {
             $psi = New-Object System.Diagnostics.ProcessStartInfo($Core)
@@ -479,18 +593,43 @@ internal sealed class ElevatedGuard : IDisposable
                     $msg = $line | ConvertFrom-Json
                     if ($msg.cmd -eq 'stop') { break }
                     if ($msg.cmd -eq 'start') {
-                        Stop-Core
-                        Start-Core $msg.args $msg.env
-                        $ack.WriteLine('started ' + $msg.n)
+                        try {
+                            if (-not $setupLoaded) {
+                                $sha = [Security.Cryptography.SHA256]::Create()
+                                try { $hash = [BitConverter]::ToString($sha.ComputeHash($enc.GetBytes([string]$msg.setup))).Replace('-', '').ToLowerInvariant() }
+                                finally { $sha.Dispose() }
+                                if ($hash -cne '__SETUPHASH__') { throw 'Guard setup digest mismatch' }
+                                . ([ScriptBlock]::Create([string]$msg.setup))
+                                Initialize-GuardJob
+                                $setupLoaded = $true
+                            }
+                            Stop-Session
+                            if ($msg.network) { Enter-ExitRoutes $msg.network }
+                            Start-Core $msg.args $msg.env
+                            if ($msg.network) {
+                                $adapter = Wait-ExitReady $msg.network $script:p
+                                Enter-ExitDns $adapter 3>&1 | ForEach-Object { Forward-Warning $_ }
+                                Enter-ExitTrafficPolicy $adapter $msg.network
+                            }
+                            if ($script:p.HasExited) { throw 'Core exited during startup' }
+                            $ack.WriteLine('started ' + $msg.n)
+                        } catch {
+                            $failure = $_.Exception.Message
+                            try { Stop-Session } catch { Write-GuardError $_.Exception.Message }
+                            $ack.WriteLine('failed ' + $msg.n + ' ' + [Convert]::ToBase64String($enc.GetBytes($failure)))
+                            throw
+                        }
                     }
                     $pending = $reader.ReadLineAsync()
                 } elseif ($script:p -and $script:p.HasExited) {
                     break
                 }
+                if ($setupLoaded) { Renew-ExitRoutes }
             }
         } catch {
+            try { Write-GuardError $_.Exception.Message } catch {}
         } finally {
-            Stop-Core
+            try { Stop-Session } catch { try { Write-GuardError $_.Exception.Message } catch {} }
             foreach ($s in @($ack, $outPipe, $errPipe, $ackPipe, $cmdPipe)) { try { $s.Dispose() } catch {} }
         }
         """;
@@ -501,7 +640,9 @@ public sealed record GuardCommand(
     [property: System.Text.Json.Serialization.JsonPropertyName("cmd")] string Cmd,
     [property: System.Text.Json.Serialization.JsonPropertyName("n")] int N,
     [property: System.Text.Json.Serialization.JsonPropertyName("args")] string Args,
-    [property: System.Text.Json.Serialization.JsonPropertyName("env")] Dictionary<string, string>? Env);
+    [property: System.Text.Json.Serialization.JsonPropertyName("env")] Dictionary<string, string>? Env,
+    [property: System.Text.Json.Serialization.JsonPropertyName("network")] ExitNetworkPlan? Network = null,
+    [property: System.Text.Json.Serialization.JsonPropertyName("setup")] string? Setup = null);
 
 /// <summary>按 Windows 程序解析命令行的规则（CommandLineToArgvW / MSVC）把参数拼成一个字符串。</summary>
 public static class WindowsCommandLine

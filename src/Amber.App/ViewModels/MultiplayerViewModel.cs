@@ -83,6 +83,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private readonly LauncherService _service;
     private IEasyTierSession? _session;
     private CancellationTokenSource? _sessionCts;
+    private readonly SemaphoreSlim _exitSwitchLock = new(1, 1);
     private CancellationTokenSource? _downloadCts;
     private DispatcherTimer? _timer;
     private ChatHub? _hub;
@@ -757,60 +758,100 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private bool _hubOnVirtualIp;
 
     /// <summary>
-    /// 换出口要用新参数重启 EasyTier（Windows 会再确认一次权限）。路由由 EasyTier 加在虚拟网卡上，
-    /// 它退出、网卡消失时路由跟着消失；Amber 崩溃时守护脚本会结束它，所以不会留下“上不了网”的路由。
+    /// 换出口由会话所有者重启；提权守护确认网卡和出口路由就绪后才更新当前设置。
+    /// 停止、核心退出或 Amber 管道断开时，守护撤回它创建的网络设置。
     /// </summary>
-    private bool RestartWithExit(string? exitIp)
+    private async Task<bool> RestartWithExitAsync(string? exitIp)
     {
-        if (_session is not { } old || !old.Options.Tun) return false;
-        var options = old.Options with { ExitNode = exitIp };
-        // 已经提权的守护脚本直接换参数重启，不再弹权限确认。
-        if (old is EasyTierElevatedSession { HasExited: false } elevated)
-        {
-            elevated.Restart(options);
-            MarkJoinStarted(newRoom: false);
-            return true;
-        }
-        old.Dispose();
+        var lifetime = _sessionCts;
+        var direct = _direct;
+        if (lifetime is null) return false;
+        try { await _exitSwitchLock.WaitAsync(lifetime.Token); }
+        catch (OperationCanceledException) { return false; }
+        IEasyTierSession? replacement = null;
+        var transitionStarted = false;
         try
         {
-            _session = EasyTierElevatedSession.Start(_service.EasyTier, options, Path.Combine(AppSettings.DataDir, "easytier", "run-lan"));
-            _service.ActiveMultiplayer = _session;
+            if (_sessionCts != lifetime || _direct != direct || lifetime.IsCancellationRequested) return false;
+            if (_session is not { } old || !old.Options.Tun) return false;
+            var options = old.Options with { ExitNode = exitIp };
+            if (direct is not null)
+            {
+                await direct.SetExitNodeAsync(exitIp, lifetime.Token);
+                if (_sessionCts != lifetime || _direct != direct) return false;
+                _session = direct.EasyTier;
+                // ActiveMultiplayer 保持 DirectHandle，由它一起清理桥、端口映射和子会话。
+            }
+            else
+            {
+                // 计划校验失败时保留仍然有效的旧会话，不先结束它。
+                _ = EasyTierArgs.Build(options);
+                transitionStarted = true;
+                if (old is EasyTierElevatedSession { HasExited: false } elevated)
+                    await elevated.RestartAsync(options, lifetime.Token);
+                else
+                {
+                    old.Dispose();
+                    var next = EasyTierElevatedSession.Start(_service.EasyTier, options, Path.Combine(AppSettings.DataDir, "easytier", "run-lan"));
+                    replacement = next;
+                    await next.WaitForReadyAsync(lifetime.Token);
+                    if (_sessionCts != lifetime || _direct != direct) return false;
+                    _session = next;
+                    _service.ActiveMultiplayer = next;
+                    replacement = null;
+                }
+            }
+            if (_sessionCts != lifetime || _direct != direct || lifetime.IsCancellationRequested) return false;
+            if (_session is not { HasExited: false } ready) throw new IOException(L.T("core.mp.component.startfailed"));
+            _currentOptions = ready.Options;
+            ExitNodeIp = ready.Options.ExitNode ?? "";
             MarkJoinStarted(newRoom: false);
             return true;
         }
-        catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception
+            or InvalidOperationException or ArgumentException or TimeoutException or UnauthorizedAccessException)
         {
-            // 用户拒绝了权限确认：旧会话已经停了，按“结束联机”处理，网络恢复正常。
-            StopSession();
-            SetStatus(StatusMessage.Failure("multiplayer.exit.switch_failed", e, ErrorText.Of(e)));
+            if (_sessionCts == lifetime && _direct == direct)
+            {
+                if (direct is not null) _session = direct.EasyTier;
+                if (!transitionStarted && _session is { HasExited: false } preserved)
+                {
+                    _currentOptions = preserved.Options;
+                    ExitNodeIp = preserved.Options.ExitNode ?? "";
+                }
+                else StopSession();
+                SetStatus(StatusMessage.Failure("multiplayer.exit.switch_failed", e, ErrorText.Of(e)));
+            }
             return false;
+        }
+        finally
+        {
+            try { replacement?.Dispose(); }
+            finally { _exitSwitchLock.Release(); }
         }
     }
 
     [RelayCommand]
-    private void UseExitNode()
+    private async Task UseExitNodeAsync()
     {
         if (SelectedExitPeer is not { } peer || !CanUseExit) return;
-        if (RestartWithExit(peer.Peer.Ip))
+        if (await RestartWithExitAsync(peer.Peer.Ip))
         {
-            ExitNodeIp = peer.Peer.Ip;
             SetStatus(StatusMessage.Info("multiplayer.exit.switching", peer.Name, peer.Peer.Ip));
         }
     }
 
     [RelayCommand]
-    private void StopExitNode()
+    private async Task StopExitNodeAsync()
     {
         if (!UsingExit) return;
         // 出口是测试设的：停止整个测试（由测试恢复原来的设置）。
         if (GuestTestRunning)
         {
-            _ = StopGuestTestAsync();
+            await StopGuestTestAsync();
             return;
         }
-        if (RestartWithExit(null)) SetStatus(StatusMessage.Info("multiplayer.exit.stopped"));
-        ExitNodeIp = "";
+        if (await RestartWithExitAsync(null)) SetStatus(StatusMessage.Info("multiplayer.exit.stopped"));
     }
 
     private bool _refreshing;

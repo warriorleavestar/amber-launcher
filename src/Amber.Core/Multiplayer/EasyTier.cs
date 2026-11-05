@@ -156,6 +156,10 @@ public sealed record EasyTierOptions(
     public int? LocalExitPort { get; init; }
     /// <summary>直连房间的房主：对加入方提供测速端口。</summary>
     public bool ServesSpeedTest { get; init; }
+    /// <summary>直连桥实际使用或正在探测的 IPv4 承载地址；消费出口时须先保护它们的原路由。</summary>
+    public IReadOnlyList<string> DirectUnderlayAddresses { get; init; } = [];
+    /// <summary>当前有 IPv6 直连承载；现有全局出口门禁只支持明确识别的 IPv4 承载。</summary>
+    public bool DirectUnderlayUsesIpv6 { get; init; }
 }
 
 public static class EasyTierArgs
@@ -171,6 +175,9 @@ public static class EasyTierArgs
     /// </summary>
     /// <summary>easytier-core 的环境变量名：房间密钥（2.6.4 的 --network-secret 也认这个环境变量）。</summary>
     public const string SecretVariable = "ET_NETWORK_SECRET";
+
+    /// <summary>消费出口使用独立网卡名，守护只信任本次启动后新出现的 Wintun GUID。</summary>
+    public static string DeviceName(EasyTierOptions options) => options.ExitNode is null ? "Amber LAN" : $"Amber LAN-{options.RpcPort}";
 
     /// <summary>经环境变量传给 easytier-core 的值。</summary>
     public static Dictionary<string, string> Environment(EasyTierOptions o) => new() { [SecretVariable] = o.Room.EasyTierSecret };
@@ -191,7 +198,7 @@ public static class EasyTierArgs
         // 默认不建虚拟网卡；完整局域网模式才建（要管理员权限和 wintun）。
         if (!o.Tun) args.Add("--no-tun");
         // 完整局域网模式下转发本机游戏发出的 UDP 广播，很多游戏靠广播找局域网房间（EasyTier 的这个功能只在 Windows 上、要管理员权限，正好这个模式已经有）。
-        else args.AddRange(["--dev-name", "Amber LAN", "--enable-udp-broadcast-relay"]);
+        else args.AddRange(["--dev-name", DeviceName(o), "--enable-udp-broadcast-relay"]);
         // 出口节点：两边都要用户明确打开。允许别人经自己上网的一方加 --enable-exit-node；
         // 要经别人上网的一方把所有流量导进虚拟网卡，所以必须是完整局域网模式。
         if (o.AllowExit) args.Add("--enable-exit-node");
@@ -200,6 +207,15 @@ public static class EasyTierArgs
             if (!o.Tun) throw new ArgumentException(L.T("core.mp.component.exitrequireslan"));
             if (!System.Net.IPAddress.TryParse(exit, out var ip) || !exit.StartsWith(Subnet, StringComparison.Ordinal)) throw new ArgumentException(L.F("core.mp.component.invalidexit", exit));
             args.AddRange(["--exit-nodes", ip.ToString()]);
+            // --exit-nodes 只选择虚拟网内的下一跳，不会接管系统流量。
+            // 两条 /1 优先于物理默认路由；提权守护在启动前保护承载，退出时随本次 TUN 释放。
+            _ = ExitNetworkPlan.Create(o);
+            args.AddRange(["--manual-routes", "0.0.0.0/1", "128.0.0.0/1"]);
+            // DNS 由本次出口租约按接口快照恢复，不继承 EasyTier Magic DNS 的全局环境开关。
+            args.AddRange(["--accept-dns", "false"]);
+            // 回环桥模式不能让 EasyTier 在未保护的公网地址上另建 P2P 连接。
+            if (!(o.ExtraArgs?.Contains("--disable-p2p") ?? false))
+                args.Add("--disable-p2p");
         }
         if (o.MachineId is { } id) args.AddRange(["--machine-id", id]);
         foreach (var peer in o.Peers.Where(p => !string.IsNullOrWhiteSpace(p))) args.AddRange(["--peers", peer.Trim()]);
@@ -207,6 +223,7 @@ public static class EasyTierArgs
         else args.Add("--no-listener");
         // EasyTier 默认把出站连接绑到物理网卡上，连本机回环地址会报 10049；节点在本机时（自测、或者节点和游戏在同一台电脑）关掉绑定。
         if (o.Peers.Concat(o.Listeners ?? []).Any(IsLoopback)) args.AddRange(["--bind-device", "false"]);
+        else if (o.ExitNode is not null) args.AddRange(["--bind-device", "true"]);
         if (o.ExtraArgs is { } extra) args.AddRange(extra);
         // 不建网卡时，EasyTier 会把别的成员发到本机虚拟地址的连接交给本机同一端口——不限制的话，
         // 房间里的人（自己改 EasyTier 参数就行）能连到本机回环上的任何服务，包括 EasyTier 自己的管理端口。
