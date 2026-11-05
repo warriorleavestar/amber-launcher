@@ -274,7 +274,13 @@ public sealed partial class SettingsViewModel : PageViewModel
     }
 }
 
-public sealed record LogEntry(string Time, string Level, string Message, GameLogLevel Severity);
+public sealed record LogEntry(DateTimeOffset Timestamp, string Level, string Message, GameLogLevel Severity)
+{
+    public string Time => Fmt.Time(Timestamp);
+    public bool IsError => Severity >= GameLogLevel.Error;
+    public bool IsWarning => Severity == GameLogLevel.Warn;
+    public bool IsMuted => Severity <= GameLogLevel.Debug;
+}
 
 public sealed partial class LogViewModel : PageViewModel
 {
@@ -294,17 +300,45 @@ public sealed partial class LogViewModel : PageViewModel
     private readonly List<LogEntry> _all = [];
     private readonly List<LogEntry> _pending = [];
     private bool _flushQueued;
+    private bool _clearPending;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ErrorSummary))]
+    public partial int ErrorCount { get; private set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(WarningSummary))]
+    public partial int WarningCount { get; private set; }
+
+    public string ErrorSummary => L.F("log.errors", ErrorCount);
+    public string WarningSummary => L.F("log.warnings", WarningCount);
+    public string EmptyMessage => L.T(_all.Count > 0 && OnlyProblems ? "log.empty_filtered" : "log.empty");
 
     partial void OnOnlyProblemsChanged(bool value) => Rebuild();
 
-    public void Add(GameLogLine line) => Post(new LogEntry(line.Time.ToString("HH:mm:ss"), line.Level.ToString().ToUpperInvariant(), line.Message, line.Level));
+    protected override void OnLanguageChanged() => Rebuild();
 
-    public void AddRaw(string message) => Post(new LogEntry(DateTime.Now.ToString("HH:mm:ss"), "AMBER", message, GameLogLevel.Info));
+    public void Add(GameLogLine line)
+    {
+        var level = LogLevelParser.Parse(line.Message, line.Level);
+        Post(new LogEntry(line.Time, level.ToString().ToUpperInvariant(), line.Message, level));
+    }
+
+    public void AddRaw(string message)
+    {
+        var level = LogLevelParser.Parse(message);
+        Post(new LogEntry(DateTimeOffset.Now, level == GameLogLevel.Info ? "AMBER" : level.ToString().ToUpperInvariant(), message, level));
+    }
 
     public void Clear()
     {
-        lock (_pending) _pending.Clear();
-        Dispatcher.UIThread.Post(() => { _all.Clear(); Lines.Clear(); });
+        lock (_pending)
+        {
+            _pending.Clear();
+            _clearPending = true;
+        }
+        // 清空和新到的日志在同一批中按顺序处理，旧的延迟回调不能把它们混在一起。
+        Dispatcher.UIThread.Post(Flush);
     }
 
     /// <summary>模组加载时日志一秒上千行，攒成一批再进界面，不然界面会卡。</summary>
@@ -320,19 +354,41 @@ public sealed partial class LogViewModel : PageViewModel
         _ = Task.Delay(100).ContinueWith(_ => Dispatcher.UIThread.Post(Flush), TaskScheduler.Default);
     }
 
-    private void Flush()
+    internal void Flush()
     {
         List<LogEntry> batch;
+        bool clear;
         lock (_pending)
         {
             batch = [.. _pending];
             _pending.Clear();
             _flushQueued = false;
+            clear = _clearPending;
+            _clearPending = false;
         }
+        if (clear)
+        {
+            _all.Clear();
+            Lines.Clear();
+            ErrorCount = WarningCount = Badge = 0;
+            OnPropertyChanged(nameof(EmptyMessage));
+        }
+        if (batch.Count == 0) return;
+
+        var previousCount = _all.Count;
         _all.AddRange(batch);
-        if (_all.Count > MaxLines) _all.RemoveRange(0, _all.Count - MaxLines);
-        foreach (var entry in batch.Where(Visible)) Lines.Add(entry);
-        while (Lines.Count > MaxLines) Lines.RemoveAt(0);
+        var removed = Math.Max(0, _all.Count - MaxLines);
+        if (removed > 0)
+        {
+            var visibleRemoved = _all.Take(Math.Min(removed, previousCount)).Count(Visible);
+            for (var i = 0; i < visibleRemoved; i++) Lines.RemoveAt(0);
+            _all.RemoveRange(0, removed);
+        }
+        foreach (var entry in batch.Skip(Math.Max(0, removed - previousCount)).Where(Visible)) Lines.Add(entry);
+        ErrorCount = _all.Count(e => e.IsError);
+        WarningCount = _all.Count(e => e.IsWarning);
+        if (!IsCurrent) Badge += batch.Count(e => e.IsError);
+        OnPropertyChanged(nameof(EmptyMessage));
     }
 
     private bool Visible(LogEntry e) => !OnlyProblems || e.Severity >= GameLogLevel.Warn;
@@ -341,6 +397,7 @@ public sealed partial class LogViewModel : PageViewModel
     {
         Lines.Clear();
         foreach (var e in _all.Where(Visible)) Lines.Add(e);
+        OnPropertyChanged(nameof(EmptyMessage));
     }
 
     [RelayCommand]

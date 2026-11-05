@@ -2,10 +2,12 @@ using System.IO.Compression;
 using Amber.App.ViewModels;
 using Amber.Core.Content;
 using Amber.Core.Game;
+using Amber.Core.Launch;
 using Avalonia;
 using Avalonia.Automation.Peers;
 using Avalonia.Automation.Provider;
 using Avalonia.Controls;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -71,6 +73,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Amber.Core.Localization.L.SetLanguage(Amber.Core.Localization.L.Source);
         try
         {
+            await LogPageAsync();
             // 换语言前后各个下拉框的选中项和设置文件都不能变。
             string Selections() => Dispatcher.UIThread.Invoke(() =>
             {
@@ -118,6 +121,92 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             Log("FAIL 自检中断：" + e);
         }
         window.Close();
+    }
+
+    private async Task LogPageAsync()
+    {
+        var previous = main.CurrentPage;
+        var log = Page<LogViewModel>();
+        main.CurrentPage = log;
+        var page = await FindAsync<LogPage>(_ => true);
+        if (page is null)
+        {
+            Check("日志页显示", false);
+            return;
+        }
+        await CheckLogPageAsync(page, Check);
+        await LayoutHereAsync("日志页");
+        await ShotAsync("日志页");
+        log.Clear();
+        main.CurrentPage = previous;
+    }
+
+    /// <summary>只用合成日志检查真实控件，不下载、不启动游戏，也不读写游戏目录。</summary>
+    internal static async Task CheckLogPageAsync(LogPage page, Action<string, bool, string> check)
+    {
+        var log = (LogViewModel)page.DataContext!;
+        var list = page.FindControl<ListBox>("List")!;
+        var filter = page.FindControl<CheckBox>("ProblemsFilter")!;
+        var follow = page.FindControl<CheckBox>("FollowLatest")!;
+        log.Clear();
+        await Ui.FlushAsync();
+        log.IsCurrent = false;
+        foreach (var level in new[] { "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL" })
+            log.AddRaw($"[12:34:56] [Render thread/{level}]: 合成日志 {level}");
+        log.AddRaw("Exception in thread \"main\" java.lang.RuntimeException: 合成异常");
+        log.AddRaw("\tat net.minecraft.client.main.Main.main(Main.java:42)");
+        log.AddRaw("Caused by: java.io.IOException: 合成原因");
+        check("日志：文本等级、异常和堆栈计数", await WaitAsync(() => log.Lines.Count == 9, 5)
+            && log.ErrorCount == 5 && log.WarningCount == 1, $"错误 {log.ErrorCount}，警告 {log.WarningCount}");
+        check("日志：离页时只累计错误徽标", log.Badge == 5 && log.HasBadge, log.Badge.ToString());
+        log.IsCurrent = true;
+        check("日志：进入页面清空徽标", !log.HasBadge, "");
+
+        await Task.Delay(200);
+        var messages = page.GetVisualDescendants().OfType<SelectableTextBlock>().Where(c => c.DataContext is LogEntry).ToList();
+        check("日志：等级文字使用主题颜色和 1.5 倍行高", messages.Count > 0 && messages.All(c =>
+        {
+            var entry = (LogEntry)c.DataContext!;
+            var key = entry.IsError ? "DangerText" : entry.IsWarning ? "WarningText" : entry.IsMuted ? "TextTertiary" : "TextPrimary";
+            return c.Foreground is ISolidColorBrush actual && page.FindResource(page.ActualThemeVariant, key) is ISolidColorBrush expected
+                && actual.Color == expected.Color && Math.Abs(c.LineHeight - c.FontSize * 1.5) < 0.01;
+        }), "");
+
+        filter.IsChecked = true;
+        check("日志：勾选筛选保留问题行和总计数", await WaitAsync(() => log.OnlyProblems && log.Lines.Count == 6, 5)
+            && log.Lines.All(e => e.Severity >= GameLogLevel.Warn) && log.ErrorCount == 5 && log.WarningCount == 1, "");
+        filter.IsChecked = false;
+        await WaitAsync(() => log.Lines.Count == 9, 5);
+        log.AddRaw("[main/ERROR]: 当前页可见错误");
+        check("日志：当前页新错误不产生未读徽标", await WaitAsync(() => log.ErrorCount == 6, 5) && !log.HasBadge, "");
+
+        follow.IsChecked = false;
+        list.ScrollIntoView(0);
+        await Task.Delay(200);
+        var scroll = list.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+        var offset = scroll?.Offset.Y;
+        for (var i = 0; i < 200; i++) log.AddRaw($"[main/INFO]: 跟随测试 {i}");
+        await WaitAsync(() => log.Lines.Count == 210, 5);
+        await Task.Delay(300);
+        check("日志：关闭跟随时不抢滚动位置", !log.FollowLatest && offset.HasValue && scroll is not null
+            && Math.Abs(scroll.Offset.Y - offset.Value) < 1, "");
+        follow.IsChecked = true;
+        check("日志：重新跟随立即到末尾", await WaitAsync(() => scroll is not null && scroll.Offset.Y > 0
+            && scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - 2, 5), "");
+        check("日志：长列表使用虚拟化面板", list.GetVisualDescendants().Any(c => c is VirtualizingStackPanel)
+            && list.GetVisualDescendants().OfType<ListBoxItem>().Count() < log.Lines.Count, "");
+
+        log.Clear();
+        await Ui.FlushAsync();
+        log.AddRaw("[main/INFO]: 筛选空态");
+        await WaitAsync(() => log.Lines.Count == 1, 5);
+        filter.IsChecked = true;
+        check("日志：筛选无结果时显示对应空态", await WaitAsync(() => log.Lines.Count == 0, 5)
+            && log.EmptyMessage == Amber.Core.Localization.L.T("log.empty_filtered"), "");
+        filter.IsChecked = false;
+        log.AddRaw("[main/WARN]: 截图警告");
+        log.AddRaw("[main/ERROR]: 截图错误");
+        await WaitAsync(() => log.Lines.Count == 3, 5);
     }
 
     /// <summary>在当前窗口的控件树里找可见的控件（界面刚切换时要等布局完成）。</summary>
