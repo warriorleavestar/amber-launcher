@@ -65,6 +65,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     private const int PageSize = 20;
 
     private readonly LauncherService _service;
+    private readonly Func<int, IContentProvider> _providerForSource;
     private readonly SemaphoreSlim _iconGate = new(6, 6);
     private CancellationTokenSource? _searchCts;
     private CancellationTokenSource? _filesCts;
@@ -135,11 +136,15 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     public bool IsDatapack => CurrentType == ContentType.Datapack;
 
     private ContentType CurrentType => (ContentType)TypeIndex;
-    private IContentProvider Provider => SourceIndex == 0 ? _service.Modrinth : _service.CurseForge;
+    private IContentProvider Provider => _providerForSource(SourceIndex);
 
     public ContentViewModel(LauncherService service)
+        : this(service, source => source == 0 ? service.Modrinth : service.CurseForge) { }
+
+    internal ContentViewModel(LauncherService service, Func<int, IContentProvider> providerForSource)
     {
         _service = service;
+        _providerForSource = providerForSource;
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
         service.CurrentInstanceChanged += () => Dispatcher.UIThread.Post(() =>
         {
@@ -147,6 +152,12 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             OnPropertyChanged(nameof(IsTemporaryTarget));
         });
         RefreshInstances();
+    }
+
+    protected override void OnFirstActivated()
+    {
+        // 第一次进入资源页就显示列表；已经通过来源切换或快捷入口搜索过时沿用结果。
+        if (_searchCts is null) _ = SearchFromStart();
     }
 
     private void RefreshInstances()
@@ -277,7 +288,8 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("content.search.failed", e, ErrorText.Of(e)));
+            if (!cts.IsCancellationRequested)
+                SetStatus(StatusMessage.Failure("content.search.failed", e, ErrorText.Of(e)));
         }
     }
 
@@ -473,6 +485,8 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     /// <summary>导入本地整合包文件（由界面的文件选择器调用）。</summary>
     public async Task ImportLocalPackAsync(string path)
     {
+        // 快捷导入会先进入资源页，取消首次搜索，避免它迟到后覆盖导入状态。
+        _searchCts?.Cancel();
         IsBusy = true;
         _workCts = new CancellationTokenSource();
         try

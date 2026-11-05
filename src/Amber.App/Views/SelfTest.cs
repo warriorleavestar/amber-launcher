@@ -74,6 +74,14 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Amber.Core.Localization.L.SetLanguage(Amber.Core.Localization.L.Source);
         try
         {
+            // 必须在布局检查遍历所有页面之前验证，免得漏掉首次进入资源页的空列表。
+            await ContentAutoLoadAsync();
+            if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "content")
+            {
+                Log("DONE");
+                window.Close();
+                return;
+            }
             await LogPageAsync();
             // 换语言前后各个下拉框的选中项和设置文件都不能变。
             string Selections() => Dispatcher.UIThread.Invoke(() =>
@@ -124,6 +132,30 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             Log("FAIL 自检中断：" + e);
         }
         window.Close();
+    }
+
+    private async Task ContentAutoLoadAsync()
+    {
+        var content = Page<ContentViewModel>();
+        var previous = main.CurrentPage;
+        main.CurrentPage = content;
+        await WaitAsync(() => content.Results.Count > 0 || content.StatusInfo?.Kind == StatusKind.Error, 30);
+        Check("首次进入资源页自动加载 Modrinth 列表（不点搜索）", content.Query == "" && content.Results.Count > 0, content.Status);
+        await ShotAsync("资源页首次加载");
+
+        var first = content.Results.FirstOrDefault();
+        main.CurrentPage = previous;
+        main.CurrentPage = content;
+        Check("返回资源页保留已有列表", first is not null && ReferenceEquals(first, content.Results.FirstOrDefault()), content.Status);
+
+        content.SourceIndex = 1;
+        await WaitAsync(() => content.Results.Count > 0 || content.StatusInfo?.Kind == StatusKind.Error, 30);
+        Check("切换 CurseForge 自动加载或提示缺少 API 密钥", content.Results.Count > 0 || content.Status.Contains(L.T("core.content.curseforge.missingapikey")), content.Status);
+        await ShotAsync("资源页切换来源");
+        content.SourceIndex = 0;
+        await WaitAsync(() => content.Results.Count > 0 || content.StatusInfo?.Kind == StatusKind.Error, 30);
+        Check("切回 Modrinth 自动加载列表", content.Results.Count > 0, content.Status);
+        main.CurrentPage = previous;
     }
 
     private async Task LogPageAsync()

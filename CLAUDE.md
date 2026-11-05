@@ -33,6 +33,8 @@ GUI self-check: it drives the real window through install, launch, mods, multipl
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/run-selftest.ps1 -Report <dir>
 ```
 
+只验证资源页首次加载和来源切换时，先设置 `AMBER_SELFTEST_SCOPE=content`；同样输出报告和截图，跳过游戏安装与启动。
+
 Other developer switches are environment variables:
 
 | Variable | Effect |
