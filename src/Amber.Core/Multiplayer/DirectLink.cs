@@ -219,7 +219,7 @@ public sealed class DirectPeer
 {
     public required IPEndPoint Remote { get; init; }
     public required PathKind Path { get; init; }
-    public long ConnectedMs { get; init; }
+    public long ConnectedMs { get; internal set; }
     internal Socket? Local { get; set; }
     internal IPEndPoint? LocalClient { get; set; }
     internal readonly ConcurrentDictionary<uint, long> PendingPings = new();
@@ -248,7 +248,11 @@ public sealed class DirectBridge : IAsyncDisposable
     private readonly Action<string> _log;
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentDictionary<IPEndPoint, DirectPeer> _peers = new();
-    private readonly List<Task> _loops = [];
+    // 测试重新验证同一条路径时保留 EasyTier 绑定的本机端点；暂停期间不接受数据转发。
+    private readonly Dictionary<IPEndPoint, DirectPeer> _pausedPeers = new();
+    private readonly object _peerGate = new();
+    private readonly ConcurrentBag<Task> _loops = [];
+    private readonly ConcurrentDictionary<int, TaskCompletionSource<DirectPeer>> _punches = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private Socket? _guestLocal;
     private int _probeRound;
@@ -319,6 +323,7 @@ public sealed class DirectBridge : IAsyncDisposable
     public async Task<DirectPeer?> PunchAsync(IReadOnlyList<Candidate> remote, NatKind remoteNat, TimeSpan timeout, CancellationToken ct = default)
     {
         var round = Interlocked.Increment(ref _probeRound);
+        var acknowledged = new TaskCompletionSource<DirectPeer>(TaskCreationOptions.RunContinuationsAsynchronously);
         var targets = remote.Where(c => AllowedPaths.Contains(c.Kind)).ToList();
         var spray = AllowedPaths.Contains(PathKind.PunchSpray) && remoteNat == NatKind.Symmetric
                     && remote.FirstOrDefault(c => c.Kind == PathKind.Punch) is { } punch ? punch.EndPoint : null;
@@ -332,6 +337,7 @@ public sealed class DirectBridge : IAsyncDisposable
         limit.CancelAfter(timeout);
         var sent = 0;
         var random = new Random();
+        _punches[round] = acknowledged;
         try
         {
             for (var tick = 0; !limit.IsCancellationRequested; tick++)
@@ -353,10 +359,13 @@ public sealed class DirectBridge : IAsyncDisposable
                         sent++;
                     }
                 }
-                var newest = _peers.Values.Where(p => p.ConnectedMs >= start).OrderBy(p => p.ConnectedMs).FirstOrDefault();
-                if (newest is not null && (!_isHost || _peers.Count > known))
+                var confirmed = acknowledged.Task.IsCompletedSuccessfully ? acknowledged.Task.Result : null;
+                if (confirmed is not null && (!_peers.TryGetValue(confirmed.Remote, out var active) || !ReferenceEquals(active, confirmed)))
+                    confirmed = null;
+                var newest = confirmed ?? _peers.Values.Where(p => p.ConnectedMs >= start).OrderBy(p => p.ConnectedMs).FirstOrDefault();
+                if (newest is not null && (confirmed is not null || !_isHost || _peers.Count > known))
                 {
-                    _log(L.P("core.mp.punch.success", sent, DirectText.Path(newest.Path), newest.Remote, newest.ConnectedMs - start, sent));
+                    _log(L.P("core.mp.punch.success", sent, DirectText.Path(newest.Path), newest.Remote, _clock.ElapsedMilliseconds - start, sent));
                     return newest;
                 }
                 await Task.Delay(tick < 20 ? 100 : 300, limit.Token);
@@ -365,6 +374,10 @@ public sealed class DirectBridge : IAsyncDisposable
         catch (OperationCanceledException) when (!ct.IsCancellationRequested && !_cts.IsCancellationRequested)
         {
             // 超时。
+        }
+        finally
+        {
+            _punches.TryRemove(round, out _);
         }
         _log(L.P("core.mp.punch.timeout", (long)Math.Round(timeout.TotalSeconds), timeout.TotalSeconds, sent));
         return null;
@@ -461,7 +474,9 @@ public sealed class DirectBridge : IAsyncDisposable
                 await SendRawAsync(Seal(ProbeAck, payload), from, _cts.Token);
                 break;
             case ProbeAck:
-                Accept(from);
+                if (Accept(from) && payload.Length >= 5 && payload[0] == (_isHost ? 1 : 0)
+                    && _punches.TryGetValue(BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(1)), out var round)
+                    && _peers.TryGetValue(from, out var acknowledged)) round.TrySetResult(acknowledged);
                 break;
             case Ping when _peers.TryGetValue(from, out var p1):
                 p1.LastSeen = DateTime.UtcNow;
@@ -478,6 +493,7 @@ public sealed class DirectBridge : IAsyncDisposable
                 }
                 break;
             case Control when _peers.TryGetValue(from, out var p3):
+                p3.LastSeen = DateTime.UtcNow;
                 if (JsonNode.Parse(payload) is JsonObject json) ControlReceived?.Invoke(p3, json);
                 break;
         }
@@ -492,6 +508,21 @@ public sealed class DirectBridge : IAsyncDisposable
     /// <summary>登记一个对方。已经登记过返回 true；不接（加入方已经有房主、人满、路径没开、建不了套接字）返回 false。</summary>
     private bool Accept(IPEndPoint from)
     {
+        DirectPeer? connected;
+        bool accepted;
+        lock (_peerGate) accepted = AcceptLocked(from, out connected);
+        if (connected is not null)
+        {
+            _log(L.F("core.mp.punch.connected", from, DirectText.Path(connected.Path)));
+            Connected?.Invoke(connected);
+        }
+        return accepted;
+    }
+
+    private bool AcceptLocked(IPEndPoint from, out DirectPeer? connected)
+    {
+        connected = null;
+        if (_cts.IsCancellationRequested) return false;
         if (_peers.TryGetValue(from, out var known))
         {
             // 已经连着的对方回了探测（心跳断了之后补发的探测）：算它还活着。
@@ -499,22 +530,32 @@ public sealed class DirectBridge : IAsyncDisposable
             return true;
         }
         if (!_isHost && !_peers.IsEmpty) return false;
-        if (_isHost && _peers.Count >= MaxHostPeers)
+        var path = Classify(from);
+        if (!AllowedPaths.Contains(path) && !(path == PathKind.Punch && AllowedPaths.Contains(PathKind.PunchSpray)))
         {
-            // 人满时先清掉已经不回应的，再看还有没有位子。
-            EvictStale();
-            if (_peers.Count >= MaxHostPeers)
-            {
-                _log(L.F("core.mp.punch.toomanypeers", from, MaxHostPeers));
-                return false;
-            }
-        }
-        var peer = new DirectPeer { Remote = from, Path = Classify(from), ConnectedMs = _clock.ElapsedMilliseconds };
-        if (!AllowedPaths.Contains(peer.Path) && !(peer.Path == PathKind.Punch && AllowedPaths.Contains(PathKind.PunchSpray)))
-        {
-            _log(L.F("core.mp.punch.disabled", from, DirectText.Path(peer.Path)));
+            _log(L.F("core.mp.punch.disabled", from, DirectText.Path(path)));
             return false;
         }
+        EvictStale();
+        if (_pausedPeers.Remove(from, out var resumed))
+        {
+            resumed.ConnectedMs = _clock.ElapsedMilliseconds;
+            resumed.LastSeen = DateTime.UtcNow;
+            _peers[from] = resumed;
+            connected = resumed;
+            return true;
+        }
+        if (_isHost && _peers.Count + _pausedPeers.Count >= MaxHostPeers)
+        {
+            _log(L.F("core.mp.punch.toomanypeers", from, MaxHostPeers));
+            return false;
+        }
+        if (!_isHost)
+        {
+            // 加入方只保留一个房主；真正换地址后不再保留旧路径状态。
+            _pausedPeers.Clear();
+        }
+        var peer = new DirectPeer { Remote = from, Path = path, ConnectedMs = _clock.ElapsedMilliseconds };
         if (_isHost)
         {
             // 每个加入方一个本机套接字，去连本机 EasyTier 的监听端口。先建好再登记：建不了就不接这个加入方，
@@ -544,21 +585,29 @@ public sealed class DirectBridge : IAsyncDisposable
         {
             return true;
         }
-        _log(L.F("core.mp.punch.connected", from, DirectText.Path(peer.Path)));
-        Connected?.Invoke(peer);
+        connected = peer;
         return true;
     }
 
     /// <summary>房主：移除超过 PeerTimeout 没有任何回应的加入方（离开了、换了地址、掉线了）。</summary>
     private void EvictStale()
     {
-        if (!_isHost) return;
-        var now = DateTime.UtcNow;
-        foreach (var (endpoint, peer) in _peers)
+        lock (_peerGate)
         {
-            if (now - peer.LastSeen <= PeerTimeout || !_peers.TryRemove(endpoint, out var removed)) continue;
-            removed.Local?.Dispose();
-            _log(L.F("core.mp.punch.peerevicted", endpoint));
+            var now = DateTime.UtcNow;
+            foreach (var (endpoint, peer) in _pausedPeers.ToArray())
+            {
+                if (now - peer.LastSeen <= PeerTimeout) continue;
+                _pausedPeers.Remove(endpoint);
+                peer.Local?.Dispose();
+            }
+            if (!_isHost) return;
+            foreach (var (endpoint, peer) in _peers)
+            {
+                if (now - peer.LastSeen <= PeerTimeout || !_peers.TryRemove(endpoint, out var removed)) continue;
+                removed.Local?.Dispose();
+                _log(L.F("core.mp.punch.peerevicted", endpoint));
+            }
         }
     }
 
@@ -591,6 +640,7 @@ public sealed class DirectBridge : IAsyncDisposable
             try
             {
                 var r = await peer.Local!.ReceiveFromAsync(buffer, SocketFlags.None, new IPEndPoint(IPAddress.Any, 0), _cts.Token);
+                if (!_peers.TryGetValue(peer.Remote, out var active) || !ReferenceEquals(active, peer)) continue;
                 await SendDataAsync(peer, buffer.AsMemory(0, r.ReceivedBytes));
             }
             catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException)
@@ -664,12 +714,27 @@ public sealed class DirectBridge : IAsyncDisposable
     public async Task SendControlAsync(DirectPeer peer, JsonObject message) =>
         await SendRawAsync(Seal(Control, Encoding.UTF8.GetBytes(message.ToJsonString())), peer.Remote, _cts.Token);
 
-    /// <summary>断开所有对方（测试矩阵换路径时用），套接字保留。</summary>
-    public void DropPeers()
+    /// <summary>重新验证远端路径；矩阵可保留本地传输端点，避免破坏仍在运行的 EasyTier 会话。</summary>
+    public void DropPeers(bool preserveLocalTransport = false)
     {
-        // 一个一个摘下来再关：和正在登记的新对方赛跑时，不会把刚登记的那个清掉却不关它的套接字。
-        foreach (var endpoint in _peers.Keys)
-            if (_peers.TryRemove(endpoint, out var peer)) peer.Local?.Dispose();
+        lock (_peerGate)
+        {
+            if (!preserveLocalTransport)
+            {
+                foreach (var peer in _pausedPeers.Values) peer.Local?.Dispose();
+                _pausedPeers.Clear();
+            }
+            foreach (var endpoint in _peers.Keys)
+            {
+                if (!_peers.TryRemove(endpoint, out var peer)) continue;
+                if (preserveLocalTransport)
+                {
+                    peer.LastSeen = DateTime.UtcNow;
+                    _pausedPeers[endpoint] = peer;
+                }
+                else peer.Local?.Dispose();
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -677,7 +742,7 @@ public sealed class DirectBridge : IAsyncDisposable
         _cts.Cancel();
         _socket.Dispose();
         _guestLocal?.Dispose();
-        foreach (var peer in _peers.Values) peer.Local?.Dispose();
+        DropPeers();
         try
         {
             await Task.WhenAll(_loops.ToArray());
