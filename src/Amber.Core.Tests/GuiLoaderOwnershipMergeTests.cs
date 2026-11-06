@@ -234,19 +234,17 @@ public sealed class GuiLoaderOwnershipMergeTests : IDisposable
         var downloader = new Downloader(http, new SourceChain([new OfficialSource()])) { RetriesPerSource = 1 };
         var vanilla = new VanillaInstaller(downloader, dir);
         var loaders = new LoaderContext(downloader, dir, vanilla, (_, _) => throw new InvalidOperationException("测试不应执行 Java"));
-        SetServiceDependency(service, nameof(LauncherService.Downloader), downloader);
-        SetServiceDependency(service, nameof(LauncherService.Installer), vanilla);
-        SetServiceDependency(service, nameof(LauncherService.Loaders), loaders);
         var java = new JavaManager(downloader, dir) { AutoDownload = !cachedJava && downloadJava };
         // 新手流程仍走真实 JavaManager，但不扫描或启动测试机器上的 Java。
         var cache = new List<JavaInstall>();
         if (cachedJava) cache.Add(new JavaInstall(Path.Combine(_root, "unused-java"), "1.8.0", 8, true));
         typeof(JavaManager).GetField("_cache", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(java, cache);
-        SetServiceDependency(service, nameof(LauncherService.Java), java);
+        // 服务的依赖都在 Context 里：整份换成测试用的下载器、安装器、加载器和 Java。
+        SetContext(service, service.Context with { Downloader = downloader, Installer = vanilla, Loaders = loaders, Java = java });
     }
 
-    private static void SetServiceDependency(LauncherService service, string name, object dependency) =>
-        typeof(LauncherService).GetProperty(name)!.SetValue(service, dependency);
+    private static void SetContext(LauncherService service, GameContext context) =>
+        typeof(LauncherService).GetProperty(nameof(LauncherService.Context))!.SetValue(service, context);
 
     private static byte[] BaseVersion(GameDirectory dir, string mc)
     {

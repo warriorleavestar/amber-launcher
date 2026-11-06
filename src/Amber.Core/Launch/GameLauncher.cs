@@ -33,6 +33,9 @@ public sealed record LaunchOptions
     /// <summary>无痕模式：logs/latest.log 里不写聊天行（见 ChatLogFilter）。</summary>
     public bool NoTrace { get; init; }
     public string LauncherName { get; init; } = "Jay";
+
+    /// <summary>实验功能“烘焙”的结果：设了就用通用加载器的主类和 classpath 启动，原版的其余参数不变。</summary>
+    public Amber.Core.Bake.BakedLaunch? Baked { get; init; }
     public string LauncherVersion { get; init; } = "0.1";
 }
 
@@ -94,6 +97,7 @@ public sealed class GameLauncher(GameDirectory dir)
         var jarId = version.Jar ?? options.VersionId;
         var classpath = libraries.Where(l => l.OnClasspath).Select(l => l.LocalPath).ToList();
         classpath.Add(dir.VersionJarPath(jarId));
+        if (options.Baked is { } baked) classpath = baked.Classpath.Select(p => AsciiPaths.MapArgument(p, notice)).ToList();
 
         var assetsIndexName = version.AssetIndex?.Id ?? version.Assets ?? "legacy";
         var vars = new Dictionary<string, string>
@@ -189,9 +193,18 @@ public sealed class GameLauncher(GameDirectory dir)
             args.Add("-cp");
             args.Add(vars["classpath"]);
         }
+        if (options.Baked is { } bakedJvm) args.AddRange(bakedJvm.JvmArgs);
         args.AddRange(options.ExtraJvmArgs);
 
-        args.Add(version.MainClass ?? throw new InvalidDataException(L.F("core.launch.game.missingmainclass", options.VersionId)));
+        if (options.Baked is { } bakedMain)
+        {
+            args.Add(bakedMain.MainClass);
+            args.AddRange(bakedMain.GameArgsPrefix.Select(a => AsciiPaths.MapArgument(a, notice)));
+        }
+        else
+        {
+            args.Add(version.MainClass ?? throw new InvalidDataException(L.F("core.launch.game.missingmainclass", options.VersionId)));
+        }
 
         if (version.Arguments?.Game is { Count: > 0 } game)
             args.AddRange(Expand(game, rules).Select(a => Substitute(a, vars)));

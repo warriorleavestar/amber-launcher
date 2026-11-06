@@ -302,6 +302,8 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         var installCts = _installCts = new CancellationTokenSource();
         var watch = Stopwatch.StartNew();
         var ct = installCts.Token;
+        // 整个安装都用开始时的游戏目录和安装器：装到一半在设置里换了目录，也不会一半装进旧目录、一半装进新目录。
+        var ctx = _service.Context;
         var acceptingProgress = true;
         bool AcceptProgress() => acceptingProgress && IsBusy && ReferenceEquals(_installCts, installCts) && !ct.IsCancellationRequested;
         // 加载器的标记由安装入口放置；Forge 系必须先保留新目录，不能在这里提前创建目标。
@@ -313,7 +315,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             {
                 var chosen = SelectedLoaderVersion!;
                 SetStatus(StatusMessage.Info("download.status.installing", chosen.DefaultId));
-                id = await _service.InstallLoaderAsync(chosen, CustomName, new Progress<LoaderProgress>(p =>
+                id = await _service.InstallLoaderAsync(ctx, chosen, CustomName, new Progress<LoaderProgress>(p =>
                 {
                     if (!AcceptProgress()) return;
                     Status = p.Stage;
@@ -323,10 +325,10 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             else
             {
                 id = item.Id;
-                try { _service.MarkInstallStarted(id); }
+                try { _service.MarkInstallStarted(ctx, id); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
                 SetStatus(StatusMessage.Info("download.status.installing", id));
-                await _service.Installer.InstallAsync(id, new Progress<InstallProgress>(p =>
+                await ctx.Installer.InstallAsync(id, new Progress<InstallProgress>(p =>
                 {
                     if (!AcceptProgress()) return;
                     if (p.Stage != InstallStage.Files || p.Files.TotalFiles == 0) return;
@@ -341,14 +343,16 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             var elapsedSeconds = watch.Elapsed.TotalSeconds;
             Status = L.P("download.status.installed", (long)Math.Round(elapsedSeconds), id, elapsedSeconds);
             Target = null;
-            _service.MarkInstallFinished(id);
-            if (id != expectedId) _service.MarkInstallFinished(expectedId);
+            _service.MarkInstallFinished(ctx, id);
+            if (id != expectedId) _service.MarkInstallFinished(ctx, expectedId);
+            // 装的时候换了游戏目录：装好的实例在旧目录里，不把它设成当前实例，也不提示“打开实例”。
+            var sameDirectory = _service.IsCurrentDirectory(ctx);
             _service.NotifyInstalledChanged();
-            _service.SetCurrentInstance(id);
+            if (sameDirectory) _service.SetCurrentInstance(id);
             InstalledHasLoader = loader is not null;
             JustInstalled = id;
             // 装的时候切到别的页面了：用 Toast 告诉一声，带“打开实例”。
-            if (!IsCurrent) Toasts.WithAction(L.F("download.installed.title", id), L.T("download.installed.open"), () => OpenInstance?.Invoke(id));
+            if (!IsCurrent && sameDirectory) Toasts.WithAction(L.F("download.installed.title", id), L.T("download.installed.open"), () => OpenInstance?.Invoke(id));
         }
         catch (OperationCanceledException)
         {
@@ -365,7 +369,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             // Progress 回调可能还在 UI 队列中；结束后的旧进度不能覆盖本次结局或下一次安装。
             acceptingProgress = false;
             // 刷新失败或取消后的状态；已回滚的目录不再保留标记，其余未完成安装仍显示标注。
-            _service.NotifyInstanceStateChanged(expectedId);
+            if (_service.IsCurrentDirectory(ctx)) _service.NotifyInstanceStateChanged(expectedId);
             IsBusy = false;
             Progress = 0;
         }

@@ -66,13 +66,15 @@ public sealed class CurseForgeProvider(HttpClient http, Func<string?> apiKey, st
         if (!string.IsNullOrEmpty(gameVersion)) path += "&gameVersion=" + Uri.EscapeDataString(gameVersion);
         if (LoaderCode(loader) is { } code) path += $"&modLoaderType={code}";
         using var doc = await GetAsync(path, ct);
-        return doc.RootElement.GetProperty("data").EnumerateArray().Select(ParseFile).OrderByDescending(f => f.Date).ToList();
+        var files = doc.RootElement.GetProperty("data").EnumerateArray().Select(ParseFile).OrderByDescending(f => f.Date).ToList();
+        return await ApplyDistributionPolicyAsync(files, ct);
     }
 
     public async Task<ContentFile> GetFileAsync(string projectId, string fileId, CancellationToken ct = default)
     {
         using var doc = await GetAsync($"/mods/{projectId}/files/{fileId}", ct);
-        return ParseFile(doc.RootElement.GetProperty("data"));
+        var file = ParseFile(doc.RootElement.GetProperty("data"));
+        return (await ApplyDistributionPolicyAsync([file], ct))[0];
     }
 
     /// <summary>批量取文件信息（CurseForge 整合包里只有 projectID + fileID）。</summary>
@@ -80,7 +82,8 @@ public sealed class CurseForgeProvider(HttpClient http, Func<string?> apiKey, st
     {
         if (fileIds.Count == 0) return [];
         using var doc = await PostAsync("/mods/files", new JsonObject { ["fileIds"] = new JsonArray(fileIds.Select(i => (JsonNode?)i).ToArray()) }, ct);
-        return doc.RootElement.GetProperty("data").EnumerateArray().Select(ParseFile).ToList();
+        var files = doc.RootElement.GetProperty("data").EnumerateArray().Select(ParseFile).ToList();
+        return await ApplyDistributionPolicyAsync(files, ct);
     }
 
     /// <summary>批量查项目分类，返回 项目 id → 这类文件该放的文件夹（CurseForge 整合包里混着模组、资源包和光影）。</summary>
@@ -113,7 +116,33 @@ public sealed class CurseForgeProvider(HttpClient http, Func<string?> apiKey, st
             var file = ParseFile(match.GetProperty("file"));
             if (match.GetProperty("file").TryGetProperty("fileFingerprint", out var fp)) result[fp.GetUInt32()] = file;
         }
-        return result;
+        var checkedFiles = await ApplyDistributionPolicyAsync(result.Values.ToList(), ct);
+        var byId = checkedFiles.DistinctBy(f => f.FileId).ToDictionary(f => f.FileId);
+        return result.ToDictionary(p => p.Key, p => byId[p.Value.FileId]);
+    }
+
+    /// <summary>不缓存作者的分发设置；每批文件都使用本次 API 返回的项目设置。</summary>
+    private async Task<IReadOnlyList<ContentFile>> ApplyDistributionPolicyAsync(IReadOnlyList<ContentFile> files, CancellationToken ct)
+    {
+        if (files.Count == 0) return files;
+        var ids = files.Select(f => long.Parse(f.ProjectId)).Distinct().ToList();
+        using var doc = await PostAsync("/mods", new JsonObject { ["modIds"] = new JsonArray(ids.Select(i => (JsonNode?)i).ToArray()) }, ct);
+        var projects = doc.RootElement.GetProperty("data").EnumerateArray().Select(ParseProject).ToDictionary(p => p.Id);
+        return files.Select(file =>
+        {
+            projects.TryGetValue(file.ProjectId, out var project);
+            // 项目未返回也不能认定有分发许可；不尝试猜测 CDN 地址。
+            var permitted = project is not null && project.AllowDistribution != false;
+            var url = permitted ? file.Url : "";
+            var page = project?.PageUrl is { } projectPage
+                ? $"{projectPage.TrimEnd('/')}/files/{file.FileId}"
+                : $"https://www.curseforge.com/projects/{file.ProjectId}";
+            return file with
+            {
+                Url = url,
+                ManualDownloadPage = string.IsNullOrWhiteSpace(url) ? page : null,
+            };
+        }).ToList();
     }
 
     private ContentProject ParseProject(JsonElement m)
@@ -129,14 +158,18 @@ public sealed class CurseForgeProvider(HttpClient http, Func<string?> apiKey, st
             authors,
             icon,
             m.TryGetProperty("downloadCount", out var d) ? (long)d.GetDouble() : 0,
-            Net.WebLinks.TryGetHttpUrl(url, out var pageUri) ? pageUri!.AbsoluteUri : null);
+            Net.WebLinks.TryGetHttpUrl(url, out var pageUri) ? pageUri!.AbsoluteUri : null)
+        {
+            AllowDistribution = m.TryGetProperty("allowModDistribution", out var allowed) && allowed.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? allowed.GetBoolean() : null,
+        };
     }
 
     private ContentFile ParseFile(JsonElement f)
     {
         var id = f.GetProperty("id").GetInt64();
         var fileName = f.GetProperty("fileName").GetString()!;
-        var url = f.TryGetProperty("downloadUrl", out var du) && du.ValueKind == JsonValueKind.String ? du.GetString()! : ForgeCdnUrl(id, fileName);
+        var url = f.TryGetProperty("downloadUrl", out var du) && du.ValueKind == JsonValueKind.String ? du.GetString()! : "";
 
         string? sha1 = null;
         if (f.TryGetProperty("hashes", out var hashes))
@@ -184,10 +217,6 @@ public sealed class CurseForgeProvider(HttpClient http, Func<string?> apiKey, st
             f.TryGetProperty("fileDate", out var date) && date.TryGetDateTimeOffset(out var parsed) ? parsed : default,
             deps);
     }
-
-    /// <summary>作者关闭第三方下载时 downloadUrl 为空，这个公开 CDN 路径通常仍然可用。</summary>
-    private static string ForgeCdnUrl(long id, string fileName) =>
-        $"https://edge.forgecdn.net/files/{id / 1000}/{id % 1000:D3}/{Uri.EscapeDataString(fileName)}";
 
     private static int ClassId(ContentType type) => type switch
     {

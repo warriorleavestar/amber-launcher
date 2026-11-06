@@ -185,6 +185,7 @@ public sealed partial class MultiplayerViewModel
     private async Task JoinDirectAsync()
     {
         if (!IsIdle) return;
+        if (RouteMisplacedCode(DirectInviteInput, PastedCodeKind.DirectInvite, () => DirectInviteInput = "")) return;
         if (!IsComponentReady)
         {
             SetStatus(StatusMessage.Warning("multiplayer.component.download_required"));

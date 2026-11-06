@@ -1,0 +1,55 @@
+name: 问题反馈
+description: Jay 出错、崩溃或者结果不对
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。提交前请先搜一下有没有相同的 issue。截图、日志里如果有账号名、令牌、邀请码或本机路径，请先打码。
+  - type: input
+    id: version
+    attributes:
+      label: Jay 版本
+      description: 下载时 Release 页面上的版本号，自己从源码构建的话写提交号
+      placeholder: v0.5.9
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 系统
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: instance
+    attributes:
+      label: 游戏版本和加载器
+      description: 和游戏无关的问题可以不填
+      placeholder: 1.21.1 + Fabric 0.16.9
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 你看到的现象，以及你原本期望的结果
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 怎么复现
+      description: 一步一步写，越具体越好找原因
+      placeholder: |
+        1. 打开资源页，搜索……
+        2. 点击……
+        3. 看到……
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或截图
+      description: 游戏日志、崩溃报告或截图。长日志可以作为附件上传。

@@ -1,0 +1,16 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="using:Amber.App.Views.Controls"
+             xmlns:l="using:Amber.App.Localization"
+             x:Class="Amber.App.Views.Controls.BakeNoticeHost"
+             x:DataType="c:BakeNoticeState"
+             IsVisible="{Binding HasNotice}">
+  <!-- 状态框内只呈现最新一条，不因同时失败的实例数量增加高度。 -->
+  <StackPanel Spacing="6">
+    <TextBlock Text="{Binding Current.Text}" Foreground="{DynamicResource WarningText}"
+               FontSize="{DynamicResource FontBody}" LineHeight="18" MaxLines="2"
+               TextWrapping="Wrap" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Current.Text}" />
+    <Button Classes="secondary" Content="{l:T home.bake.retry_without}" Command="{Binding Current.RetryCommand}"
+            MinHeight="28" Padding="10,4" HorizontalAlignment="Left" ToolTip.Tip="{l:T home.bake.retry_once}" />
+  </StackPanel>
+</UserControl>

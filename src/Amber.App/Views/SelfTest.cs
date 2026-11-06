@@ -8,6 +8,7 @@ using Avalonia;
 using Avalonia.Automation.Peers;
 using Avalonia.Automation.Provider;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
@@ -19,7 +20,7 @@ namespace Amber.App.Views;
 /// 开发用端到端自检：设置环境变量 AMBER_SELFTEST=&lt;报告目录&gt; 后，在真实窗口里驱动各页面的命令，
 /// 走完“装加载器 → 装模组 → 改设置 → 启动 → 崩溃分析 → 导出 → 导入”，把结果和截图写进报告目录，然后退出。
 /// </summary>
-internal sealed class SelfTest(MainWindow window, MainViewModel main, string reportDir)
+internal sealed partial class SelfTest(MainWindow window, MainViewModel main, string reportDir)
 {
     private const string FabricName = "E2E-Fabric";
     private const string PackName = "E2E-Pack";
@@ -74,6 +75,20 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Amber.Core.Localization.L.SetLanguage(Amber.Core.Localization.L.Source);
         try
         {
+            if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "curseforge")
+            {
+                await CurseForgeManualDownloadAsync();
+                Log("DONE");
+                window.Close();
+                return;
+            }
+            if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "multiplayer-guide")
+            {
+                await MultiplayerGuideAsync();
+                Log("DONE");
+                window.Close();
+                return;
+            }
             if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "game")
             {
                 await GameLifecycleAsync();
@@ -149,6 +164,148 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         window.Close();
     }
 
+    /// <summary>使用合成的受限项目验证网页下载入口；不访问 CurseForge，也不打开浏览器。</summary>
+    private async Task CurseForgeManualDownloadAsync()
+    {
+        var previous = main.CurrentPage;
+        var provider = new ManualDownloadProvider();
+        var content = new ContentViewModel(Page<HomeViewModel>().Service, _ => provider, () => true) { SourceIndex = 1 };
+        var originalContent = Page<ContentViewModel>();
+        var pageIndex = main.Pages.IndexOf(originalContent);
+        main.Pages[pageIndex] = content;
+        main.CurrentPage = content;
+        content.Selected = content.Results.FirstOrDefault();
+        await Ui.FlushAsync();
+        Check("CurseForge：受限文件显示手动下载入口", content.HasManualDownload && content.SelectedRequiresManualDownload, content.ManualDownloadUrl ?? "");
+        var button = await FindAsync<Button>(b => b.Command == content.OpenManualDownloadCommand && b.IsEffectivelyVisible);
+        Check("CurseForge：官网按钮可见且可用", button is { IsEnabled: true }, "");
+        Check("CurseForge：受限文件不显示应用内安装按钮", !window.GetVisualDescendants().OfType<Button>().Any(b => b.Command == content.InstallCommand && b.IsEffectivelyVisible), "");
+        await content.InstallCommand.ExecuteAsync(null);
+        Check("CurseForge：命令直接调用也只提示手动下载", !content.IsBusy && content.StatusInfo?.Key == "core.content.curseforge.manual_download", content.Status);
+        string? opened = null;
+        Check("CurseForge：网页入口使用文件页面", ContentViewModel.TryOpenProjectPage(content.ManualDownloadUrl, start => opened = start.FileName)
+            && opened == provider.File.ManualDownloadPage, opened ?? "");
+        window.Width = 1080;
+        window.Height = 700;
+        await ShotAsync("CurseForge手动下载");
+        await LayoutHereAsync("CurseForge手动下载");
+        content.Selected = null;
+        content.Detail = null;
+        content.ManualDownloadUrl = provider.File.ManualDownloadPage;
+        await content.SearchCommand.ExecuteAsync(null);
+        await Ui.FlushAsync();
+        Check("CurseForge：重新搜索清除导入遗留的官网入口", !content.HasManualDownload
+            && !window.GetVisualDescendants().OfType<Button>().Any(b => b.Command == content.OpenManualDownloadCommand && b.IsEffectivelyVisible), "");
+        content.TypeIndex = (int)ContentType.Modpack;
+        content.Selected = content.Results.FirstOrDefault();
+        await Ui.FlushAsync();
+        Check("CurseForge：整合包归档显示下载后导入的指引", window.GetVisualDescendants().OfType<TextBlock>()
+            .Any(t => t.IsEffectivelyVisible && t.Text == L.T("content.curseforge.manual_pack_archive_hint")), content.ManualDownloadHint);
+        L.SetLanguage("en");
+        await Ui.FlushAsync();
+        Check("CurseForge：手动下载指引随界面语言更新", window.GetVisualDescendants().OfType<TextBlock>()
+            .Any(t => t.IsEffectivelyVisible && t.Text == L.T("content.curseforge.manual_pack_archive_hint")), content.ManualDownloadHint);
+        L.SetLanguage("zh-Hans");
+        content.TypeIndex = (int)ContentType.Mod;
+        content.Selected = content.Results.FirstOrDefault();
+        await Ui.FlushAsync();
+        Check("CurseForge：切回模组恢复实例文件夹指引", window.GetVisualDescendants().OfType<TextBlock>()
+            .Any(t => t.IsEffectivelyVisible && t.Text == L.T("content.curseforge.manual_hint")), content.ManualDownloadHint);
+        var instance = Page<InstanceViewModel>();
+        main.CurrentPage = instance;
+        var oldPath = Path.Combine(reportDir, "manual-update-old.jar");
+        await File.WriteAllTextAsync(oldPath, "old");
+        var mod = new ModItem(new LocalMod(oldPath, "manual-update-old.jar", true, "example", "示例模组", "0.9", null, null, null))
+        {
+            Update = new ModUpdate(oldPath, provider.File),
+        };
+        await instance.UpdateModCommand.ExecuteAsync(mod);
+        var updateButton = await FindAsync<Button>(b => b.Command == instance.OpenManualDownloadCommand);
+        Check("CurseForge：实例更新保留原文件并显示官网按钮", instance.HasManualDownload && updateButton is { IsEnabled: true }
+            && await File.ReadAllTextAsync(oldPath) == "old", instance.Status);
+        await ShotAsync("CurseForge更新手动下载");
+        await LayoutHereAsync("CurseForge更新手动下载");
+        await CheckInstanceScrollReachabilityAsync(instance, oldPath);
+        main.CurrentPage = previous;
+        main.Pages[pageIndex] = originalContent;
+    }
+
+    /// <summary>长路径与手动下载提示同时存在时，验证真正能滚到并命中操作；不下载或启动游戏。</summary>
+    private async Task CheckInstanceScrollReachabilityAsync(InstanceViewModel instance, string fixturePath)
+    {
+        async Task<bool> ReachAsync(Control control)
+        {
+            control.BringIntoView();
+            await Ui.FlushAsync();
+            await Task.Delay(100);
+            var bounds = new Rect(control.TranslatePoint(default, window) ?? default, control.Bounds.Size);
+            var hit = window.InputHitTest(bounds.Center) as Visual;
+            return control.IsEffectivelyVisible && control.IsEffectivelyEnabled && new Rect(window.ClientSize).Contains(bounds)
+                && hit is not null && (ReferenceEquals(hit, control) || hit.GetVisualAncestors().Contains(control));
+        }
+
+        foreach (var language in new[] { "en", "ja" })
+        {
+            L.SetLanguage(language);
+            window.Width = 760;
+            window.Height = 440;
+            await Ui.FlushAsync();
+            var buttons = window.GetVisualDescendants().OfType<Button>().Where(b => b.IsEffectivelyVisible).ToList();
+            var manual = buttons.Single(b => b.Command == instance.OpenManualDownloadCommand);
+            Check($"实例窄窗 {language}：CurseForge 官网入口完整可见且中心命中", await ReachAsync(manual));
+            var browse = buttons.Where(b => b.Command == instance.BrowseOnlineCommand).ToList();
+            Check($"实例窄窗 {language}：模组工具栏可滚动到达且中心命中", await ReachAsync(browse.First()));
+            if (instance.BakeEnabled)
+                Check($"实例窄窗 {language}：烘焙入口可滚动到达且中心命中", await ReachAsync(buttons.Single(b => b.Command == instance.BakeNowCommand)));
+            Check($"实例窄窗 {language}：空态在线浏览可滚动到达且中心命中", browse.Count == 2 && await ReachAsync(browse.Last()));
+            await ShotAsync($"实例窄窗滚动命中-{language}");
+        }
+
+        var original = instance.Mods.ToArray();
+        try
+        {
+            L.SetLanguage("zh-Hans");
+            window.Width = 1280;
+            window.Height = 700;
+            instance.Mods.Clear();
+            for (var i = 0; i < 120; i++)
+                instance.Mods.Add(new ModItem(new LocalMod(fixturePath, $"scroll-{i}.jar", true, $"scroll-{i}", $"滚动测试 {i}", "1.0", null, null, null)));
+            await Ui.FlushAsync();
+            var list = window.GetVisualDescendants().OfType<ListBox>().Single(l => ReferenceEquals(l.ItemsSource, instance.Mods));
+            var realized = list.GetVisualDescendants().OfType<ListBoxItem>().Count();
+            Check("实例非空模组列表保持有限高度与虚拟化", list.Bounds.Height > 0 && list.Bounds.Height < window.ClientSize.Height
+                && realized > 0 && realized < instance.Mods.Count, $"120 项，仅实现 {realized} 行，列表高 {list.Bounds.Height:F0}");
+            list.ScrollIntoView(instance.Mods[^1]);
+            await Ui.FlushAsync();
+            Check("实例非空模组列表可滚到末项并实际命中", list.ContainerFromIndex(instance.Mods.Count - 1) is { } last && await ReachAsync(last));
+            list.ScrollIntoView(instance.Mods[0]);
+            await Ui.FlushAsync();
+            Check("实例非空模组列表可滚回首项并实际命中", list.ContainerFromIndex(0) is { } first && await ReachAsync(first));
+            await ShotAsync("实例模组列表有限视口");
+        }
+        finally
+        {
+            instance.Mods.Clear();
+            foreach (var item in original) instance.Mods.Add(item);
+        }
+    }
+
+    private sealed class ManualDownloadProvider : IContentProvider
+    {
+        public ContentSource Source => ContentSource.CurseForge;
+        public ContentFile File { get; } = new(ContentSource.CurseForge, "123", "456", "示例模组 1.0", "example.jar", "", null, 0,
+            ["1.21.1"], ["fabric"], "release", default, [])
+        {
+            ManualDownloadPage = "https://www.curseforge.com/projects/123",
+        };
+        public Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken ct = default) =>
+            Task.FromResult(new SearchResult([new ContentProject(Source, "123", "示例模组", "用于自检：作者关闭第三方下载。", null, null, 0, "https://www.curseforge.com/projects/123")], 1));
+        public Task<IReadOnlyList<ContentFile>> GetFilesAsync(string projectId, string? gameVersion, string? loader, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ContentFile>>([File]);
+        public Task<ContentProject> GetProjectAsync(string projectId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<ContentFile> GetFileAsync(string projectId, string fileId, CancellationToken ct = default) => Task.FromResult(File);
+    }
+
     private async Task ContentAutoLoadAsync()
     {
         var content = Page<ContentViewModel>();
@@ -170,6 +327,38 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         content.SourceIndex = 0;
         await WaitAsync(() => content.Results.Count > 0 || content.StatusInfo?.Kind == StatusKind.Error, 30);
         Check("切回 Modrinth 自动加载列表", content.Results.Count > 0, content.Status);
+
+        // 热门列表有多页：确认确实翻到了下一页，避免单个搜索结果让命令直接返回却算通过。
+        content.Selected = content.Results.FirstOrDefault();
+        await WaitAsync(() => content.SelectedFile is not null || content.StatusInfo?.Kind == StatusKind.Error, 30);
+        var detail = content.Detail;
+        var selectedFile = content.SelectedFile;
+        var firstPage = content.Results.FirstOrDefault();
+        var page = content.Page;
+        await content.NextPageCommand.ExecuteAsync(null);
+        Check("资源页下一页实际刷新列表（#22）", content.Page == page + 1 && content.Results.Count > 0
+            && firstPage?.Project.Id != content.Results.FirstOrDefault()?.Project.Id, content.Status);
+        Check("资源页翻页保留详情和文件选择（#22）", detail is not null && selectedFile is not null
+            && ReferenceEquals(content.Detail, detail) && ReferenceEquals(content.SelectedFile, selectedFile) && content.HasSelection);
+        await ShotAsync("资源页翻页保留详情");
+        await content.PreviousPageCommand.ExecuteAsync(null);
+        Check("资源页上一页保留详情（#22）", content.Page == page && ReferenceEquals(content.Detail, detail)
+            && firstPage?.Project.Id == content.Results.FirstOrDefault()?.Project.Id, content.Status);
+
+        content.Query = "Xaero's Minimap";
+        await content.SearchCommand.ExecuteAsync(null);
+        content.Selected = content.Results.FirstOrDefault(r => r.Title.Equals("Xaero's Minimap", StringComparison.OrdinalIgnoreCase));
+        await WaitAsync(() => content.SelectedFile is not null || content.StatusInfo?.Kind == StatusKind.Error, 30);
+        Check("Xaero 可选依赖显示且默认不勾（#22）", content.HasOptionalDependencies && content.OptionalDependencies.All(d => !d.Include), content.Status);
+        if (content.OptionalDependencies.FirstOrDefault() is { } optional)
+        {
+            var checkbox = await FindAsync<CheckBox>(b => ReferenceEquals(b.DataContext, optional));
+            checkbox?.SetCurrentValue(Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty, true);
+            Check("勾选可选依赖同步到安装选项（#22）", optional.Include);
+            await ShotAsync("资源页可选依赖");
+        }
+        content.Query = "";
+        await content.SearchCommand.ExecuteAsync(null);
         main.CurrentPage = previous;
     }
 
@@ -323,7 +512,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             var instance = Page<InstanceViewModel>();
             main.CurrentPage = instance;
             instance.SelectedId = id;
-            instance.TabIndex = 2;
+            instance.TabIndex = (int)InstanceTab.Worlds;
             if (!await WaitAsync(() => instance.Worlds.Count > 0, 20))
                 throw new InvalidOperationException("测试目录里没有已保存的世界");
             var world = instance.Worlds[0];
@@ -432,6 +621,34 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         var instance = Path.Combine(GameRoot(), "versions", FabricName, "mods");
         Check("安装模组到实例", Directory.Exists(instance) && Directory.EnumerateFiles(instance, "sodium*").Any(), content.Status);
 
+        // 1b.4：往原版实例装模组，安装前拦下；没选文件时安装按钮禁用。
+        var vanillaId = Environment.GetEnvironmentVariable("AMBER_SELFTEST_VERSION") ?? "1.21.1";
+        if (content.Instances.Contains(vanillaId))
+        {
+            var keepTarget = content.TargetInstance;
+            content.TargetInstance = vanillaId;
+            await WaitAsync(() => content.SelectedFile is not null || content.Files.Count == 0, 20);
+            if (content.SelectedFile is not null)
+            {
+                var vanillaMods = Path.Combine(GameRoot(), "versions", vanillaId, "mods");
+                var before = Directory.Exists(vanillaMods) ? Directory.GetFiles(vanillaMods).Length : 0;
+                await content.InstallCommand.ExecuteAsync(null);
+                var after = Directory.Exists(vanillaMods) ? Directory.GetFiles(vanillaMods).Length : 0;
+                Check("原版实例装模组前拦下", content.StatusInfo?.Key == "content.install.vanilla_blocked" && after == before, content.Status);
+            }
+            content.TargetInstance = keepTarget;
+        }
+        var keepFile = content.SelectedFile;
+        content.SelectedFile = null;
+        Check("没选文件时安装按钮禁用", !content.InstallCommand.CanExecute(null));
+        content.SelectedFile = keepFile;
+
+        // #22：翻页时右侧详情不收起。
+        var detail = content.Detail;
+        await content.NextPageCommand.ExecuteAsync(null);
+        Check("翻页时详情面板不收起（#22）", detail is not null && ReferenceEquals(content.Detail, detail) && content.HasSelection, content.Status);
+        await content.PreviousPageCommand.ExecuteAsync(null);
+
         content.SourceIndex = 1;
         await WaitAsync(() => content.Status.Contains("失败") || content.Results.Count > 0, 20);
         Check("没配 Key 时 CurseForge 给出明确提示", content.Status.Contains("API 密钥") || content.Results.Count > 0, content.Status);
@@ -446,7 +663,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         main.CurrentPage = instance;
         await WaitAsync(() => instance.Instances.Contains(FabricName), 5);
         instance.SelectedId = FabricName;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         await WaitAsync(() => instance.Mods.Count > 0, 10);
         var mod = instance.Mods.FirstOrDefault();
         Check("模组列表读到元数据", mod is { Name: "Sodium" }, mod?.Meta ?? "");
@@ -461,7 +678,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("检查模组更新", instance.Status.Contains("最新") || instance.Status.Contains("可更新"), instance.Status);
         await ShotAsync("模组页");
 
-        instance.TabIndex = 0;
+        instance.TabIndex = (int)InstanceTab.Settings;
         await Task.Delay(300);
         instance.MemoryModeIndex = 2;
         instance.MemoryText = "3072";
@@ -556,7 +773,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
     {
         var instance = Page<InstanceViewModel>();
         main.CurrentPage = instance;
-        instance.TabIndex = 0;
+        instance.TabIndex = (int)InstanceTab.Settings;
         await Task.Delay(300);
         instance.JvmArgs = "-XX:AmberBadOption=1";
         instance.SaveSettingsCommand.Execute(null);
@@ -595,7 +812,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
     {
         var instance = Page<InstanceViewModel>();
         instance.SelectedId = FabricName;
-        instance.TabIndex = 6;
+        instance.TabIndex = (int)InstanceTab.Servers;
         await Task.Delay(300);
         instance.NewServerName = "自检服务器";
         instance.NewServerAddress = "127.0.0.1:1";
@@ -615,7 +832,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         });
         instance.SelectedId = null;
         instance.SelectedId = FabricName;
-        instance.TabIndex = 2;
+        instance.TabIndex = (int)InstanceTab.Worlds;
         await WaitAsync(() => instance.Worlds.Count > 0, 5);
         Check("世界列表", instance.Worlds.Any(w => w.Name == "自检世界"));
         await instance.BackupWorldCommand.ExecuteAsync(instance.Worlds.First());
@@ -623,6 +840,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await ShotAsync("世界页");
         await LayoutHereAsync("世界页");
         await DatapacksAsync(instance, world);
+        await BrowseOnlineAndBackAsync(instance);
         instance.DeleteWorldCommand.Execute(instance.Worlds.First());
         var trashRoot = Path.Combine(GameRoot(), TrashService.TrashFolder);
         Check("删除世界进回收目录", !Directory.Exists(world) && TrashService.List(trashRoot).Any(e => Path.GetFullPath(e.OriginalPath) == Path.GetFullPath(world)), instance.Status);
@@ -633,20 +851,51 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         instance.DeleteWorldCommand.Execute(instance.Worlds.First(w => w.Name == "自检世界"));
         Check("再次删除世界", !Directory.Exists(world), instance.Status);
 
-        for (var tab = 3; tab <= 7; tab++)
+        foreach (var tab in new[] { InstanceTab.ResourcePacks, InstanceTab.ShaderPacks, InstanceTab.Servers, InstanceTab.Screenshots })
         {
-            instance.TabIndex = tab;
-            await ShotAsync($"实例标签{tab}");
+            instance.TabIndex = (int)tab;
+            await ShotAsync($"实例标签-{tab}");
         }
+    }
+
+    /// <summary>1b.3：光影 Tab 的【在线浏览…】跳到资源页（类型和实例选好、显示上下文条），【← 返回实例】回来时实例和 Tab 不变。</summary>
+    private async Task BrowseOnlineAndBackAsync(InstanceViewModel instance)
+    {
+        main.CurrentPage = instance;
+        instance.TabIndex = (int)InstanceTab.ShaderPacks;
+        var id = instance.SelectedId;
+        instance.BrowseOnlineCommand.Execute(Amber.Core.Content.ContentType.Shader);
+        var content = Page<ContentViewModel>();
+        Check("在线浏览光影跳到资源页", main.CurrentPage == content && content.TypeIndex == (int)Amber.Core.Content.ContentType.Shader
+                                    && content.TargetInstance == id && content.HasReturn, content.ReturnContext ?? "");
+        await ShotAsync("资源页-从实例跳来");
+        content.ReturnCommand.Execute(null);
+        Check("返回实例后实例和 Tab 不变", main.CurrentPage == instance && instance.SelectedId == id
+                                    && instance.TabIndex == (int)InstanceTab.ShaderPacks && !content.HasReturn);
+        content.TypeIndex = 0;
     }
 
     private async Task DatapacksAsync(InstanceViewModel instance, string world)
     {
         main.CurrentPage = instance;
-        instance.TabIndex = 2;
+        instance.TabIndex = (int)InstanceTab.Worlds;
         await WaitAsync(() => instance.Worlds.Count > 0, 5);
-        var button = await FindAsync<Button>(b => b.Content as string == "数据包" && b.DataContext is WorldItem w && w.World.Path == world);
-        Check("点世界的“数据包”", Press(button) && instance.HasDatapackWorld);
+        // “数据包”在世界行的 ⋯ 菜单里（改版规格 4.3）：找到这一行的 ⋯ 按钮，执行菜单项的命令。
+        var folder = Path.GetFileName(world);
+        var more = await FindAsync<Button>(b => b.Content as string == "⋯" && b.DataContext is WorldItem w && w.World.FolderName == folder);
+        // 像玩家一样打开菜单：菜单项的绑定在菜单打开后才生效，这也验证了 ⋯ 菜单里能找到页面的命令。
+        var flyout = more?.Flyout as MenuFlyout;
+        if (more is not null) Dispatcher.UIThread.Invoke(() => flyout?.ShowAt(more));
+        MenuItem? menuItem = null;
+        await WaitAsync(() => (menuItem = Dispatcher.UIThread.Invoke(() => flyout?.Items.OfType<MenuItem>().FirstOrDefault(m => ReferenceEquals(m.Command, instance.ShowDatapacksCommand)))) is not null, 5);
+        await ShotAsync("世界行更多菜单");
+        Dispatcher.UIThread.Invoke(() =>
+        {
+            menuItem?.Command?.Execute(menuItem.CommandParameter);
+            flyout?.Hide();
+        });
+        Check("点世界 ⋯ 菜单里的“数据包”", menuItem is not null && instance.HasDatapackWorld,
+            $"⋯ 按钮{(more is null ? "没找到" : "找到")}，菜单项{(menuItem is null ? "没找到" : "找到")}；列表：{string.Join(", ", instance.Worlds.Select(w => w.World.Path))}");
 
         var zip = Path.Combine(reportDir, "selftest-datapack.zip");
         File.Delete(zip);
@@ -691,7 +940,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         main.CurrentPage = instance;
         instance.SelectedId = null;
         instance.SelectedId = FabricName;
-        instance.TabIndex = 2;
+        instance.TabIndex = (int)InstanceTab.Worlds;
         await WaitAsync(() => instance.Worlds.Count > 0, 5);
     }
 
@@ -1086,7 +1335,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             return;
         }
         instance.SelectedId = neo;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         await WaitAsync(() => instance.Mods.Count > 0 && instance.Mods.All(m => m.Compat is not null || !m.Enabled), 15);
         var fabricMod = instance.Mods.FirstOrDefault(m => m.Mod.FileName.StartsWith("morechathistory", StringComparison.Ordinal));
         Check("模组兼容：Fabric 模组标为经 Connector 运行", fabricMod?.CompatText.Contains("Connector") == true, fabricMod?.CompatText ?? "没有这个模组");
@@ -1100,7 +1349,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         FakeJar(wrong, "META-INF/neoforge.mods.toml", "[[mods]]\nmodId=\"selftestold\"\n[[dependencies.selftestold]]\nmodId=\"minecraft\"\ntype=\"required\"\nversionRange=\"[1.20.4,1.20.5)\"\n");
         instance.SelectedId = null;
         instance.SelectedId = neo;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         await WaitAsync(() => instance.Mods.Any(m => m.Mod.FileName == "amber-selftest-wrongversion.jar" && m.Compat is not null), 15);
         var flagged = instance.Mods.FirstOrDefault(m => m.Mod.FileName == "amber-selftest-wrongversion.jar");
         Check("模组兼容：游戏版本不对的模组被标出", flagged is { HasCompatProblem: true, CanFindMatching: true } && flagged.CompatText.Contains("1.20.4"), flagged?.CompatText ?? "");
@@ -1111,12 +1360,12 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await FindMatchingAsync(instance, neo);
 
         instance.SelectedId = FabricName;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         var forgeOnFabric = Path.Combine(instance.ModsDir!, "amber-selftest-neoforge-only.jar");
         FakeJar(forgeOnFabric, "META-INF/neoforge.mods.toml", "[[mods]]\nmodId=\"selftestneo\"\n");
         instance.SelectedId = null;
         instance.SelectedId = FabricName;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         await WaitAsync(() => instance.Mods.Any(m => m.Mod.FileName == "amber-selftest-neoforge-only.jar" && m.Compat is not null), 15);
         var neoOnFabric = instance.Mods.FirstOrDefault(m => m.Mod.FileName == "amber-selftest-neoforge-only.jar");
         Check("模组兼容：Fabric 上的 NeoForge 模组说明没有兼容层", neoOnFabric?.CompatText.Contains("没有可靠的办法") == true, neoOnFabric?.CompatText ?? "");
@@ -1141,7 +1390,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         var before = Directory.GetFiles(instance.ModsDir!).ToHashSet();
         instance.SelectedId = null;
         instance.SelectedId = id;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         await WaitAsync(() => instance.Mods.Any(m => m.Mod.FileName == old.FileName && m.Compat is not null), 15);
         var item = instance.Mods.FirstOrDefault(m => m.Mod.FileName == old.FileName);
         Check("找对应版本：真实的旧版本模组被标出", item is { CanFindMatching: true }, item?.CompatText ?? "没读到");
@@ -1180,7 +1429,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         var instance = Page<InstanceViewModel>();
         main.CurrentPage = instance;
         instance.SelectedId = FabricName;
-        instance.TabIndex = 7;
+        instance.PrepareExport();
         await WaitAsync(() => instance.ExportOptions.Count > 0, 5);
         var pack = Path.Combine(reportDir, "e2e.mrpack");
         await instance.ExportPackAsync(pack);

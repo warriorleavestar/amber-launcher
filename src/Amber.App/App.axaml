@@ -133,6 +133,10 @@
       <Setter Property="Background" Value="{DynamicResource Danger}" />
       <Setter Property="Foreground" Value="{DynamicResource OnDanger}" />
     </Style>
+    <!-- ⋯ 菜单里的删除项：Danger 色文字 -->
+    <Style Selector="MenuItem.danger">
+      <Setter Property="Foreground" Value="{DynamicResource DangerText}" />
+    </Style>
     <!-- 禁用态统一：DisabledFill + DisabledText（不再用半透明琥珀） -->
     <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource DisabledFill}" />

@@ -17,6 +17,8 @@ public static class Toasts
     public static readonly TimeSpan UndoDuration = TimeSpan.FromSeconds(8);
 
     private static WindowNotificationManager? _manager;
+    private static Views.Controls.BakeNoticeState? _bakeHost;
+    internal static Views.Controls.BakeNoticeState? BakeNotices => _bakeHost;
 
     /// <summary>
     /// 一条撤销记录：Toast 上显示的名字，撤销时做的事（返回恢复后的名字，失败抛异常），
@@ -34,8 +36,30 @@ public static class Toasts
     /// <summary>撤销记录：最近的在最后。</summary>
     private static readonly List<UndoItem> History = [];
 
-    public static void Attach(Window window) =>
+    public static void Attach(Window window, Views.Controls.BakeNoticeState? bakeHost = null)
+    {
         _manager = new WindowNotificationManager(window) { Position = NotificationPosition.BottomRight, MaxItems = 3 };
+        _bakeHost?.Clear();
+        _bakeHost = bakeHost;
+        window.Closed += (_, _) =>
+        {
+            bakeHost?.Clear();
+            if (ReferenceEquals(_bakeHost, bakeHost)) _bakeHost = null;
+        };
+    }
+
+    /// <summary>烘焙后的早期崩溃使用启动状态框内的提示，保留八秒的重试机会。</summary>
+    public static void BakeFailed(string text, Action retry)
+    {
+        var host = _bakeHost;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (host is not null && ReferenceEquals(_bakeHost, host)) host.Show(text, retry);
+        });
+    }
+
+    /// <summary>开始处理新的启动请求后，旧失败提示不能遮住这次的状态或留下过时重试入口。</summary>
+    internal static void DismissBakeFailures() => _bakeHost?.Clear();
 
     public static void Show(string text, NotificationType type = NotificationType.Information) =>
         Dispatcher.UIThread.Post(() => _manager?.Show(new TextBlock { Text = text, TextWrapping = Avalonia.Media.TextWrapping.Wrap, MaxWidth = 360 }, type, TimeSpan.FromSeconds(4)));
