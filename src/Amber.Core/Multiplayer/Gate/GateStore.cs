@@ -247,6 +247,27 @@ public sealed class GateStore
         });
     }
 
+    /// <summary>撤销设备：给了指纹前缀只撤那一台，没给就撤这个用户名下的全部。返回撤了几台。</summary>
+    public int RevokeDevices(string name, string? fingerprintPrefix) => Mutate(s =>
+    {
+        var member = s.Member(name);
+        if (member is null) return 0;
+        var prefix = fingerprintPrefix?.Replace("-", "").ToUpperInvariant();
+        return member.Devices.RemoveAll(d => prefix is null || d.Fingerprint.Replace("-", "").StartsWith(prefix, StringComparison.Ordinal));
+    });
+
+    public bool SetDisabled(string name, bool disabled) => Mutate(s =>
+    {
+        var member = s.Member(name);
+        if (member is null) return false;
+        member.Disabled = disabled;
+        return true;
+    });
+
+    public bool RemoveMember(string name) => Mutate(s => s.Members.RemoveAll(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)) > 0);
+
+    public bool CancelInvite(string id) => Mutate(s => s.Invites.RemoveAll(i => i.Id == id) > 0);
+
     private GateState Load() =>
         JsonSerializer.Deserialize(File.ReadAllBytes(StatePath), GateJsonContext.Default.GateState) ?? new GateState();
 
