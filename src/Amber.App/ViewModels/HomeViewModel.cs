@@ -353,7 +353,7 @@ public sealed partial class HomeViewModel : PageViewModel
     }
 
     /// <summary>主按钮：缺什么去补什么；准备中是取消，运行中是退出游戏。</summary>
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task PrimaryAsync()
     {
         if (Latest is { } run)
@@ -628,7 +628,7 @@ public sealed partial class HomeViewModel : PageViewModel
         UpdateRunState();
         SetOwnedStatus(StatusMessage.Info("home.status.exiting", run.Id));
         bool closed;
-        try { closed = game.CloseMainWindow(); }
+        try { closed = GameLauncher.RequestExit(game); }
         catch (InvalidOperationException) { closed = false; }
         if (!closed)
         {

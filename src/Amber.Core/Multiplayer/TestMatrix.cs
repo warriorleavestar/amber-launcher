@@ -102,10 +102,21 @@ public static class TestMatrix
                 using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 limit.CancelAfter(stepTimeout);
                 var watch = Stopwatch.StartNew();
+                Task<MatrixResult>? running = null;
                 try
                 {
-                    result = await runner.RunAsync(step, limit.Token).WaitAsync(stepTimeout + TimeSpan.FromSeconds(5), ct);
+                    running = runner.RunAsync(step, limit.Token);
+                    result = await running.WaitAsync(stepTimeout + TimeSpan.FromSeconds(5), ct);
                     result = result with { Simulated = simulated };
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    // 外层取消不能抢先结束，让本步有时间收束探测任务并恢复路径。
+                    limit.Cancel();
+                    if (running is not null)
+                        try { await running.WaitAsync(TimeSpan.FromSeconds(5)); }
+                        catch (Exception) { } // 保留调用方的取消结果，清理仍受超时约束。
+                    throw;
                 }
                 catch (Exception e) when (e is OperationCanceledException or TimeoutException && !ct.IsCancellationRequested)
                 {

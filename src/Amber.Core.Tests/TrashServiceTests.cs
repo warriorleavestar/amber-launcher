@@ -15,7 +15,7 @@ public sealed class TrashServiceTests : IDisposable
 
     private string Write(string relative, string content = "x")
     {
-        var path = Path.Combine(_game, relative);
+        var path = Path.Combine(_game, relative.Replace('\\', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content);
         return path;
@@ -153,8 +153,9 @@ public sealed class TrashServiceTests : IDisposable
     [Fact]
     public void IsUnderComparesWholeSegments()
     {
-        Assert.True(TrashService.IsUnder(@"C:\Game", @"C:\Game\mods\a.jar"));
-        Assert.False(TrashService.IsUnder(@"C:\Game", @"C:\Game2\a.jar"));
-        Assert.False(TrashService.IsUnder(@"C:\Game", @"C:\Game"));
+        var root = Path.Combine(_game, "Game");
+        Assert.True(TrashService.IsUnder(root, Path.Combine(root, "mods", "a.jar")));
+        Assert.False(TrashService.IsUnder(root, Path.Combine(_game, "Game2", "a.jar")));
+        Assert.False(TrashService.IsUnder(root, root));
     }
 }

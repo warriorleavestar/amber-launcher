@@ -79,14 +79,15 @@ public sealed class SpeedTestServerTests
     [Fact]
     public async Task ProgressRefreshesIdleDeadlineAndReturnsExactAck()
     {
-        await using var server = new SpeedTestServer(0, SpeedTestServer.Limits.Default with { Idle = TimeSpan.FromMilliseconds(300) });
+        // 总传输时间超过一个空闲期限，同时给共享 CI 运行器留出调度余量。
+        await using var server = new SpeedTestServer(0, SpeedTestServer.Limits.Default with { Idle = TimeSpan.FromSeconds(1) });
         using var client = await Connect(server.BoundPort);
         var stream = client.GetStream();
         await stream.WriteAsync(BitConverter.GetBytes(8L));
         for (var i = 0; i < 8; i++)
         {
             await stream.WriteAsync(new byte[] { 42 });
-            await Task.Delay(80);
+            await Task.Delay(200);
         }
         Assert.Equal(8, await ReadAck(stream));
         await WaitCount(server, 0);
@@ -148,7 +149,7 @@ public sealed class SpeedTestServerTests
     public async Task BothListenersShareOneAtomicQuota()
     {
         await using var server = new SpeedTestServer(0);
-        var second = IPAddress.Parse("127.0.0.2");
+        var second = IPAddress.IPv6Loopback;
         Assert.True(server.TryAddListener(second));
         Assert.False(server.TryAddListener(second));
         var clients = new List<TcpClient>();
@@ -180,7 +181,7 @@ public sealed class SpeedTestServerTests
         await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(0, server.ActiveSessions);
         await Task.WhenAll(AssertClosed(header), AssertClosed(payload));
-        Assert.False(server.TryAddListener(IPAddress.Parse("127.0.0.2")));
+        Assert.False(server.TryAddListener(IPAddress.IPv6Loopback));
         await Assert.ThrowsAsync<SocketException>(() => Connect(server.BoundPort));
     }
 
@@ -188,7 +189,7 @@ public sealed class SpeedTestServerTests
     public async Task AddingListenerCannotRacePastDisposal()
     {
         await using var server = new SpeedTestServer(0);
-        var second = IPAddress.Parse("127.0.0.2");
+        var second = IPAddress.IPv6Loopback;
         await Task.WhenAll(Task.Run(() => server.TryAddListener(second)), Task.Run(async () => await server.DisposeAsync()));
         Assert.False(server.TryAddListener(second));
         await Assert.ThrowsAsync<SocketException>(() => Connect(server.BoundPort, second));
@@ -214,7 +215,7 @@ public sealed class SpeedTestServerTests
                 await AssertClosed(client);
             }
             catch (SocketException) { }
-            Assert.False(server.TryAddListener(IPAddress.Parse("127.0.0.2")));
+            Assert.False(server.TryAddListener(IPAddress.IPv6Loopback));
             await Assert.ThrowsAsync<SocketException>(() => Connect(server.BoundPort));
         }
     }

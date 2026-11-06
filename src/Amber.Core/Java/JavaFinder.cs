@@ -36,7 +36,11 @@ public static partial class JavaFinder
                 // Mojang 运行时多套一层：runtime/java-runtime-gamma/windows-x64/java-runtime-gamma
                 foreach (var nested in SafeEnumerate(sub))
                 foreach (var deeper in SafeEnumerate(nested))
+                {
                     homes.Add(deeper);
+                    if (OperatingSystem.IsMacOS())
+                        homes.Add(Path.Combine(deeper, "jre.bundle", "Contents", "Home"));
+                }
             }
         }
 
@@ -86,6 +90,8 @@ public static partial class JavaFinder
             yield return "/Library/Java/JavaVirtualMachines";
         }
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (OperatingSystem.IsMacOS())
+            yield return Path.Combine(home, "Library", "Java", "JavaVirtualMachines");
         yield return Path.Combine(home, ".jdks");
         if (gameRoot is not null) yield return Path.Combine(gameRoot, "runtime");
     }

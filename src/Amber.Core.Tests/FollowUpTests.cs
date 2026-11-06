@@ -21,7 +21,7 @@ public sealed class FollowUpTests : IDisposable
 
     private string Write(string relative, string content = "x")
     {
-        var path = Path.Combine(_game, relative);
+        var path = Path.Combine(_game, relative.Replace('\\', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content);
         return path;

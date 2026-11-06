@@ -4,6 +4,7 @@ using Amber.App.ViewModels;
 using Amber.Core.Diagnostics;
 using Amber.Core.Game;
 using Amber.Core.Localization;
+using Amber.Core.Launch;
 using Avalonia.Threading;
 
 namespace Amber.Core.Tests;
@@ -47,6 +48,79 @@ public sealed class RunLifecycleTests : IDisposable
     }
 
     private static void Drain() => Dispatcher.UIThread.RunJobs();
+
+    [Fact]
+    public async Task PrimaryButtonCanCancelWhileItIsPreparing()
+    {
+        using var server = new TestServer();
+        var url = server.Add("client", [1]);
+        server.Hang.Add("client");
+        Instance("A");
+        File.WriteAllText(Path.Combine(_game, "versions", "A", "A.jar"), "old");
+        File.WriteAllText(Path.Combine(_game, "versions", "A", "A.json"),
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                id = "A",
+                type = "release",
+                mainClass = "x",
+                libraries = Array.Empty<object>(),
+                downloads = new { client = new { url, size = 1 } },
+            }));
+        using var service = Service();
+        HomeViewModel? home = null;
+        Task? launching = null;
+        try
+        {
+            UiTestThread.Run(() =>
+            {
+                service.Accounts.AddOffline("TestPlayer");
+                home = new HomeViewModel(service, new LogViewModel());
+                home.SelectedVersion = "A";
+                home.SelectedAccount = home.Accounts.First();
+                launching = home.PrimaryCommand.ExecuteAsync(null);
+                Assert.False(launching.IsCompleted);
+                Assert.True(home.PrimaryCommand.CanExecute(null));
+                home.PrimaryCommand.Execute(null);
+            });
+        }
+        finally
+        {
+            UiTestThread.Run(() => home?.CancelCommand.Execute(null));
+            if (launching is not null)
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(5);
+                while (!launching.IsCompleted && DateTime.UtcNow < deadline)
+                {
+                    UiTestThread.Run(Drain);
+                    await Task.Delay(10);
+                }
+                await launching.WaitAsync(TimeSpan.FromSeconds(1));
+            }
+        }
+    }
+
+    [Fact]
+    public void MacExitRequestDoesNotForceTerminateHeadlessProcesses()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        using var process = Process.Start(new ProcessStartInfo("/bin/sleep")
+        {
+            ArgumentList =
+            {
+                "60",
+            },
+            UseShellExecute = false,
+        })!;
+        try
+        {
+            Assert.False(GameLauncher.RequestExit(process));
+            Assert.False(process.HasExited);
+        }
+        finally
+        {
+            if (!process.HasExited) process.Kill(true);
+        }
+    }
 
     // ---- 1：强制结束绑定到那一局 ----
 
