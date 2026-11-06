@@ -127,6 +127,29 @@ public sealed class MemberIdentityTests : IDisposable
         Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(path));
     }
 
+    /// <summary>非 Windows：包裹密钥文件长度不对（比如断电留下的空文件）时，换新身份并重建包裹密钥，不会每次启动都失败。</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void BrokenWrapKeyRecovers(bool identityExists)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        if (identityExists) using (MemberIdentity.LoadOrCreate(_dir)) { }
+        Directory.CreateDirectory(_dir);
+        File.WriteAllBytes(Path.Combine(_dir, "identity.wrap"), []);
+        byte[] recovered;
+        using (var identity = MemberIdentity.LoadOrCreate(_dir))
+        {
+            Assert.Equal(identityExists, identity.Warning is not null);
+            Assert.True(identity.IsPersisted);
+            recovered = identity.PublicKey;
+        }
+        Assert.Equal(32, new FileInfo(Path.Combine(_dir, "identity.wrap")).Length);
+        using var again = MemberIdentity.LoadOrCreate(_dir);
+        Assert.Null(again.Warning);
+        Assert.Equal(recovered, again.PublicKey);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_dir)) Directory.Delete(_dir, true);
