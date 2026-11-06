@@ -107,6 +107,32 @@ public class ModCompatTests : IDisposable
         Assert.False(ConnectorInstaller.IsInstalled([ModCompat.Read(Jar("f.jar", ("fabric.mod.json", FabricJson)))]));
     }
 
+    /// <summary>
+    /// 像 Fabric API：子模块按 fabric.mod.json 的 jars 字段内嵌在 META-INF/jars/ 里。
+    /// 依赖子模块（fabric-api-base 这类）的模组不该被误报缺前置（#22）。
+    /// </summary>
+    [Fact]
+    public void ReadsFabricNestedJars()
+    {
+        var inner = Path.Combine(_dir, "fabric-api-base.jar");
+        using (var zip = ZipFile.Open(inner, ZipArchiveMode.Create))
+        using (var w = new StreamWriter(zip.CreateEntry("fabric.mod.json").Open()))
+            w.Write("""{"schemaVersion":1,"id":"fabric-api-base","version":"0.4.0"}""");
+        var outer = Path.Combine(_dir, "fabric-api.jar");
+        using (var zip = ZipFile.Open(outer, ZipArchiveMode.Create))
+        {
+            using (var w = new StreamWriter(zip.CreateEntry("fabric.mod.json").Open()))
+                w.Write("""{"schemaVersion":1,"id":"fabric-api","provides":["fabric"],"jars":[{"file":"META-INF/jars/fabric-api-base-0.4.0.jar"}],"depends":{"fabricloader":">=0.15"}}""");
+            zip.CreateEntryFromFile(inner, "META-INF/jars/fabric-api-base-0.4.0.jar");
+        }
+        var api = ModCompat.Read(outer)!;
+        Assert.Equal(["fabric-api", "fabric", "fabric-api-base"], api.Ids);
+        Assert.Equal(["fabric"], api.Loaders);
+
+        var user = ModCompat.Read(Jar("u.jar", ("fabric.mod.json", """{"schemaVersion":1,"id":"usermod","depends":{"fabric-api-base":"*","fabric":"*"}}""")));
+        Assert.Equal(CompatLevel.Ok, ModCompat.Check(user, "fabric", "1.21.1", api.Ids.ToHashSet(), false).Level);
+    }
+
     /// <summary>同一个 jar 带 Fabric 和 Forge 两份元数据（很多多加载器模组这样做）：只按实例实际用的那份检查。</summary>
     [Fact]
     public void MultiLoaderJarUsesOnlyTheMatchingMetadata()

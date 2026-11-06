@@ -326,7 +326,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         if (!Directory.Exists(workDir)) return [];
         string[] skip = ["logs", "crash-reports", "natives", "saves", "screenshots", "versions", ".fabric", ".mixin.out", "downloads", ".cache", "debug", "backups", "local", InstanceSettings.FileName,
             // Amber 自己的回收目录、下载校验缓存和“安装未完成”标记不属于整合包。
-            TrashService.TrashFolder, ".amber-hashes", Amber.Core.Game.GameDirectory.IncompleteMarker];
+            TrashService.TrashFolder, ".amber-hashes", Amber.Core.Game.GameDirectory.IncompleteMarker,
+            // 烘焙记录（实验）里是本机的绝对路径和 classpath。
+            Bake.BakeService.StateFolder];
         var result = new List<string>();
         foreach (var path in Directory.EnumerateFileSystemEntries(workDir))
         {
@@ -432,6 +434,8 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
             var workDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(WorkDir));
             var inWorkDir = Path.GetRelativePath(workDir, full).Split(Path.DirectorySeparatorChar);
             if (inWorkDir.Any(s => s.Equals(Launch.InstanceSettings.FileName, StringComparison.OrdinalIgnoreCase))) return true;
+            // 烘焙记录（实验）决定启动用的主类、classpath 和 JVM 参数，只能由本机烘焙生成。
+            if (inWorkDir[0].Equals(Bake.BakeService.StateFolder, StringComparison.OrdinalIgnoreCase)) return true;
             var versionDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(VersionDir));
             if (!full.StartsWith(versionDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
             var first = Path.GetRelativePath(versionDir, full).Split(Path.DirectorySeparatorChar)[0].Normalize(System.Text.NormalizationForm.FormC);
@@ -489,7 +493,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         var normalized = relative.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
         var full = Path.GetFullPath(Path.Combine(rootFull, normalized));
         var prefix = rootFull.EndsWith(Path.DirectorySeparatorChar) ? rootFull : rootFull + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        // 区分大小写的文件系统上（Linux），“../INST/x” 会落到和 root 只差大小写的另一个目录：只在 Windows 上忽略大小写。
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!full.StartsWith(prefix, comparison))
             throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
         return full;
     }

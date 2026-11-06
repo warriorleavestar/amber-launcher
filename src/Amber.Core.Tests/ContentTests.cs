@@ -65,6 +65,15 @@ public class ContentTests : IDisposable
         Assert.Equal(Path.Combine(_root, "config", "a.txt"), ModpackService.SafeJoin(_root, "mods\\..\\config/a.txt"));
 
     [Fact]
+    public void SafeJoin_RejectsSiblingThatDiffersOnlyByCase()
+    {
+        // Windows 不区分大小写，那里“../INST”本来就是同一个目录。
+        if (OperatingSystem.IsWindows()) return;
+        var root = Path.Combine(_root, "inst");
+        Assert.Throws<InvalidDataException>(() => ModpackService.SafeJoin(root, "../INST/mods/a.jar"));
+    }
+
+    [Fact]
     public void SafeFileName_StripsDirectories()
     {
         Assert.Equal("a.jar", ContentInstaller.SafeFileName("../../a.jar"));
@@ -217,7 +226,7 @@ public class ContentTests : IDisposable
     public void ExportCandidates_SkipsGeneratedFolders()
     {
         var work = Path.Combine(_root, "inst");
-        foreach (var d in new[] { "mods", "config", "saves", "logs", "natives", "backups" }) Directory.CreateDirectory(Path.Combine(work, d));
+        foreach (var d in new[] { "mods", "config", "saves", "logs", "natives", "backups", ".amber-ul" }) Directory.CreateDirectory(Path.Combine(work, d));
         File.WriteAllText(Path.Combine(work, "options.txt"), "x");
         File.WriteAllText(Path.Combine(work, "inst.json"), "{}");
         File.WriteAllText(Path.Combine(work, "amber-instance.json"), "{}");

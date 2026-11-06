@@ -1,0 +1,23 @@
+name: 功能建议
+description: 新功能或者改进现有功能的想法
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 遇到的问题
+      description: 现在哪里不方便，在什么场景下遇到
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: 希望怎么改
+      description: 你设想的做法。有其他启动器的类似功能也可以提，但请描述效果，不用贴别家代码。
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充
+      description: 截图、示意图或其他想法

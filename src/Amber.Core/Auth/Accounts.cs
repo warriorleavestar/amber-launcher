@@ -174,7 +174,22 @@ public sealed class AccountStore(string path)
         }
         Directory.CreateDirectory(Path.GetDirectoryName(keyPath)!);
         var created = RandomNumberGenerator.GetBytes(32);
-        using (var stream = new FileStream(keyPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)) stream.Write(created);
+        // 创建时就只给当前用户读写：先建再 chmod 会留一段按 umask（通常 0644）可读的窗口。
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        try
+        {
+            using var stream = new FileStream(keyPath, options);
+            stream.Write(created);
+            stream.Flush(true);
+        }
+        catch (IOException) when (File.Exists(keyPath))
+        {
+            // 另一个启动器进程刚好先建好了密钥：用它的，不能各写各的。
+            var existing = File.ReadAllBytes(keyPath);
+            if (existing.Length != 32) throw new CryptographicException("Invalid account key");
+            return existing;
+        }
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         return created;

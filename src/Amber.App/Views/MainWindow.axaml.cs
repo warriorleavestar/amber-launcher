@@ -24,7 +24,7 @@ public partial class MainWindow : Window
         // 窗口打开后才知道标题栏有多高：Width/Height 是客户区，加上标题栏可能比屏幕的可用区域还高（底下被任务栏挡住）。
         Opened += (_, _) => FitFrameToScreen();
         Closing += (_, _) => RememberPlacement();
-        Toasts.Attach(this);
+        Toasts.Attach(this, new Controls.BakeNoticeState());
         DataContextChanged += (_, _) => AttachGameWindowBehaviour();
         // Esc 取消所有“再点一次确认”的按钮；Ctrl+Z 撤销最近一次删除（焦点在输入框里时留给输入框自己的撤销）。
         AddHandler(KeyDownEvent, (_, e) =>
@@ -50,7 +50,12 @@ public partial class MainWindow : Window
             Opened += async (_, _) => await new Spike(this, spikeDir).RunAsync();
         // 开发用：AMBER_SELFTEST=报告目录，走一遍端到端自检。
         if (Environment.GetEnvironmentVariable("AMBER_SELFTEST") is { Length: > 0 } report)
-            Opened += async (_, _) => await new SelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
+            Opened += async (_, _) =>
+            {
+                if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "bake-notice")
+                    await new BakeNoticeSelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
+                else await new SelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
+            };
         // 开发用：AMBER_MEASURE=文件，记下屏幕可用区域、缩放、窗口外框和客户区的大小，然后退出。
         if (Environment.GetEnvironmentVariable("AMBER_MEASURE") is { Length: > 0 } measure)
             Opened += (_, _) => Dispatcher.UIThread.Post(() =>

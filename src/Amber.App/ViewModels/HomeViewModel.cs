@@ -89,7 +89,16 @@ public sealed partial class HomeViewModel : PageViewModel
         public string WorkDir { get; set; } = "";
         /// <summary>运行期间有另一局游戏用着同一个游戏目录：latest.log、崩溃报告可能是那一局的。</summary>
         public bool SharedWorkDir { get; set; }
+        /// <summary>这一局用的是烘焙后的 classpath。</summary>
+        public bool Baked { get; set; }
     }
+
+    /// <summary>
+    /// 烘焙后的启动很可能是被烘焙弄崩的：用了烘焙、不是玩家结束的、非 0 退出，而且没看到进入主界面的标志
+    /// （只靠兜底时间“猜”进入的也算没进）。烘焙出错时已经按普通方式启动，这里管的是烘焙成功但游戏崩溃。
+    /// </summary>
+    internal static bool LikelyBakeCrash(bool baked, bool stoppedByUser, int exitCode, bool inGame, bool inGameGuessed) =>
+        baked && !stoppedByUser && exitCode != 0 && (!inGame || inGameGuessed);
 
     /// <summary>“强制结束”是给哪一局的（不是“最近一局”：期间可能又启动了一局）。</summary>
     private GameRun? _forceKillRun;
@@ -398,6 +407,7 @@ public sealed partial class HomeViewModel : PageViewModel
 
     private async Task RunAsync(LaunchRequest request, bool allowSecond = false)
     {
+        Toasts.DismissBakeFailures();
         if (_runs.Any(r => r.Game is null))
         {
             SetStatus(StatusMessage.Warning("home.status.preparing_other"));
@@ -474,6 +484,31 @@ public sealed partial class HomeViewModel : PageViewModel
 
             // 每局一份日志：多开时第二局不会清掉第一局的，也不会混在一起。
             run.Log = _log.BeginRun(id, DateTimeOffset.Now);
+            if (_service.Settings.ExperimentalBake && !request.SkipBake)
+            {
+                SetStatus(StatusMessage.Info("home.status.baking"));
+                try
+                {
+                    var (baked, reason) = await _service.PrepareBakeAsync(id, javaPath, new Progress<Amber.Core.Bake.BakeEvent>(e =>
+                    {
+                        Status = e.Message;
+                        if (e.IsProblem) _log.AddRaw(run.Log, "[Bake] " + e.Message);
+                    }), ct);
+                    if (reason.Length > 0) _log.AddRaw(run.Log, "[Bake] " + reason);
+                    if (baked is not null)
+                    {
+                        options = options with { Baked = baked };
+                        run.Baked = true;
+                    }
+                }
+                catch (Exception e) when (e is Amber.Core.Bake.BakeException or IOException or InvalidDataException or System.ComponentModel.Win32Exception or System.Text.Json.JsonException
+                                           or InvalidOperationException or FormatException)
+                {
+                    // 实验功能失败时不挡住游戏：记下原因，按普通方式启动。
+                    _log.AddRaw(run.Log, "[Bake] " + L.F("home.bake.fallback", e.Message));
+                    Toasts.Show(L.T("home.bake.fallback_toast"));
+                }
+            }
             if (!string.IsNullOrWhiteSpace(settings.PreLaunchCommand))
             {
                 SetStatus(StatusMessage.Info("home.status.pre_launch_command"));
@@ -525,6 +560,13 @@ public sealed partial class HomeViewModel : PageViewModel
                 lock (parser) input = CrashInputFor(run, SafePid(game));
                 var analysis = await Task.Run(() => input.Analyze());
                 RememberCrash(run, input, analysis);
+                if (LikelyBakeCrash(run.Baked, run.StoppedByUser, code, run.InGame, run.InGameGuessed))
+                {
+                    // 烘焙成功了但游戏没进主界面就退出：多半是加载器原型不兼容某个模组（比如 Sodium 的 Mixin），给一个不烘焙再启动的入口。
+                    _log.AddRaw(run.Log, "[Bake] " + L.T("home.bake.crashed"));
+                    var retry = request with { SkipBake = true };
+                    Toasts.BakeFailed(L.F("home.bake.crashed_toast", id), () => _service.RequestLaunch(retry));
+                }
                 // 玩家在别的页面：弹个 Toast，带“查看”。
                 if (!IsCurrent) Toasts.WithAction(L.F("home.crash.toast", id), L.T("home.crash.show"), () => NavigateHere?.Invoke());
                 GameCrashed?.Invoke(id);
