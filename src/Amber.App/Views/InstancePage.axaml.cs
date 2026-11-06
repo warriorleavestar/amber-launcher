@@ -59,16 +59,12 @@ public partial class InstancePage : UserControl
         if (files.Count > 0 && files[0].TryGetLocalPath() is { } path) vm.ImportWorld(path);
     }
 
-    private async void ExportPack_Click(object? sender, RoutedEventArgs e)
+    /// <summary>【⋯ 更多】→“导出整合包…”：按当前实例填好选项，打开对话框。</summary>
+    private async void ExportPackDialog_Click(object? sender, RoutedEventArgs e)
     {
-        if (Vm is not { } vm || Storage is not { } storage) return;
-        var file = await storage.SaveFilePickerAsync(new FilePickerSaveOptions
-        {
-            Title = L.T("instance.export.pack_picker"),
-            SuggestedFileName = $"{vm.ExportName}-{vm.ExportVersion}.{vm.ExportExtension}",
-            DefaultExtension = vm.ExportExtension,
-        });
-        if (file?.TryGetLocalPath() is { } path) await vm.ExportPackAsync(path);
+        if (Vm is not { HasInstance: true } vm || TopLevel.GetTopLevel(this) is not Window owner) return;
+        vm.PrepareExport();
+        await new ExportPackDialog { DataContext = vm }.ShowDialog(owner);
     }
 
     private async void ExportScript_Click(object? sender, RoutedEventArgs e)

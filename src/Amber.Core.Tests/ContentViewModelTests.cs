@@ -24,6 +24,37 @@ public sealed class ContentViewModelTests
     });
 
     [Fact]
+    public void BrowseForFromInstanceShowsContextAndReturnClearsIt() => Run((vm, modrinth, _) =>
+    {
+        vm.Activate();
+        var returned = 0;
+
+        vm.BrowseFor("missing-instance", ContentType.Shader, back: () => returned++);
+
+        Assert.Equal((int)ContentType.Shader, vm.TypeIndex);
+        Assert.True(vm.HasReturn);
+        Assert.Contains("missing-instance", vm.ReturnContext);
+        Assert.Equal(ContentType.Shader, modrinth.Queries[^1].Type);
+
+        vm.ReturnCommand.Execute(null);
+
+        Assert.Equal(1, returned);
+        Assert.False(vm.HasReturn);
+        Assert.Null(vm.ReturnContext);
+    });
+
+    [Fact]
+    public void BrowseForWithoutBackHidesContextBar() => Run((vm, _, _) =>
+    {
+        vm.Activate();
+        vm.BrowseFor("x", ContentType.ResourcePack, back: () => { });
+        vm.BrowseModsFor("x");
+
+        Assert.False(vm.HasReturn);
+        Assert.Equal((int)ContentType.Mod, vm.TypeIndex);
+    });
+
+    [Fact]
     public void ReturningToPagePreservesResultsPageAndSelection() => Run((vm, modrinth, _) =>
     {
         vm.Activate();

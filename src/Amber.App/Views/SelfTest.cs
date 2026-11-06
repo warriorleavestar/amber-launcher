@@ -315,7 +315,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             var instance = Page<InstanceViewModel>();
             main.CurrentPage = instance;
             instance.SelectedId = id;
-            instance.TabIndex = 2;
+            instance.TabIndex = (int)InstanceTab.Worlds;
             if (!await WaitAsync(() => instance.Worlds.Count > 0, 20))
                 throw new InvalidOperationException("测试目录里没有已保存的世界");
             var world = instance.Worlds[0];
@@ -438,7 +438,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         main.CurrentPage = instance;
         await WaitAsync(() => instance.Instances.Contains(FabricName), 5);
         instance.SelectedId = FabricName;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         await WaitAsync(() => instance.Mods.Count > 0, 10);
         var mod = instance.Mods.FirstOrDefault();
         Check("模组列表读到元数据", mod is { Name: "Sodium" }, mod?.Meta ?? "");
@@ -453,7 +453,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Check("检查模组更新", instance.Status.Contains("最新") || instance.Status.Contains("可更新"), instance.Status);
         await ShotAsync("模组页");
 
-        instance.TabIndex = 0;
+        instance.TabIndex = (int)InstanceTab.Settings;
         await Task.Delay(300);
         instance.MemoryModeIndex = 2;
         instance.MemoryText = "3072";
@@ -548,7 +548,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
     {
         var instance = Page<InstanceViewModel>();
         main.CurrentPage = instance;
-        instance.TabIndex = 0;
+        instance.TabIndex = (int)InstanceTab.Settings;
         await Task.Delay(300);
         instance.JvmArgs = "-XX:AmberBadOption=1";
         instance.SaveSettingsCommand.Execute(null);
@@ -587,7 +587,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
     {
         var instance = Page<InstanceViewModel>();
         instance.SelectedId = FabricName;
-        instance.TabIndex = 6;
+        instance.TabIndex = (int)InstanceTab.Servers;
         await Task.Delay(300);
         instance.NewServerName = "自检服务器";
         instance.NewServerAddress = "127.0.0.1:1";
@@ -607,7 +607,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         });
         instance.SelectedId = null;
         instance.SelectedId = FabricName;
-        instance.TabIndex = 2;
+        instance.TabIndex = (int)InstanceTab.Worlds;
         await WaitAsync(() => instance.Worlds.Count > 0, 5);
         Check("世界列表", instance.Worlds.Any(w => w.Name == "自检世界"));
         await instance.BackupWorldCommand.ExecuteAsync(instance.Worlds.First());
@@ -615,6 +615,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await ShotAsync("世界页");
         await LayoutHereAsync("世界页");
         await DatapacksAsync(instance, world);
+        await BrowseOnlineAndBackAsync(instance);
         instance.DeleteWorldCommand.Execute(instance.Worlds.First());
         var trashRoot = Path.Combine(GameRoot(), TrashService.TrashFolder);
         Check("删除世界进回收目录", !Directory.Exists(world) && TrashService.List(trashRoot).Any(e => Path.GetFullPath(e.OriginalPath) == Path.GetFullPath(world)), instance.Status);
@@ -625,20 +626,51 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         instance.DeleteWorldCommand.Execute(instance.Worlds.First(w => w.Name == "自检世界"));
         Check("再次删除世界", !Directory.Exists(world), instance.Status);
 
-        for (var tab = 3; tab <= 7; tab++)
+        foreach (var tab in new[] { InstanceTab.ResourcePacks, InstanceTab.ShaderPacks, InstanceTab.Servers, InstanceTab.Screenshots })
         {
-            instance.TabIndex = tab;
-            await ShotAsync($"实例标签{tab}");
+            instance.TabIndex = (int)tab;
+            await ShotAsync($"实例标签-{tab}");
         }
+    }
+
+    /// <summary>1b.3：光影 Tab 的【在线浏览…】跳到资源页（类型和实例选好、显示上下文条），【← 返回实例】回来时实例和 Tab 不变。</summary>
+    private async Task BrowseOnlineAndBackAsync(InstanceViewModel instance)
+    {
+        main.CurrentPage = instance;
+        instance.TabIndex = (int)InstanceTab.ShaderPacks;
+        var id = instance.SelectedId;
+        instance.BrowseOnlineCommand.Execute(Amber.Core.Content.ContentType.Shader);
+        var content = Page<ContentViewModel>();
+        Check("在线浏览光影跳到资源页", main.CurrentPage == content && content.TypeIndex == (int)Amber.Core.Content.ContentType.Shader
+                                    && content.TargetInstance == id && content.HasReturn, content.ReturnContext ?? "");
+        await ShotAsync("资源页-从实例跳来");
+        content.ReturnCommand.Execute(null);
+        Check("返回实例后实例和 Tab 不变", main.CurrentPage == instance && instance.SelectedId == id
+                                    && instance.TabIndex == (int)InstanceTab.ShaderPacks && !content.HasReturn);
+        content.TypeIndex = 0;
     }
 
     private async Task DatapacksAsync(InstanceViewModel instance, string world)
     {
         main.CurrentPage = instance;
-        instance.TabIndex = 2;
+        instance.TabIndex = (int)InstanceTab.Worlds;
         await WaitAsync(() => instance.Worlds.Count > 0, 5);
-        var button = await FindAsync<Button>(b => b.Content as string == "数据包" && b.DataContext is WorldItem w && w.World.Path == world);
-        Check("点世界的“数据包”", Press(button) && instance.HasDatapackWorld);
+        // “数据包”在世界行的 ⋯ 菜单里（改版规格 4.3）：找到这一行的 ⋯ 按钮，执行菜单项的命令。
+        var folder = Path.GetFileName(world);
+        var more = await FindAsync<Button>(b => b.Content as string == "⋯" && b.DataContext is WorldItem w && w.World.FolderName == folder);
+        // 像玩家一样打开菜单：菜单项的绑定在菜单打开后才生效，这也验证了 ⋯ 菜单里能找到页面的命令。
+        var flyout = more?.Flyout as MenuFlyout;
+        if (more is not null) Dispatcher.UIThread.Invoke(() => flyout?.ShowAt(more));
+        MenuItem? menuItem = null;
+        await WaitAsync(() => (menuItem = Dispatcher.UIThread.Invoke(() => flyout?.Items.OfType<MenuItem>().FirstOrDefault(m => ReferenceEquals(m.Command, instance.ShowDatapacksCommand)))) is not null, 5);
+        await ShotAsync("世界行更多菜单");
+        Dispatcher.UIThread.Invoke(() =>
+        {
+            menuItem?.Command?.Execute(menuItem.CommandParameter);
+            flyout?.Hide();
+        });
+        Check("点世界 ⋯ 菜单里的“数据包”", menuItem is not null && instance.HasDatapackWorld,
+            $"⋯ 按钮{(more is null ? "没找到" : "找到")}，菜单项{(menuItem is null ? "没找到" : "找到")}；列表：{string.Join(", ", instance.Worlds.Select(w => w.World.Path))}");
 
         var zip = Path.Combine(reportDir, "selftest-datapack.zip");
         File.Delete(zip);
@@ -683,7 +715,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         main.CurrentPage = instance;
         instance.SelectedId = null;
         instance.SelectedId = FabricName;
-        instance.TabIndex = 2;
+        instance.TabIndex = (int)InstanceTab.Worlds;
         await WaitAsync(() => instance.Worlds.Count > 0, 5);
     }
 
@@ -1036,7 +1068,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             return;
         }
         instance.SelectedId = neo;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         await WaitAsync(() => instance.Mods.Count > 0 && instance.Mods.All(m => m.Compat is not null || !m.Enabled), 15);
         var fabricMod = instance.Mods.FirstOrDefault(m => m.Mod.FileName.StartsWith("morechathistory", StringComparison.Ordinal));
         Check("模组兼容：Fabric 模组标为经 Connector 运行", fabricMod?.CompatText.Contains("Connector") == true, fabricMod?.CompatText ?? "没有这个模组");
@@ -1050,7 +1082,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         FakeJar(wrong, "META-INF/neoforge.mods.toml", "[[mods]]\nmodId=\"selftestold\"\n[[dependencies.selftestold]]\nmodId=\"minecraft\"\ntype=\"required\"\nversionRange=\"[1.20.4,1.20.5)\"\n");
         instance.SelectedId = null;
         instance.SelectedId = neo;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         await WaitAsync(() => instance.Mods.Any(m => m.Mod.FileName == "amber-selftest-wrongversion.jar" && m.Compat is not null), 15);
         var flagged = instance.Mods.FirstOrDefault(m => m.Mod.FileName == "amber-selftest-wrongversion.jar");
         Check("模组兼容：游戏版本不对的模组被标出", flagged is { HasCompatProblem: true, CanFindMatching: true } && flagged.CompatText.Contains("1.20.4"), flagged?.CompatText ?? "");
@@ -1061,12 +1093,12 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         await FindMatchingAsync(instance, neo);
 
         instance.SelectedId = FabricName;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         var forgeOnFabric = Path.Combine(instance.ModsDir!, "amber-selftest-neoforge-only.jar");
         FakeJar(forgeOnFabric, "META-INF/neoforge.mods.toml", "[[mods]]\nmodId=\"selftestneo\"\n");
         instance.SelectedId = null;
         instance.SelectedId = FabricName;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         await WaitAsync(() => instance.Mods.Any(m => m.Mod.FileName == "amber-selftest-neoforge-only.jar" && m.Compat is not null), 15);
         var neoOnFabric = instance.Mods.FirstOrDefault(m => m.Mod.FileName == "amber-selftest-neoforge-only.jar");
         Check("模组兼容：Fabric 上的 NeoForge 模组说明没有兼容层", neoOnFabric?.CompatText.Contains("没有可靠的办法") == true, neoOnFabric?.CompatText ?? "");
@@ -1091,7 +1123,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         var before = Directory.GetFiles(instance.ModsDir!).ToHashSet();
         instance.SelectedId = null;
         instance.SelectedId = id;
-        instance.TabIndex = 1;
+        instance.TabIndex = (int)InstanceTab.Mods;
         await WaitAsync(() => instance.Mods.Any(m => m.Mod.FileName == old.FileName && m.Compat is not null), 15);
         var item = instance.Mods.FirstOrDefault(m => m.Mod.FileName == old.FileName);
         Check("找对应版本：真实的旧版本模组被标出", item is { CanFindMatching: true }, item?.CompatText ?? "没读到");
@@ -1130,7 +1162,7 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         var instance = Page<InstanceViewModel>();
         main.CurrentPage = instance;
         instance.SelectedId = FabricName;
-        instance.TabIndex = 7;
+        instance.PrepareExport();
         await WaitAsync(() => instance.ExportOptions.Count > 0, 5);
         var pack = Path.Combine(reportDir, "e2e.mrpack");
         await instance.ExportPackAsync(pack);

@@ -216,24 +216,55 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     }
 
     /// <summary>从别的页面跳来给某个实例找模组（比如安装成功卡上的“添加模组”）。</summary>
-    public void BrowseModsFor(string instanceId)
+    public void BrowseModsFor(string instanceId) => BrowseFor(instanceId, ContentType.Mod);
+
+    /// <summary>
+    /// 从别的页面跳来给某个实例找某类内容（实例页的【在线浏览…】、安装成功卡）。
+    /// back 不为 null 时页面顶部显示上下文条和【← 返回实例】（改版规格 4.5）。
+    /// </summary>
+    public void BrowseFor(string instanceId, ContentType type, Action? back = null)
     {
         if (Instances.Contains(instanceId)) TargetInstance = instanceId;
+        // 之前搜别的内容留下的关键词对这次没意义，清掉后显示热门。
         Query = "";
-        if (TypeIndex != (int)ContentType.Mod) TypeIndex = (int)ContentType.Mod;
+        if (TypeIndex != (int)type) TypeIndex = (int)type;
         else _ = SearchFromStart();
+        SetReturn(instanceId, type, back);
     }
 
     /// <summary>从实例页的“下载数据包”跳过来：切到数据包，并选好版本和世界。</summary>
-    public void BrowseDatapacksFor(string instanceId, string worldFolder)
+    public void BrowseDatapacksFor(string instanceId, string worldFolder, Action? back = null)
     {
-        if (Instances.Contains(instanceId)) TargetInstance = instanceId;
-        // 之前搜模组留下的关键词对数据包没意义，清掉后显示热门数据包。
-        Query = "";
-        if (TypeIndex != (int)ContentType.Datapack) TypeIndex = (int)ContentType.Datapack;
-        else _ = SearchFromStart();
+        BrowseFor(instanceId, ContentType.Datapack, back);
         RefreshWorlds();
         TargetWorld = Worlds.FirstOrDefault(w => w.World.FolderName == worldFolder) ?? TargetWorld;
+    }
+
+    // ---- 从实例页跳来时的上下文条 ----
+
+    private Action? _back;
+
+    /// <summary>上下文条的文字，比如“正在给 1.21.1-Fabric 找光影”；没有上下文时为 null。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasReturn))]
+    public partial string? ReturnContext { get; set; }
+
+    public bool HasReturn => ReturnContext is not null;
+
+    private void SetReturn(string instanceId, ContentType type, Action? back)
+    {
+        _back = back;
+        ReturnContext = back is null ? null : L.F("content.context.for_instance", instanceId, TypeNames[(int)type].Label);
+    }
+
+    /// <summary>【← 返回实例】：回到实例页（实例和 Tab 都不变），上下文条收起。</summary>
+    [RelayCommand]
+    private void Return()
+    {
+        var back = _back;
+        _back = null;
+        ReturnContext = null;
+        back?.Invoke();
     }
 
     private Task SearchFromStart()

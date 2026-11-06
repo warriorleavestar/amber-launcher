@@ -1236,5 +1236,18 @@
   "core.mp.matrix.requestexpired": "房主的测试请求太久没有回答，已作废",
   "multiplayer.matrix.request_gone": "这次测试请求已经作废（超时或房主已取消），没有开始测试",
   "content.modpack.installed_skipped": "整合包已安装为 {0}。跳过了 {1} 个可疑或属于启动器的文件：{2}",
-  "core.auth.external.insecure_saved": "外置账号 {0} 的服务器地址是 http，密码和令牌会明文传输，已不能用来启动。请到账号页删掉它，再用 https 地址重新添加。"
+  "core.auth.external.insecure_saved": "外置账号 {0} 的服务器地址是 http，密码和令牌会明文传输，已不能用来启动。请到账号页删掉它，再用 https 地址重新添加。",
+  "instance.launch": "▶ 启动",
+  "instance.more": "⋯ 更多",
+  "instance.new": "+ 新建实例",
+  "instance.files.repair": "修复游戏文件",
+  "instance.export.script_menu": "导出启动脚本…",
+  "instance.export.pack_menu": "导出整合包…",
+  "instance.browse_online": "在线浏览…",
+  "common.more_actions": "更多操作",
+  "instance.resourcepacks.empty": "还没有资源包。点“在线浏览…”找一个，或者点“添加文件”。",
+  "instance.shaderpacks.empty": "还没有光影。点“在线浏览…”找一个，或者点“添加文件”。",
+  "instance.export.dialog_title": "导出整合包",
+  "content.context.for_instance": "正在给 {0} 找{1}",
+  "content.context.back": "← 返回实例"
 }

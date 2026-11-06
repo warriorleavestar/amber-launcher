@@ -1236,5 +1236,18 @@
   "core.mp.matrix.requestexpired": "ホストのテスト要求に長時間応答がなかったため、無効になりました",
   "multiplayer.matrix.request_gone": "このテスト要求は無効になりました（タイムアウトまたはホストが取り消し）。テストは開始されていません",
   "content.modpack.installed_skipped": "Modpack を {0} としてインストールしました。不審なファイルまたはランチャー専用のファイル {1} 件をスキップしました：{2}",
-  "core.auth.external.insecure_saved": "外部アカウント {0} のサーバーは http のため、パスワードとトークンが暗号化されずに送信されます。起動には使用できません。アカウントページで削除し、https のアドレスで追加し直してください。"
+  "core.auth.external.insecure_saved": "外部アカウント {0} のサーバーは http のため、パスワードとトークンが暗号化されずに送信されます。起動には使用できません。アカウントページで削除し、https のアドレスで追加し直してください。",
+  "instance.launch": "▶ 起動",
+  "instance.more": "⋯ その他",
+  "instance.new": "+ 新規インスタンス",
+  "instance.files.repair": "ゲームファイルを修復",
+  "instance.export.script_menu": "起動スクリプトをエクスポート…",
+  "instance.export.pack_menu": "MODパックをエクスポート…",
+  "instance.browse_online": "オンラインで探す…",
+  "common.more_actions": "その他の操作",
+  "instance.resourcepacks.empty": "リソースパックはまだありません。「オンラインで探す…」で見つけるか、「ファイルを追加」を選んでください。",
+  "instance.shaderpacks.empty": "シェーダーパックはまだありません。「オンラインで探す…」で見つけるか、「ファイルを追加」を選んでください。",
+  "instance.export.dialog_title": "MODパックをエクスポート",
+  "content.context.for_instance": "{0} 用の{1}を探しています",
+  "content.context.back": "← インスタンスに戻る"
 }

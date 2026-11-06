@@ -12,6 +12,13 @@
     </Grid>
 
     <StackPanel Grid.Row="1" Spacing="8" Margin="0,0,0,10">
+      <!-- 从实例页【在线浏览…】跳来：写明在给哪个实例找什么，带【← 返回实例】（改版规格 4.5）。 -->
+      <Border Classes="callout info" IsVisible="{Binding HasReturn}">
+        <DockPanel>
+          <Button DockPanel.Dock="Right" Classes="ghost" Content="{l:T content.context.back}" Command="{Binding ReturnCommand}" VerticalAlignment="Center" Margin="8,0,0,0" />
+          <TextBlock Text="{Binding ReturnContext}" TextWrapping="Wrap" VerticalAlignment="Center" />
+        </DockPanel>
+      </Border>
       <Grid ColumnDefinitions="Auto,Auto,*,Auto">
         <ComboBox ItemsSource="{Binding TypeNames}" SelectedIndex="{Binding TypeIndex}" MinWidth="96" />
         <ComboBox Grid.Column="1" ItemsSource="{Binding SourceNames}" SelectedIndex="{Binding SourceIndex}" MinWidth="120" Margin="8,0,0,0" />

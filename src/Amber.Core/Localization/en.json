@@ -1267,5 +1267,18 @@
   "core.mp.matrix.requestexpired": "The host's test request went unanswered for too long and has expired",
   "multiplayer.matrix.request_gone": "This test request is no longer valid (it timed out or the host cancelled it). No test was started.",
   "content.modpack.installed_skipped": "Modpack installed as {0}. Skipped {1} suspicious or launcher-owned files: {2}",
-  "core.auth.external.insecure_saved": "The external account {0} uses an http server, which would send its password and tokens unencrypted, so it can no longer be used to launch. Remove it on the Accounts page and add it again with an https address."
+  "core.auth.external.insecure_saved": "The external account {0} uses an http server, which would send its password and tokens unencrypted, so it can no longer be used to launch. Remove it on the Accounts page and add it again with an https address.",
+  "instance.launch": "▶ Play",
+  "instance.more": "⋯ More",
+  "instance.new": "+ New instance",
+  "instance.files.repair": "Repair game files",
+  "instance.export.script_menu": "Export launch script…",
+  "instance.export.pack_menu": "Export modpack…",
+  "instance.browse_online": "Browse online…",
+  "common.more_actions": "More actions",
+  "instance.resourcepacks.empty": "No resource packs yet. Select “Browse online…” to find one, or “Add files”.",
+  "instance.shaderpacks.empty": "No shader packs yet. Select “Browse online…” to find one, or “Add files”.",
+  "instance.export.dialog_title": "Export modpack",
+  "content.context.for_instance": "Finding {1} for {0}",
+  "content.context.back": "← Back to instance"
 }

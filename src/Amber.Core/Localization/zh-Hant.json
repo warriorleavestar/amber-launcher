@@ -1236,5 +1236,18 @@
   "core.mp.matrix.requestexpired": "房主的測試請求太久沒有回答，已作廢",
   "multiplayer.matrix.request_gone": "這次測試請求已經作廢（逾時或房主已取消），沒有開始測試",
   "content.modpack.installed_skipped": "整合包已安裝為 {0}。略過了 {1} 個可疑或屬於啟動器的檔案：{2}",
-  "core.auth.external.insecure_saved": "外置帳號 {0} 的伺服器位址是 http，密碼和權杖會明文傳輸，已不能用來啟動。請到帳號頁刪除它，再用 https 位址重新新增。"
+  "core.auth.external.insecure_saved": "外置帳號 {0} 的伺服器位址是 http，密碼和權杖會明文傳輸，已不能用來啟動。請到帳號頁刪除它，再用 https 位址重新新增。",
+  "instance.launch": "▶ 啟動",
+  "instance.more": "⋯ 更多",
+  "instance.new": "+ 新增實例",
+  "instance.files.repair": "修復遊戲檔案",
+  "instance.export.script_menu": "匯出啟動指令碼…",
+  "instance.export.pack_menu": "匯出模組包…",
+  "instance.browse_online": "線上瀏覽…",
+  "common.more_actions": "更多操作",
+  "instance.resourcepacks.empty": "還沒有資源包。點選「線上瀏覽…」尋找，或點選「新增檔案」。",
+  "instance.shaderpacks.empty": "還沒有光影。點選「線上瀏覽…」尋找，或點選「新增檔案」。",
+  "instance.export.dialog_title": "匯出模組包",
+  "content.context.for_instance": "正在為 {0} 尋找{1}",
+  "content.context.back": "← 返回實例"
 }
