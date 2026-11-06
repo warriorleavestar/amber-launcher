@@ -177,7 +177,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     /// <summary>共享目录提示上的【去开启】：切到设置 Tab。</summary>
     [RelayCommand]
-    private void GoToIsolationSetting() => TabIndex = 0;
+    private void GoToIsolationSetting() => TabIndex = (int)InstanceTab.Settings;
 
     public bool HasInstance => Current is not null;
 
@@ -193,6 +193,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial double Progress { get; set; }
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasManualDownload))]
+    public partial string? ManualDownloadUrl { get; set; }
+
+    public bool HasManualDownload => !string.IsNullOrWhiteSpace(ManualDownloadUrl);
+
     public InstanceViewModel(LauncherService service)
     {
         _service = service;
@@ -201,7 +207,7 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         {
             if (e.PropertyName != nameof(IsCurrent) || IsCurrent) return;
             CancelServerQueries();
-            _loadedTabs.Remove(6);
+            _loadedTabs.Remove((int)InstanceTab.Servers);
         };
         service.InstalledVersionsChanged += () => Dispatcher.UIThread.Post(RefreshInstances);
         // 别处（启动页、后台装完的安装）换了当前实例：这一页正在用、或者正在做事（导出、导入世界、改设置）时不跟着换，
@@ -239,17 +245,25 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     {
         // 回到这一页：跟上别处换的当前实例。
         if (_active && !IsBusy && _service.CurrentInstance is { } id && Instances.Contains(id) && id != SelectedId) SelectedId = id;
-        if (TabIndex == 6) LoadTab(6);
+        if (TabIndex == (int)InstanceTab.Servers) LoadTab((int)InstanceTab.Servers);
     }
 
     partial void OnCurrentChanged(GameInstance? value)
     {
         CancelServerQueries();
-        _loadedTabs.Remove(6);
+        _loadedTabs.Remove((int)InstanceTab.Servers);
     }
 
-    partial void OnSelectedIdChanged(string? value)
+    /// <summary>每个实例上次打开的 Tab（只在这次运行里记着）。</summary>
+    private readonly Dictionary<string, int> _lastTab = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>没打开过的实例默认看哪个 Tab：有加载器看模组，原版看世界（改版规格 4.3）。</summary>
+    internal static InstanceTab DefaultTab(GameInstance instance) => instance.Loader is null ? InstanceTab.Worlds : InstanceTab.Mods;
+
+    partial void OnSelectedIdChanged(string? oldValue, string? newValue)
     {
+        if (oldValue is not null && Current?.Id == oldValue) _lastTab[oldValue] = TabIndex;
+        var value = newValue;
         _service.SetCurrentInstance(value);
         _loadedTabs.Clear();
         Current = null;
@@ -259,6 +273,8 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         {
             Current = _service.GetInstance(value);
             UpdateInfoText();
+            var tab = _lastTab.TryGetValue(value, out var last) ? last : (int)DefaultTab(Current);
+            if (TabIndex != tab) TabIndex = tab; // OnTabIndexChanged 会加载这个 Tab
             LoadTab(TabIndex);
         }
         catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException)
@@ -269,10 +285,10 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     partial void OnTabIndexChanged(int value)
     {
-        if (value != 6)
+        if (value != (int)InstanceTab.Servers)
         {
             CancelServerQueries();
-            _loadedTabs.Remove(6);
+            _loadedTabs.Remove((int)InstanceTab.Servers);
         }
         LoadTab(value);
     }
@@ -280,16 +296,15 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private void LoadTab(int tab)
     {
         if (Current is null || !_loadedTabs.Add(tab)) return;
-        switch (tab)
+        switch ((InstanceTab)tab)
         {
-            case 0: LoadSettings(); break;
-            case 1: LoadMods(); break;
-            case 2: LoadWorlds(); break;
-            case 3: LoadScreenshots(); break;
-            case 4: LoadPackFiles(ResourcePacks, Current.ResourcePacksDir); break;
-            case 5: LoadPackFiles(ShaderPacks, Current.ShaderPacksDir); break;
-            case 6: LoadServers(); break;
-            case 7: LoadExport(); break;
+            case InstanceTab.Settings: LoadSettings(); break;
+            case InstanceTab.Mods: LoadMods(); break;
+            case InstanceTab.Worlds: LoadWorlds(); break;
+            case InstanceTab.Screenshots: LoadScreenshots(); break;
+            case InstanceTab.ResourcePacks: LoadPackFiles(ResourcePacks, Current.ResourcePacksDir); break;
+            case InstanceTab.ShaderPacks: LoadPackFiles(ShaderPacks, Current.ShaderPacksDir); break;
+            case InstanceTab.Servers: LoadServers(); break;
         }
     }
 
@@ -337,9 +352,11 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private async Task CompleteFilesAsync()
     {
         if (Current is not { } c) return;
+        // 补全全程用开始时的游戏目录：中途换了目录也只补这个实例所在的目录。
+        var ctx = _service.Context;
         await RunWorkAsync(async ct =>
         {
-            await _service.Installer.CompleteAsync(c.Id, new Progress<InstallProgress>(p =>
+            await ctx.Installer.CompleteAsync(c.Id, new Progress<InstallProgress>(p =>
             {
                 if (p.Stage == InstallStage.Files && p.Files.TotalFiles > 0)
                 {
@@ -349,8 +366,8 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
             }), ct);
             await Ui.FlushAsync();
             // 补全完了，上次没装完的实例也就装完了。
-            _service.MarkInstallFinished(c.Id);
-            UpdateInfoText();
+            _service.MarkInstallFinished(ctx, c.Id);
+            if (_service.IsCurrentDirectory(ctx)) UpdateInfoText();
             SetStatus(StatusMessage.Success("instance.files.complete_status"));
         });
     }
@@ -478,15 +495,16 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private async Task BakeNowAsync()
     {
         if (Current is not { } c) return;
+        var ctx = _service.Context;
         await RunWorkAsync(async ct =>
         {
             SetStatus(StatusMessage.Info("home.status.checking_game_files"));
-            await _service.Installer.CompleteAsync(c.Id, null, ct);
-            var settings = _service.EffectiveSettings(c.Id);
-            var version = _service.Directory.ResolveVersion(c.Id);
-            var java = !string.IsNullOrEmpty(settings.JavaPath) && File.Exists(settings.JavaPath) ? settings.JavaPath : await _service.Java.ForVersionAsync(version, ct);
+            await ctx.Installer.CompleteAsync(c.Id, null, ct);
+            var settings = _service.EffectiveSettings(ctx, c.Id);
+            var version = ctx.Directory.ResolveVersion(c.Id);
+            var java = !string.IsNullOrEmpty(settings.JavaPath) && File.Exists(settings.JavaPath) ? settings.JavaPath : await ctx.Java.ForVersionAsync(version, ct);
             SetStatus(StatusMessage.Info("home.status.baking"));
-            var (baked, reason) = await _service.PrepareBakeAsync(c.Id, java, new Progress<Amber.Core.Bake.BakeEvent>(e => Status = e.Message), ct);
+            var (baked, reason) = await _service.PrepareBakeAsync(ctx, c.Id, java, new Progress<Amber.Core.Bake.BakeEvent>(e => Status = e.Message), ct);
             SetStatus(baked is null ? StatusMessage.Warning("instance.bake.skipped", reason) : StatusMessage.Success("instance.bake.done", reason));
         });
     }
@@ -505,11 +523,17 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private async Task RunWorkAsync(Func<CancellationToken, Task> work)
     {
         if (IsBusy) return;
+        ManualDownloadUrl = null;
         IsBusy = true;
         _workCts = new CancellationTokenSource();
         try
         {
             await work(_workCts.Token);
+        }
+        catch (ManualDownloadRequiredException e)
+        {
+            ManualDownloadUrl = e.File.ManualDownloadPage;
+            SetStatus(StatusMessage.Warning("core.content.curseforge.manual_download", e.File.DisplayName, ManualDownloadUrl ?? ""));
         }
         catch (OperationCanceledException) when (_workCts.IsCancellationRequested)
         {
@@ -532,6 +556,20 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     [RelayCommand]
     private void CancelWork() => _workCts?.Cancel();
+
+    [RelayCommand]
+    private void OpenManualDownload()
+    {
+        try
+        {
+            if (!ContentViewModel.TryOpenProjectPage(ManualDownloadUrl, start => Process.Start(start)))
+                SetStatus(StatusMessage.Error("tools.download.invalid_url"));
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            SetStatus(StatusMessage.Failure("content.project.open_failed", e, ErrorText.Of(e)));
+        }
+    }
 
     // ---- 设置 ----
 
@@ -1062,9 +1100,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private void LoadServers()
     {
         CancelServerQueries();
-        if (Current is not { } current || !IsCurrent || TabIndex != 6)
+        if (Current is not { } current || !IsCurrent || TabIndex != (int)InstanceTab.Servers)
         {
-            _loadedTabs.Remove(6);
+            _loadedTabs.Remove((int)InstanceTab.Servers);
             return;
         }
         Servers.Clear();
@@ -1169,6 +1207,31 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     /// <summary>主窗口设置：启动请求发出后切回启动页。</summary>
     public Action? NavigateHome { get; set; }
 
+    /// <summary>主窗口设置：右上角【+ 新建实例】。</summary>
+    public Action? NavigateToNewInstance { get; set; }
+
+    /// <summary>主窗口设置：【在线浏览…】跳到资源页，参数是实例和内容类型。</summary>
+    public Action<string, ContentType>? NavigateToContent { get; set; }
+
+    /// <summary>顶部【▶ 启动】：启动当前实例，切回启动页看进度。</summary>
+    [RelayCommand]
+    private void Launch()
+    {
+        if (Current is not { } c) return;
+        _service.RequestLaunch(new LaunchRequest(c.Id));
+        NavigateHome?.Invoke();
+    }
+
+    [RelayCommand]
+    private void NewInstance() => NavigateToNewInstance?.Invoke();
+
+    /// <summary>模组、资源包、光影 Tab 的【在线浏览…】：到资源页给这个实例找对应的内容。</summary>
+    [RelayCommand]
+    private void BrowseOnline(ContentType type)
+    {
+        if (Current is { } c) NavigateToContent?.Invoke(c.Id, type);
+    }
+
     // ---- 导出 ----
 
     public OptionItem[] ExportFormats { get; } = OptionItem.Keys("instance.export.modrinth", "instance.export.curseforge");
@@ -1178,9 +1241,10 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty] public partial string ExportName { get; set; } = "";
     [ObservableProperty] public partial string ExportVersion { get; set; } = "1.0.0";
 
-    private void LoadExport()
+    /// <summary>打开“导出整合包”对话框前调用：按当前实例填好名字和可选内容。</summary>
+    public void PrepareExport()
     {
-        var c = Current!;
+        if (Current is not { } c) return;
         ExportName = c.Id;
         ExportOptions.Clear();
         foreach (var name in ModpackService.ExportCandidates(c.WorkDir))
@@ -1210,7 +1274,19 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     public async Task RunSnapshotDemoAsync()
     {
-        TabIndex = 1;
+        TabIndex = (int)InstanceTab.Mods;
         await Task.Delay(1500);
     }
+}
+
+/// <summary>实例页的 Tab，顺序就是界面上的顺序（改版规格 4.3）。“导出整合包”移进了【⋯ 更多】菜单。</summary>
+public enum InstanceTab
+{
+    Mods,
+    Worlds,
+    ResourcePacks,
+    ShaderPacks,
+    Servers,
+    Screenshots,
+    Settings,
 }

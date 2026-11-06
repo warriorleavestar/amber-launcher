@@ -1,0 +1,35 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:l="using:Amber.App.Localization"
+        xmlns:vm="using:Amber.App.ViewModels"
+        x:Class="Amber.App.Views.ExportPackDialog"
+        x:DataType="vm:InstanceViewModel"
+        Title="{l:T instance.export.dialog_title}"
+        Width="460" SizeToContent="Height" MaxHeight="640" CanResize="False"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{DynamicResource PageBg}">
+  <!-- 原来“导出”Tab 的内容，移进【⋯ 更多】→“导出整合包…”打开的对话框（改版规格 4.3）。 -->
+  <DockPanel Margin="20">
+    <TextBlock DockPanel.Dock="Top" Classes="h2" Text="{l:T instance.export.pack_heading}" Margin="0,0,0,12" />
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,16,0,0">
+      <Button x:Name="CancelButton" Classes="secondary" Content="{l:T common.close}" IsCancel="True" Click="Close_Click" />
+      <Button Classes="primary" Content="{l:T instance.export.save}" Click="Save_Click" />
+    </StackPanel>
+    <ScrollViewer>
+      <StackPanel Spacing="8">
+        <ComboBox ItemsSource="{Binding ExportFormats}" SelectedIndex="{Binding ExportFormatIndex}" MinWidth="220" />
+        <TextBox Text="{Binding ExportName}" PlaceholderText="{l:T instance.export.name_hint}" />
+        <TextBox Text="{Binding ExportVersion}" PlaceholderText="{l:T instance.export.version_hint}" />
+        <TextBlock Text="{l:T instance.export.include}" FontWeight="SemiBold" Margin="0,6,0,0" />
+        <ItemsControl ItemsSource="{Binding ExportOptions}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="vm:ExportOption">
+              <CheckBox Content="{Binding Name}" IsChecked="{Binding Include}" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock Classes="hint" Text="{l:T instance.export.hint}" TextWrapping="Wrap" />
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

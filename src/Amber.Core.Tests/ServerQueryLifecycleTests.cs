@@ -51,7 +51,7 @@ public sealed class ServerQueryLifecycleTests : IDisposable
                 {
                     Current = new GameInstance("old", "1.21", null, null, _root),
                     IsCurrent = true,
-                    TabIndex = 6,
+                    TabIndex = (int)InstanceTab.Servers,
                 };
                 oldItems = vm.Servers.ToArray();
                 Assert.Equal(20, oldItems.Length);
@@ -73,7 +73,7 @@ public sealed class ServerQueryLifecycleTests : IDisposable
                     case "refresh": vm!.RefreshServersCommand.Execute(null); break;
                     case "instance": vm!.Current = new GameInstance("new", "1.21", null, null, currentDir); break;
                     case "page": vm!.IsCurrent = false; break;
-                    case "tab": vm!.TabIndex = 1; break;
+                    case "tab": vm!.TabIndex = (int)InstanceTab.Mods; break;
                 }
             });
 
@@ -88,7 +88,7 @@ public sealed class ServerQueryLifecycleTests : IDisposable
                 {
                     case "instance": vm!.RefreshServersCommand.Execute(null); break;
                     case "page": vm!.IsCurrent = true; break;
-                    case "tab": vm!.TabIndex = 6; break;
+                    case "tab": vm!.TabIndex = (int)InstanceTab.Servers; break;
                 }
                 Assert.Single(vm!.Servers);
                 Assert.DoesNotContain(vm.Servers[0], oldItems);

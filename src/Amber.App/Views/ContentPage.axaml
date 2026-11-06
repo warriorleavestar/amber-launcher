@@ -11,13 +11,35 @@
       <Button Grid.Column="1" Content="{l:T content.modpack.import}" Click="ImportPack_Click" VerticalAlignment="Top" />
     </Grid>
 
-    <StackPanel Grid.Row="1" Spacing="8" Margin="0,0,0,10">
-      <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+    <StackPanel x:Name="ContentFilters" Grid.Row="1" Spacing="8" Margin="0,0,0,10">
+      <!-- 从实例页【在线浏览…】跳来：写明在给哪个实例找什么，带【← 返回实例】（改版规格 4.5）。 -->
+      <Border Classes="callout info" IsVisible="{Binding HasReturn}">
+        <DockPanel>
+          <Button DockPanel.Dock="Right" Classes="ghost" Content="{l:T content.context.back}" Command="{Binding ReturnCommand}" VerticalAlignment="Center" Margin="8,0,0,0" />
+          <TextBlock Text="{Binding ReturnContext}" TextWrapping="Wrap" VerticalAlignment="Center" />
+        </DockPanel>
+      </Border>
+      <!-- 先占用可用宽度再限宽，避免左对齐时搜索框缩到占位文字大小。 -->
+      <Grid x:Name="SearchToolbar" ColumnDefinitions="Auto,Auto,*,Auto" Width="{Binding #ContentFilters.Bounds.Width}" MaxWidth="1000" HorizontalAlignment="Left">
         <ComboBox ItemsSource="{Binding TypeNames}" SelectedIndex="{Binding TypeIndex}" MinWidth="96" />
-        <ComboBox Grid.Column="1" ItemsSource="{Binding SourceNames}" SelectedIndex="{Binding SourceIndex}" MinWidth="120" Margin="8,0,0,0" />
-        <TextBox Grid.Column="2" Text="{Binding Query}" PlaceholderText="{l:T common.search_placeholder}" Margin="8,0" KeyDown="Query_KeyDown" />
+        <ComboBox Grid.Column="1" ItemsSource="{Binding SourceOptions}" SelectedIndex="{Binding SourceIndex}" MinWidth="120" Margin="8,0,0,0">
+          <!-- 没配 CurseForge 密钥时 CurseForge 置灰（改版规格 4.5），说明和【去填写】在下面一行。 -->
+          <ComboBox.Styles>
+            <Style Selector="ComboBoxItem" x:DataType="vm:SourceOption">
+              <Setter Property="IsEnabled" Value="{Binding Enabled}" />
+            </Style>
+          </ComboBox.Styles>
+          <ComboBox.ItemTemplate>
+            <DataTemplate DataType="vm:SourceOption"><TextBlock Text="{Binding Label}" /></DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+        <TextBox x:Name="SearchInput" Grid.Column="2" Text="{Binding Query}" PlaceholderText="{l:T common.search_placeholder}" Margin="8,0" KeyDown="Query_KeyDown" />
         <Button Grid.Column="3" Classes="primary" Content="{l:T common.search}" Command="{Binding SearchCommand}" Padding="20,6" />
       </Grid>
+      <WrapPanel ItemSpacing="8" LineSpacing="4" IsVisible="{Binding !HasCurseForge}">
+        <TextBlock Classes="hint" Text="{l:T content.source.needs_key}" VerticalAlignment="Center" TextWrapping="Wrap" />
+        <Button Classes="ghost" Content="{l:T content.source.go_fill}" Command="{Binding GoToCurseForgeKeyCommand}" />
+      </WrapPanel>
       <WrapPanel ItemSpacing="10" LineSpacing="4" IsVisible="{Binding !IsModpack}">
         <TextBlock Text="{l:T content.install.target}" VerticalAlignment="Center" />
         <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding TargetInstance}" MinWidth="260" />
@@ -45,8 +67,36 @@
       <Border Classes="card" Padding="6">
         <Grid RowDefinitions="*,Auto">
           <TextBlock Classes="hint" Text="{l:T content.search.empty_hint}" HorizontalAlignment="Center" VerticalAlignment="Center"
-                     IsVisible="{Binding !Results.Count}" />
-          <ListBox ItemsSource="{Binding Results}" SelectedItem="{Binding Selected}" Background="Transparent">
+                     IsVisible="{Binding IsIdle}" />
+          <!-- 三种状态（改版规格 4.5）：加载中（超过 10 秒补一句并给【切换来源】）、空结果（一键取消过滤）、出错（【重试】）。 -->
+          <StackPanel Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460" IsVisible="{Binding IsSearching}">
+            <ProgressBar IsIndeterminate="True" Width="180" HorizontalAlignment="Center" />
+            <TextBlock Classes="hint" Text="{Binding SearchingText}" TextAlignment="Center" TextWrapping="Wrap" />
+            <StackPanel Spacing="6" IsVisible="{Binding IsSlow}">
+              <TextBlock Text="{Binding SlowText}" TextAlignment="Center" TextWrapping="Wrap" />
+              <Button HorizontalAlignment="Center" Content="{l:T content.search.switch_source}" Command="{Binding SwitchSourceCommand}" IsVisible="{Binding CanSwitchSource}" />
+            </StackPanel>
+          </StackPanel>
+          <StackPanel Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460" IsVisible="{Binding IsEmptyResult}">
+            <TextBlock Text="{Binding EmptyText}" TextAlignment="Center" TextWrapping="Wrap" />
+            <Button x:Name="ShowAllVersionsButton" HorizontalAlignment="Center" Content="{l:T content.search.show_all}" Command="{Binding ShowAllVersionsCommand}" IsVisible="{Binding CanShowAllVersions}" />
+          </StackPanel>
+          <StackPanel Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460" IsVisible="{Binding IsSearchError}">
+            <TextBlock Text="{Binding SearchError}" Foreground="{DynamicResource DangerText}" TextAlignment="Center" TextWrapping="Wrap" />
+            <WrapPanel HorizontalAlignment="Center" ItemSpacing="8">
+              <Button x:Name="RetrySearchButton" Classes="primary" Content="{l:T common.retry}" Command="{Binding SearchCommand}" />
+              <Button Content="{l:T content.search.switch_source}" Command="{Binding SwitchSourceCommand}" IsVisible="{Binding CanSwitchSource}" />
+            </WrapPanel>
+          </StackPanel>
+          <StackPanel Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460" IsVisible="{Binding NeedsCurseForgeKey}">
+            <TextBlock Text="{l:T content.source.needs_key}" TextAlignment="Center" TextWrapping="Wrap" />
+            <WrapPanel HorizontalAlignment="Center" ItemSpacing="8">
+              <Button x:Name="ConfigureCurseForgeButton" Classes="primary" Content="{l:T content.source.go_fill}" Command="{Binding GoToCurseForgeKeyCommand}" />
+              <Button x:Name="UseModrinthButton" Content="{l:T content.source.use_modrinth}" Command="{Binding UseModrinthCommand}" />
+            </WrapPanel>
+          </StackPanel>
+          <!-- 空列表仍会接走鼠标点击；没有结果时隐藏，让下层状态卡按钮可用。 -->
+          <ListBox x:Name="ResultsList" IsVisible="{Binding !!Results.Count}" ItemsSource="{Binding Results}" SelectedItem="{Binding Selected}" Background="Transparent">
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:ProjectItem">
                 <Grid ColumnDefinitions="48,*" Margin="2">
@@ -55,7 +105,7 @@
                   </Border>
                   <StackPanel Grid.Column="1" Margin="10,0,0,0">
                     <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
-                    <TextBlock Text="{Binding Summary}" Classes="hint" MaxLines="2" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Summary}" />
+                    <TextBlock x:Name="ProjectSummary" Text="{Binding Summary}" Classes="hint" MaxWidth="640" HorizontalAlignment="Left" MaxLines="2" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Summary}" />
                     <TextBlock Text="{Binding Meta}" Classes="caption" />
                   </StackPanel>
                 </Grid>
@@ -72,7 +122,7 @@
       <Border Grid.Column="1" Classes="card" Width="320" Margin="14,0,0,14" IsVisible="{Binding HasSelection}">
         <Grid RowDefinitions="Auto,Auto,*,Auto">
           <StackPanel Spacing="4">
-            <TextBlock Classes="h2" Text="{Binding Selected.Title}" Margin="0" TextWrapping="Wrap" />
+            <TextBlock Classes="h2" Text="{Binding Detail.Title}" Margin="0" TextWrapping="Wrap" />
             <Button Content="{l:T content.project.open_page}" Command="{Binding OpenPageCommand}" Padding="8,3" FontSize="12" />
           </StackPanel>
           <CheckBox Grid.Row="1" Content="{l:T common.show_unstable}" IsChecked="{Binding ShowUnstable}" Margin="0,6" />
@@ -91,7 +141,24 @@
               <TextBlock Text="{l:T content.modpack.instance_name}" />
               <TextBox Text="{Binding NewInstanceName}" />
             </StackPanel>
-            <Button Classes="primary" Content="{l:T content.install.selected}" Command="{Binding InstallCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+            <!-- 可选依赖（#22）：默认不勾，勾上的和主文件一起装。 -->
+            <StackPanel Spacing="2" IsVisible="{Binding HasOptionalDependencies}">
+              <TextBlock Text="{l:T content.install.optional_heading}" FontWeight="SemiBold" />
+              <ItemsControl ItemsSource="{Binding OptionalDependencies}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="vm:OptionalDependencyItem">
+                    <CheckBox IsChecked="{Binding Include}">
+                      <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                    </CheckBox>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+            <Border Classes="callout warning" IsVisible="{Binding HasLoaderNote}">
+              <TextBlock Text="{Binding LoaderNote}" TextWrapping="Wrap" />
+            </Border>
+            <Button Classes="primary" Content="{l:T content.install.selected}" Command="{Binding InstallCommand}" IsVisible="{Binding !SelectedRequiresManualDownload}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                    ToolTip.Tip="{Binding InstallHint}" ToolTip.ShowOnDisabled="True" />
           </StackPanel>
         </Grid>
       </Border>
@@ -101,6 +168,10 @@
       <Grid ColumnDefinitions="*,Auto">
         <StackPanel Spacing="6" VerticalAlignment="Center">
           <c:StatusBar Message="{Binding StatusInfo}" />
+          <StackPanel Spacing="6" IsVisible="{Binding HasManualDownload}" MaxWidth="640" HorizontalAlignment="Left">
+            <TextBlock Text="{Binding ManualDownloadHint}" TextWrapping="Wrap" />
+            <Button Content="{l:T content.curseforge.open_manual}" Command="{Binding OpenManualDownloadCommand}" />
+          </StackPanel>
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
         </StackPanel>
         <Button Grid.Column="1" Content="{l:T common.cancel}" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />

@@ -408,6 +408,11 @@ public sealed partial class HomeViewModel : PageViewModel
     private async Task RunAsync(LaunchRequest request, bool allowSecond = false)
     {
         Toasts.DismissBakeFailures();
+        if (!BakeRetryDirectoryMatches(_service, request))
+        {
+            Toasts.Show(L.T("home.bake.retry_directory_changed"));
+            return;
+        }
         if (_runs.Any(r => r.Game is null))
         {
             SetStatus(StatusMessage.Warning("home.status.preparing_other"));
@@ -429,7 +434,9 @@ public sealed partial class HomeViewModel : PageViewModel
         SelectedVersion = id;
         _service.SetCurrentInstance(id);
 
-        var workDir = _service.WorkDirFor(id);
+        // 这一局全程用开始时的游戏目录、安装器和 Java：准备到一半换了目录，也还是在原目录里补文件、启动。
+        var ctx = request.ExpectedContext ?? _service.Context;
+        var workDir = _service.WorkDirFor(ctx, id);
         var run = new GameRun(id) { WorkDir = workDir };
         _runs.Add(run);
         Crash = null;
@@ -440,11 +447,11 @@ public sealed partial class HomeViewModel : PageViewModel
         var gameStarted = false;
         try
         {
-            var settings = _service.EffectiveSettings(id);
-            try { await RepairIfBrokenAsync(id, ct); }
-            finally { _service.NotifyInstanceStateChanged(id); }
+            var settings = _service.EffectiveSettings(ctx, id);
+            try { await RepairIfBrokenAsync(ctx, id, ct); }
+            finally { if (_service.IsCurrentDirectory(ctx)) _service.NotifyInstanceStateChanged(id); }
             SetStatus(StatusMessage.Info("home.status.checking_game_files"));
-            await _service.Installer.CompleteAsync(id, new Progress<InstallProgress>(p =>
+            await ctx.Installer.CompleteAsync(id, new Progress<InstallProgress>(p =>
             {
                 if (p.Stage == InstallStage.Files && p.Files.TotalFiles > 0)
                 {
@@ -455,23 +462,23 @@ public sealed partial class HomeViewModel : PageViewModel
                 }
             }), ct);
             // 文件补齐了：上次没装完的实例到这里也算装完了。
-            try { _service.MarkInstallFinished(id); }
+            try { _service.MarkInstallFinished(ctx, id); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
 
-            var version = _service.Directory.ResolveVersion(id);
+            var version = ctx.Directory.ResolveVersion(id);
             var javaPath = settings.JavaPath;
             if (string.IsNullOrEmpty(javaPath) || !File.Exists(javaPath))
             {
                 Progress = 0;
-                _service.Java.Status = new Progress<string>(text => Status = text);
-                javaPath = await _service.Java.ForVersionAsync(version, ct);
+                ctx.Java.Status = new Progress<string>(text => Status = text);
+                javaPath = await ctx.Java.ForVersionAsync(version, ct);
             }
 
             Progress = 0;
             SetStatus(StatusMessage.Info("home.status.verifying_account"));
             var session = await _service.Accounts.ResolveAsync(account, ct);
 
-            var options = _service.BaseLaunchOptions(id, javaPath, session.Session, session.ExtraJvmArgs) with
+            var options = _service.BaseLaunchOptions(ctx, id, javaPath, session.Session, session.ExtraJvmArgs) with
             {
                 JoinServer = request.JoinServer ?? settings.JoinServer,
                 JoinWorld = request.JoinWorld,
@@ -489,7 +496,7 @@ public sealed partial class HomeViewModel : PageViewModel
                 SetStatus(StatusMessage.Info("home.status.baking"));
                 try
                 {
-                    var (baked, reason) = await _service.PrepareBakeAsync(id, javaPath, new Progress<Amber.Core.Bake.BakeEvent>(e =>
+                    var (baked, reason) = await _service.PrepareBakeAsync(ctx, id, javaPath, new Progress<Amber.Core.Bake.BakeEvent>(e =>
                     {
                         Status = e.Message;
                         if (e.IsProblem) _log.AddRaw(run.Log, "[Bake] " + e.Message);
@@ -520,7 +527,7 @@ public sealed partial class HomeViewModel : PageViewModel
             _log.AddRaw(run.Log, L.F("home.log.launch", id, javaPath, memory));
             foreach (var note in _proxyNotes) _log.AddRaw(run.Log, note);
             var parser = new GameLogParser();
-            var launcher = new GameLauncher(_service.Directory);
+            var launcher = new GameLauncher(ctx.Directory);
             using var running = _service.MarkRunning(workDir);
             var game = launcher.Launch(options, line =>
             {
@@ -564,8 +571,11 @@ public sealed partial class HomeViewModel : PageViewModel
                 {
                     // 烘焙成功了但游戏没进主界面就退出：多半是加载器原型不兼容某个模组（比如 Sodium 的 Mixin），给一个不烘焙再启动的入口。
                     _log.AddRaw(run.Log, "[Bake] " + L.T("home.bake.crashed"));
-                    var retry = request with { SkipBake = true };
-                    Toasts.BakeFailed(L.F("home.bake.crashed_toast", id), () => _service.RequestLaunch(retry));
+                    Toasts.BakeFailed(L.F("home.bake.crashed_toast", id), () =>
+                    {
+                        if (!TryRequestBakeRetry(_service, ctx, request))
+                            Toasts.Show(L.T("home.bake.retry_directory_changed"));
+                    });
                 }
                 // 玩家在别的页面：弹个 Toast，带“查看”。
                 if (!IsCurrent) Toasts.WithAction(L.F("home.crash.toast", id), L.T("home.crash.show"), () => NavigateHere?.Invoke());
@@ -594,20 +604,31 @@ public sealed partial class HomeViewModel : PageViewModel
         }
     }
 
-    /// <summary>“已损坏”最常见的原因是继承的原版不在了：补装原版。版本文件本身坏了修不了，提示重新安装。</summary>
-    private async Task RepairIfBrokenAsync(string id, CancellationToken ct)
+    /// <summary>旧目录的烘焙提示不能启动新目录里同名的实例；只跳过这一次烘焙。</summary>
+    internal static bool TryRequestBakeRetry(LauncherService service, GameContext ctx, LaunchRequest request)
     {
-        if (_service.Directory.StateOf(id) != Amber.Core.Game.InstanceState.Broken) return;
+        if (!service.IsCurrentDirectory(ctx)) return false;
+        service.RequestLaunch(request with { SkipBake = true, ExpectedContext = ctx });
+        return true;
+    }
+
+    internal static bool BakeRetryDirectoryMatches(LauncherService service, LaunchRequest request) =>
+        request.ExpectedContext is not { } expected || service.IsCurrentDirectory(expected);
+
+    /// <summary>“已损坏”最常见的原因是继承的原版不在了：补装原版。版本文件本身坏了修不了，提示重新安装。</summary>
+    private async Task RepairIfBrokenAsync(GameContext ctx, string id, CancellationToken ct)
+    {
+        if (ctx.Directory.StateOf(id) != Amber.Core.Game.InstanceState.Broken) return;
         Amber.Core.Game.VersionJson own;
-        try { own = _service.Directory.ReadVersion(id); }
+        try { own = ctx.Directory.ReadVersion(id); }
         catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidDataException)
         {
             throw new InvalidDataException(L.T("instance.state.broken"), e);
         }
-        if (own.InheritsFrom is not { } parent || File.Exists(_service.Directory.VersionJsonPath(parent)))
+        if (own.InheritsFrom is not { } parent || File.Exists(ctx.Directory.VersionJsonPath(parent)))
             throw new InvalidDataException(L.T("instance.state.broken"));
         SetStatus(StatusMessage.Info("home.status.repairing", parent));
-        await _service.Installer.InstallAsync(parent, new Progress<InstallProgress>(p =>
+        await ctx.Installer.InstallAsync(parent, new Progress<InstallProgress>(p =>
         {
             if (p.Stage == InstallStage.Files && p.Files.TotalFiles > 0) Progress = 100.0 * p.Files.CompletedFiles / p.Files.TotalFiles;
         }), ct);

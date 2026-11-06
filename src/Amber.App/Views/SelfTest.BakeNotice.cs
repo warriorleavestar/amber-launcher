@@ -8,6 +8,7 @@ using Avalonia;
 using Avalonia.Automation.Peers;
 using Avalonia.Automation.Provider;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -192,6 +193,7 @@ internal sealed class BakeNoticeSelfTest(MainWindow window, MainViewModel main, 
             main.CurrentPage = Home;
             while (State.Notices.Count > 0 && clock.Elapsed < TimeSpan.FromSeconds(11)) await Task.Delay(100);
             Check("回到启动页不重置八秒期限且不调用重试", State.Notices.Count == 0 && clock.Elapsed >= TimeSpan.FromSeconds(7.8) && calls.Count == 1);
+            await CheckInstanceBakeEntryAsync(instance);
         }
         catch (Exception ex)
         {
@@ -214,6 +216,40 @@ internal sealed class BakeNoticeSelfTest(MainWindow window, MainViewModel main, 
             window.Close();
             if (!_report.Any(line => line.StartsWith("FAIL ", StringComparison.Ordinal))) _report.Add("DONE");
             File.WriteAllLines(Path.Combine(reportDir, "report.txt"), _report);
+        }
+    }
+
+    /// <summary>合并后的实例页仍使用现有模组工具栏；只检查入口，不触发补文件或烘焙进程。</summary>
+    private async Task CheckInstanceBakeEntryAsync(string instance)
+    {
+        var page = main.Pages.OfType<InstanceViewModel>().Single();
+        main.CurrentPage = page;
+        await Task.Delay(200);
+        page.SelectedId = instance;
+        page.TabIndex = (int)InstanceTab.Mods;
+        Check("实例页保留模组页签及实验烘焙入口", page.Current?.Id == instance && page.BakeEnabled);
+        foreach (var language in new[] { "zh-Hans", "zh-Hant", "en", "ja" })
+        {
+            L.SetLanguage(language);
+            foreach (var (width, height) in new[] { (760, 440), (1280, 700) })
+            {
+                window.Width = width;
+                window.Height = height;
+                await Task.Delay(200);
+                window.UpdateLayout();
+                var button = window.GetVisualDescendants().OfType<Button>()
+                    .Single(b => ReferenceEquals(b.Command, page.BakeNowCommand));
+                button.BringIntoView();
+                await Task.Delay(100);
+                var bounds = BoundsIn(button, window);
+                var hit = window.InputHitTest(bounds.Center) as Visual;
+                Check($"实例烘焙 {language}-{width}：入口完整可见且中心命中", button.IsEffectivelyVisible
+                    && button.IsEffectivelyEnabled && new Rect(window.ClientSize).Contains(bounds)
+                    && hit is not null && (ReferenceEquals(hit, button) || hit.GetVisualAncestors().Contains(button)));
+                Check($"实例烘焙 {language}-{width}：按钮文案及提示随语言切换", button.Content?.ToString() == L.T("instance.bake.now")
+                    && ToolTip.GetTip(button)?.ToString() == L.T("instance.bake.now_hint"));
+                await ShotAsync($"instance-bake-{language}-{width}x{height}");
+            }
         }
     }
 }

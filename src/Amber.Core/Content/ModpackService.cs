@@ -180,11 +180,20 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         var missing = ids.Count - files.Count;
 
         var folders = await curseForge.GetProjectFoldersAsync(files.Select(f => long.Parse(f.ProjectId)).Distinct().ToList(), ct);
-        var items = files.Select(f => ContentInstaller.ToItem(f, Path.Combine(workDir, folders.GetValueOrDefault(f.ProjectId, "mods")))).ToList();
+        var targets = files.Select(f => (File: f, TargetDir: Path.Combine(workDir, folders.GetValueOrDefault(f.ProjectId, "mods")))).ToList();
+        var overrides = manifest["overrides"]?.GetValue<string>() ?? "overrides";
+        var overridePrefix = root + overrides.TrimEnd('/') + "/";
+        // 包里可能已经附带受限文件：只提前释放这些目标，让同一套 SHA-1 / 大小预检决定能否复用。
+        // 普通文件仍在下载后由 overrides 覆盖；沿用独占实例目录和原有的路径检查、失败回滚。
+        var manualPaths = targets.Where(t => t.File.RequiresManualDownload)
+            .Select(t => Path.GetRelativePath(workDir, Path.Combine(t.TargetDir, ContentInstaller.SafeFileName(t.File.FileName))).Replace('\\', '/'))
+            .ToHashSet(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        if (manualPaths.Count > 0)
+            ExtractPrefix(zip, overridePrefix, pack with { OnSkip = null }, skipWhere: relative => !manualPaths.Contains(relative));
+        var items = await ContentInstaller.PrepareDownloadItemsAsync(targets, ct);
         await ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.content.modpack.downloadprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
-        var overrides = manifest["overrides"]?.GetValue<string>() ?? "overrides";
-        ExtractPrefix(zip, root + overrides.TrimEnd('/') + "/", pack);
+        ExtractPrefix(zip, overridePrefix, pack);
         if (missing > 0) throw new InvalidDataException(L.P("core.content.modpack.missingcursefiles", missing, missing));
     }
 

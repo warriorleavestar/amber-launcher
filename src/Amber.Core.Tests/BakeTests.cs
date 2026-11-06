@@ -250,4 +250,3 @@ public sealed class BakeTests : IDisposable
         Assert.DoesNotContain(libraries, l => l.Contains("fabric-loader"));
     }
 }
-

@@ -173,6 +173,13 @@ public sealed partial class MainViewModel : ObservableObject
             await content.ImportLocalPackAsync(path);
         };
         instance.NavigateHome = () => CurrentPage = home;
+        instance.NavigateToNewInstance = () => CurrentPage = download;
+        content.NavigateToSettings = () => CurrentPage = Pages.OfType<SettingsViewModel>().First();
+        instance.NavigateToContent = (id, type) =>
+        {
+            CurrentPage = content;
+            content.BrowseFor(id, type, back: () => CurrentPage = instance);
+        };
         multiplayer.NavigateHome = () => CurrentPage = home;
         download.LaunchInstance = id =>
         {
@@ -193,7 +200,7 @@ public sealed partial class MainViewModel : ObservableObject
         instance.NavigateToDatapacks = (id, world) =>
         {
             CurrentPage = content;
-            content.BrowseDatapacksFor(id, world);
+            content.BrowseDatapacksFor(id, world, back: () => CurrentPage = instance);
         };
         CurrentPage = Pages[0];
         CurrentPage.Activate();

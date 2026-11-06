@@ -52,9 +52,12 @@ public partial class MainWindow : Window
         if (Environment.GetEnvironmentVariable("AMBER_SELFTEST") is { Length: > 0 } report)
             Opened += async (_, _) =>
             {
-                if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "bake-notice")
+                if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "content-layout")
+                    await new ContentPageSelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
+                else if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "bake-notice")
                     await new BakeNoticeSelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
-                else await new SelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
+                else
+                    await new SelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
             };
         // 开发用：AMBER_MEASURE=文件，记下屏幕可用区域、缩放、窗口外框和客户区的大小，然后退出。
         if (Environment.GetEnvironmentVariable("AMBER_MEASURE") is { Length: > 0 } measure)
