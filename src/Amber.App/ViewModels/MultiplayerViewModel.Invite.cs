@@ -219,6 +219,7 @@ public sealed partial class MultiplayerViewModel
         InviteShown = false;
         OnPropertyChanged(nameof(InviteDisplay));
         OnPropertyChanged(nameof(HasInvite));
+        RefreshInvites();
         try
         {
             await lobby.UpdateAsync();
@@ -254,6 +255,7 @@ public sealed partial class MultiplayerViewModel
     {
         if (item is null || _lobby is not { } lobby) return;
         lobby.Book.Revoke(item.Invite);
+        RefreshInvites();
         if (_lastInvite == item.Invite.Invite)
         {
             _lastInvite = null;
@@ -268,6 +270,7 @@ public sealed partial class MultiplayerViewModel
     {
         if (member is null || member.Trusted) return;
         Trusted.Add(member.PublicKey, member.Name);
+        RefreshTrusted();
         var index = Members.IndexOf(member);
         if (index >= 0) Members[index] = member with { Trusted = true };
         SetStatus(StatusMessage.Success("multiplayer.invite.trusted", member.Name, member.Fingerprint));
@@ -278,6 +281,7 @@ public sealed partial class MultiplayerViewModel
     {
         if (item is null) return;
         Trusted.Remove(item.Member.PublicKey);
+        RefreshTrusted();
     }
 
     [RelayCommand]

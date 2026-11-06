@@ -125,7 +125,7 @@ public sealed record KnockOutcome(RoomCredentials? Credentials, string? Reason, 
     public string HostFingerprint => MemberIdentity.FingerprintOf(HostPublicKey);
 }
 
-/// <summary>加入方：经大厅连到房主的敲门端口，报上邀请编号，用 XXpsk3 握手证明自己拿着邀请，等房主批准。</summary>
+/// <summary>加入方：经大厅连到房主的敲门端口，报上邀请编号，用 XXpsk0 握手证明自己拿着邀请，等房主批准。</summary>
 public static class KnockClient
 {
     public static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
@@ -137,7 +137,7 @@ public static class KnockClient
     {
         var lobbyName = LobbyKeys.LobbyName(invite.LobbyKey);
         var psk = LobbyKeys.KnockPsk(invite.Token);
-        using var handshake = new NoiseHandshake(NoisePattern.XXpsk3, true, KnockProtocol.Prologue(lobbyName), psk, me);
+        using var handshake = new NoiseHandshake(NoisePattern.XXpsk0, true, KnockProtocol.Prologue(lobbyName), psk, me);
         CryptographicOperations.ZeroMemory(psk);
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
@@ -339,7 +339,7 @@ public sealed record KnockLimits
 
 /// <summary>
 /// 房主的敲门服务：只在大厅里听 47660。流程：
-/// 收 8 字节邀请编号（明文，不认识就断开）→ XXpsk3 握手（psk 由邀请令牌派生，双方交换长期身份）→ 第三条消息验证通过时用掉一次邀请 →
+/// 收 8 字节邀请编号（明文，不认识就断开）→ XXpsk0 握手（psk 由邀请令牌派生、第一条消息就混入，令牌不对第一条就失败；双方交换长期身份）→ 第三条消息验证通过时用掉一次邀请 →
 /// 信任列表里的人或勾了“自动批准”的邀请直接批准，否则问房主（120 秒没点算拒绝）→ 加密发回房间凭据或拒绝原因 → 等对方确认。
 /// 同时最多 3 个人在敲；一分钟里失败 10 次就暂停 60 秒。
 /// </summary>
@@ -468,7 +468,7 @@ public sealed class KnockServer : IAsyncDisposable
                     return;
                 }
                 var psk = LobbyKeys.KnockPsk(invite.Invite.Token);
-                handshake = new NoiseHandshake(NoisePattern.XXpsk3, false, KnockProtocol.Prologue(lobby.Name), psk, _identity);
+                handshake = new NoiseHandshake(NoisePattern.XXpsk0, false, KnockProtocol.Prologue(lobby.Name), psk, _identity);
                 CryptographicOperations.ZeroMemory(psk);
                 handshake.ReadMessage(await KnockProtocol.ReadFrameAsync(stream, timeout.Token));
                 await KnockProtocol.WriteFrameAsync(stream, handshake.WriteMessage(KnockProtocol.Json(new JsonObject { ["v"] = 1 })), timeout.Token);

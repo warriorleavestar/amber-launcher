@@ -81,6 +81,14 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
                 window.Close();
                 return;
             }
+            if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "multiplayer")
+            {
+                await MultiplayerAsync();
+                await DirectRoomAsync();
+                Log("DONE");
+                window.Close();
+                return;
+            }
             // 必须在布局检查遍历所有页面之前验证，免得漏掉首次进入资源页的空列表。
             await ContentAutoLoadAsync();
             if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "content")

@@ -253,6 +253,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         IsComponentReady = _service.EasyTier.IsInstalled;
         LoadNodes();
         RefreshInstances();
+        RefreshTrusted();
         // 不自动听局域网广播：绑定端口可能让 Windows 弹防火墙询问。用 Amber 启动的游戏从日志就能认出端口。
     }
 
