@@ -24,7 +24,7 @@ public sealed class ContentViewModelTests
     });
 
     [Fact]
-    public void PagingKeepsTheDetailPanelOpen() => Run((vm, _, _) =>
+    public void PagingKeepsTheDetailPanelOpen() => Run((vm, modrinth, _) =>
     {
         // #22：点“下一页”时右侧详情不收起，鼠标不用挪就能接着翻。
         vm.Activate();
@@ -34,8 +34,15 @@ public sealed class ContentViewModelTests
 
         vm.NextPageCommand.ExecuteAsync(null).GetAwaiter().GetResult();
 
+        Assert.Equal(1, vm.Page);
+        Assert.Equal(20, modrinth.Queries[^1].Offset);
         Assert.Same(item, vm.Detail);
         Assert.True(vm.HasSelection);
+        Assert.NotSame(item, Assert.Single(vm.Results));
+
+        vm.PreviousPageCommand.ExecuteAsync(null).GetAwaiter().GetResult();
+        Assert.Equal(0, vm.Page);
+        Assert.Same(item, vm.Detail);
 
         vm.Query = "其他";
         vm.SearchCommand.ExecuteAsync(null).GetAwaiter().GetResult();
@@ -43,7 +50,7 @@ public sealed class ContentViewModelTests
     });
 
     [Fact]
-    public void OptionalDependenciesAreListedOnceAndOnlyWithProjects()
+    public void OptionalDependenciesIncludePinnedFilesAndAreListedOnce()
     {
         var file = new ContentFile(ContentSource.Modrinth, "A", "a1", "a", "a.jar", "https://x/a", null, 1, ["1.21.1"], ["fabric"], "release", default,
         [
@@ -51,9 +58,65 @@ public sealed class ContentViewModelTests
             new(ContentSource.Modrinth, "OPAC", null, DependencyKind.Optional),
             new(ContentSource.Modrinth, "OPAC", "f2", DependencyKind.Optional),
             new(ContentSource.Modrinth, null, "f3", DependencyKind.Optional),
+            new(ContentSource.Modrinth, null, "f3", DependencyKind.Optional),
+            new(ContentSource.Modrinth, null, null, DependencyKind.Optional),
         ]);
-        Assert.Equal(["OPAC"], ContentViewModel.OptionalDependencyIds(file).Select(d => d.ProjectId));
+        Assert.Equal([("OPAC", (string?)null), (null, "f3")], ContentViewModel.OptionalDependencyIds(file).Select(d => (d.ProjectId, d.FileId)));
     }
+
+    [Fact]
+    public void PinnedOptionalDependencyKeepsItsCheckboxWhenNameLookupFails() => Run((vm, modrinth, _) =>
+    {
+        var optional = TestFile("OPAC", "opac1");
+        modrinth.FileById = optional;
+        vm.SelectedFile = new FileItem(TestFile("A", "a1", new ContentDependency(ContentSource.Modrinth, null, "opac1", DependencyKind.Optional)));
+
+        var item = Assert.Single(vm.OptionalDependencies);
+        Assert.Null(item.ProjectId);
+        Assert.Equal("opac1", item.FileId);
+        Assert.Equal(optional.DisplayName, item.Name);
+        Assert.False(item.Include);
+        item.Include = true;
+        Assert.True(item.Include);
+        Assert.True(vm.HasOptionalDependencies);
+
+        vm.SelectedFile = null;
+        Assert.Empty(vm.OptionalDependencies);
+        Assert.False(vm.HasOptionalDependencies);
+    });
+
+    [Fact]
+    public void ChangingFileCancelsPendingOptionalNameLookup() => Run((vm, modrinth, _) =>
+    {
+        var pending = new TaskCompletionSource<ContentFile>();
+        modrinth.PendingFile = pending.Task;
+        vm.SelectedFile = new FileItem(TestFile("A", "a1", new ContentDependency(ContentSource.Modrinth, null, "opac1", DependencyKind.Optional)));
+        var oldItem = Assert.Single(vm.OptionalDependencies);
+
+        vm.SelectedFile = new FileItem(TestFile("B", "b1"));
+        Assert.True(modrinth.FileToken.IsCancellationRequested);
+        pending.SetResult(TestFile("OPAC", "opac1"));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Empty(vm.OptionalDependencies);
+        Assert.Equal("opac1", oldItem.Name);
+    });
+
+    [Fact]
+    public void FailedPinnedOptionalFileLookupStillLeavesAnUnselectedChoice() => Run((vm, modrinth, _) =>
+    {
+        modrinth.PendingFile = Task.FromException<ContentFile>(new InvalidDataException("empty version metadata"));
+        vm.SelectedFile = new FileItem(TestFile("A", "a1", new ContentDependency(ContentSource.Modrinth, null, "opac1", DependencyKind.Optional)));
+
+        var item = Assert.Single(vm.OptionalDependencies);
+        Assert.Equal("opac1", item.Name);
+        Assert.False(item.Include);
+        Assert.True(vm.HasOptionalDependencies);
+    });
+
+    private static ContentFile TestFile(string project, string id, params ContentDependency[] dependencies) =>
+        new(ContentSource.Modrinth, project, id, "name-" + id, id + ".jar", "https://x/" + id, null, 1,
+            ["1.21.1"], ["fabric"], "release", default, dependencies);
 
     [Fact]
     public void CurseForgeWithoutKeyIsGreyedAndNeverQueried() => Run((vm, _, curseForge) =>
@@ -325,6 +388,9 @@ public sealed class ContentViewModelTests
         public Exception? Failure { get; set; }
         public Task<SearchResult>? PendingSearch { get; set; }
         public bool Empty { get; set; }
+        public ContentFile? FileById { get; set; }
+        public Task<ContentFile>? PendingFile { get; set; }
+        public CancellationToken FileToken { get; private set; }
 
         public Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken ct = default)
         {
@@ -341,6 +407,10 @@ public sealed class ContentViewModelTests
             => Task.FromResult<IReadOnlyList<ContentFile>>([]);
 
         public Task<ContentProject> GetProjectAsync(string projectId, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<ContentFile> GetFileAsync(string projectId, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<ContentFile> GetFileAsync(string projectId, string fileId, CancellationToken ct = default)
+        {
+            FileToken = ct;
+            return PendingFile ?? (FileById is { } file ? Task.FromResult(file) : throw new NotSupportedException());
+        }
     }
 }

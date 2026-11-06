@@ -3,7 +3,7 @@ using Amber.Core.Net;
 
 namespace Amber.Core.Content;
 
-/// <summary>一次安装计划：主文件加上解析出来的必需依赖，还有解析不了的项目说明。</summary>
+/// <summary>一次安装计划：主文件、必需依赖和勾选的可选依赖，还有解析不了的项目说明。</summary>
 public sealed record InstallPlan(IReadOnlyList<ContentFile> Files, IReadOnlyList<string> Problems);
 
 /// <summary>解析依赖并把内容下载到实例对应的文件夹。</summary>
@@ -15,9 +15,11 @@ public sealed class ContentInstaller(Downloader downloader, IReadOnlyDictionary<
     /// </summary>
     /// <param name="loaderPreference">依赖按这个顺序找版本（比如经 Connector 装 Fabric 模组时先找原生 NeoForge 版，再找 Fabric 版）；为空时只用实例的加载器。</param>
     /// <param name="optionalProjects">玩家勾选的可选依赖（项目 id）：当作必需依赖一起装，其余可选依赖不装。</param>
+    /// <param name="optionalFiles">只声明文件 id 的可选依赖：按玩家勾选的确切版本安装。</param>
     public async Task<InstallPlan> ResolveAsync(ContentFile root, GameInstance instance, ISet<string>? installedProjects = null, CancellationToken ct = default,
-        IReadOnlyList<string?>? loaderPreference = null, ISet<string>? optionalProjects = null)
+        IReadOnlyList<string?>? loaderPreference = null, ISet<string>? optionalProjects = null, ISet<string>? optionalFiles = null)
     {
+        ct.ThrowIfCancellationRequested();
         var plan = new List<ContentFile>();
         var problems = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal) { root.ProjectId };
@@ -34,7 +36,9 @@ public sealed class ContentInstaller(Downloader downloader, IReadOnlyDictionary<
                 if (dep.Kind == DependencyKind.Incompatible && dep.ProjectId is { } bad && installedProjects?.Contains(bad) == true)
                     problems.Add(L.F("core.content.install.incompatible", file.DisplayName, bad));
                 var wanted = dep.Kind == DependencyKind.Required
-                    || dep.Kind == DependencyKind.Optional && dep.ProjectId is { } optional && optionalProjects?.Contains(optional) == true;
+                    || dep.Kind == DependencyKind.Optional && (
+                        dep.ProjectId is { } optional && optionalProjects?.Contains(optional) == true
+                        || dep.ProjectId is null && dep.FileId is { } optionalFile && optionalFiles?.Contains(optionalFile) == true);
                 if (!wanted) continue;
 
                 var provider = providers[dep.Source];
@@ -56,16 +60,18 @@ public sealed class ContentInstaller(Downloader downloader, IReadOnlyDictionary<
                         }
                     }
                     else continue;
+                    ct.ThrowIfCancellationRequested();
                 }
                 catch (HttpRequestException e)
                 {
+                    ct.ThrowIfCancellationRequested();
                     problems.Add(L.F("core.content.install.dependencyfailed", file.DisplayName, dep.ProjectId ?? dep.FileId, e.Message));
                     continue;
                 }
 
                 if (resolved is null)
                 {
-                    problems.Add(L.F("core.content.install.dependencyunavailable", file.DisplayName, dep.ProjectId, instance.McVersion, instance.Loader));
+                    problems.Add(L.F("core.content.install.dependencyunavailable", file.DisplayName, dep.ProjectId ?? dep.FileId, instance.McVersion, instance.Loader));
                     continue;
                 }
                 if (installedProjects?.Contains(resolved.ProjectId) == true || !seen.Add(resolved.ProjectId)) continue;

@@ -141,13 +141,18 @@ public class ContentTests : IDisposable
 
     private sealed class FakeProvider(params ContentFile[] files) : IContentProvider
     {
+        public Action? BeforeGetFile { get; set; }
+        public Exception? FileFailure { get; set; }
         public ContentSource Source => ContentSource.Modrinth;
         public Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<ContentProject> GetProjectAsync(string projectId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<ContentFile>> GetFilesAsync(string projectId, string? gameVersion, string? loader, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ContentFile>>(files.Where(f => f.ProjectId == projectId && f.GameVersions.Contains(gameVersion!)).ToList());
-        public Task<ContentFile> GetFileAsync(string projectId, string fileId, CancellationToken ct = default) =>
-            Task.FromResult(files.Single(f => f.FileId == fileId));
+        public Task<ContentFile> GetFileAsync(string projectId, string fileId, CancellationToken ct = default)
+        {
+            BeforeGetFile?.Invoke();
+            return FileFailure is { } error ? Task.FromException<ContentFile>(error) : Task.FromResult(files.Single(f => f.FileId == fileId));
+        }
     }
 
     private static ContentFile File_(string project, string id, string channel = "release", string mc = "1.21.1", params ContentDependency[] deps) =>
@@ -191,6 +196,44 @@ public class ContentTests : IDisposable
 
         Assert.Equal(["a1", "api1"], none.Files.Select(f => f.FileId));
         Assert.Equal(["a1", "api1", "opac1"], picked.Files.Select(f => f.FileId));
+    }
+
+    [Fact]
+    public async Task Resolver_InstallsCheckedPinnedOptionalFileAndItsRequiredDependencies()
+    {
+        var a = File_("A", "a1", deps: [new(ContentSource.Modrinth, null, "opac1", DependencyKind.Optional)]);
+        var provider = new FakeProvider(a, File_("OPAC", "opac1", deps: [Dep("API")]), File_("API", "api1"));
+        var installer = new ContentInstaller(null!, new Dictionary<ContentSource, IContentProvider> { [ContentSource.Modrinth] = provider });
+        var instance = new GameInstance("i", "1.21.1", "fabric", "0.1", _root);
+
+        Assert.Equal(["a1"], (await installer.ResolveAsync(a, instance)).Files.Select(f => f.FileId));
+        var plan = await installer.ResolveAsync(a, instance, optionalFiles: new HashSet<string> { "opac1" });
+        Assert.Equal(["a1", "opac1", "api1"], plan.Files.Select(f => f.FileId));
+        Assert.Empty(plan.Problems);
+    }
+
+    [Fact]
+    public async Task Resolver_PinnedOptionalLookupReportsFailureAndHonoursCancellation()
+    {
+        var a = File_("A", "a1", deps: [new(ContentSource.Modrinth, null, "opac1", DependencyKind.Optional)]);
+        var provider = new FakeProvider(File_("OPAC", "opac1")) { FileFailure = new HttpRequestException("not available") };
+        var installer = new ContentInstaller(null!, new Dictionary<ContentSource, IContentProvider> { [ContentSource.Modrinth] = provider });
+        var instance = new GameInstance("i", "1.21.1", "fabric", "0.1", _root);
+        var selected = new HashSet<string> { "opac1" };
+
+        var failed = await installer.ResolveAsync(a, instance, optionalFiles: selected);
+        Assert.Equal(["a1"], failed.Files.Select(f => f.FileId));
+        Assert.Contains("opac1", Assert.Single(failed.Problems));
+
+        using var cts = new CancellationTokenSource();
+        provider.FileFailure = null;
+        provider.BeforeGetFile = cts.Cancel;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => installer.ResolveAsync(a, instance, ct: cts.Token, optionalFiles: selected));
+
+        using var failingCts = new CancellationTokenSource();
+        provider.BeforeGetFile = failingCts.Cancel;
+        provider.FileFailure = new HttpRequestException("cancelled response");
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => installer.ResolveAsync(a, instance, ct: failingCts.Token, optionalFiles: selected));
     }
 
     /// <summary>按加载器过滤的假数据源：同一个项目可以有 Fabric 版和 NeoForge 版。</summary>

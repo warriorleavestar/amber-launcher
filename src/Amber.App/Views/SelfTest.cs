@@ -162,6 +162,38 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         content.SourceIndex = 0;
         await WaitAsync(() => content.Results.Count > 0 || content.StatusInfo?.Kind == StatusKind.Error, 30);
         Check("切回 Modrinth 自动加载列表", content.Results.Count > 0, content.Status);
+
+        // 热门列表有多页：确认确实翻到了下一页，避免单个搜索结果让命令直接返回却算通过。
+        content.Selected = content.Results.FirstOrDefault();
+        await WaitAsync(() => content.SelectedFile is not null || content.StatusInfo?.Kind == StatusKind.Error, 30);
+        var detail = content.Detail;
+        var selectedFile = content.SelectedFile;
+        var firstPage = content.Results.FirstOrDefault();
+        var page = content.Page;
+        await content.NextPageCommand.ExecuteAsync(null);
+        Check("资源页下一页实际刷新列表（#22）", content.Page == page + 1 && content.Results.Count > 0
+            && firstPage?.Project.Id != content.Results.FirstOrDefault()?.Project.Id, content.Status);
+        Check("资源页翻页保留详情和文件选择（#22）", detail is not null && selectedFile is not null
+            && ReferenceEquals(content.Detail, detail) && ReferenceEquals(content.SelectedFile, selectedFile) && content.HasSelection);
+        await ShotAsync("资源页翻页保留详情");
+        await content.PreviousPageCommand.ExecuteAsync(null);
+        Check("资源页上一页保留详情（#22）", content.Page == page && ReferenceEquals(content.Detail, detail)
+            && firstPage?.Project.Id == content.Results.FirstOrDefault()?.Project.Id, content.Status);
+
+        content.Query = "Xaero's Minimap";
+        await content.SearchCommand.ExecuteAsync(null);
+        content.Selected = content.Results.FirstOrDefault(r => r.Title.Equals("Xaero's Minimap", StringComparison.OrdinalIgnoreCase));
+        await WaitAsync(() => content.SelectedFile is not null || content.StatusInfo?.Kind == StatusKind.Error, 30);
+        Check("Xaero 可选依赖显示且默认不勾（#22）", content.HasOptionalDependencies && content.OptionalDependencies.All(d => !d.Include), content.Status);
+        if (content.OptionalDependencies.FirstOrDefault() is { } optional)
+        {
+            var checkbox = await FindAsync<CheckBox>(b => ReferenceEquals(b.DataContext, optional));
+            checkbox?.SetCurrentValue(Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty, true);
+            Check("勾选可选依赖同步到安装选项（#22）", optional.Include);
+            await ShotAsync("资源页可选依赖");
+        }
+        content.Query = "";
+        await content.SearchCommand.ExecuteAsync(null);
         main.CurrentPage = previous;
     }
 

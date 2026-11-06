@@ -646,8 +646,9 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
                 }
                 else
                 {
-                    var optional = OptionalDependencies.Where(d => d.Include).Select(d => d.ProjectId).ToHashSet(StringComparer.Ordinal);
-                    plan = await _service.ContentInstaller.ResolveAsync(file, instance, null, _workCts.Token, optionalProjects: optional);
+                    var optional = OptionalDependencies.Where(d => d.Include && d.ProjectId is not null).Select(d => d.ProjectId!).ToHashSet(StringComparer.Ordinal);
+                    var optionalFiles = OptionalDependencies.Where(d => d.Include && d.ProjectId is null && d.FileId is not null).Select(d => d.FileId!).ToHashSet(StringComparer.Ordinal);
+                    plan = await _service.ContentInstaller.ResolveAsync(file, instance, null, _workCts.Token, optionalProjects: optional, optionalFiles: optionalFiles);
                 }
                 // 目标文件夹里已经有同名文件的依赖不用再下，下载器会校验并跳过。
             }
@@ -694,7 +695,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             var cts = _optionalCts = new CancellationTokenSource();
             foreach (var dep in OptionalDependencyIds(file.File))
             {
-                var item = new OptionalDependencyItem(dep.ProjectId!, dep.Source);
+                var item = new OptionalDependencyItem(dep.ProjectId, dep.Source, dep.FileId);
                 OptionalDependencies.Add(item);
                 _ = LoadOptionalNameAsync(item, cts.Token);
             }
@@ -702,19 +703,29 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         OnPropertyChanged(nameof(HasOptionalDependencies));
     }
 
-    /// <summary>文件里写明项目的可选依赖（去重）。</summary>
+    /// <summary>文件里写明项目或确切文件的可选依赖（去重）。</summary>
     internal static IEnumerable<ContentDependency> OptionalDependencyIds(ContentFile file) =>
-        file.Dependencies.Where(d => d.Kind == DependencyKind.Optional && !string.IsNullOrEmpty(d.ProjectId)).DistinctBy(d => d.ProjectId);
+        file.Dependencies.Where(d => d.Kind == DependencyKind.Optional && (!string.IsNullOrEmpty(d.ProjectId) || !string.IsNullOrEmpty(d.FileId)))
+            .DistinctBy(d => (d.Source, d.ProjectId, FileId: d.ProjectId is null ? d.FileId : null));
 
     private async Task LoadOptionalNameAsync(OptionalDependencyItem item, CancellationToken ct)
     {
         try
         {
             var provider = item.Source == ContentSource.Modrinth ? _providerForSource(0) : _providerForSource(1);
-            var project = await provider.GetProjectAsync(item.ProjectId, ct);
+            var projectId = item.ProjectId;
+            if (projectId is null && item.FileId is { } fileId)
+            {
+                var file = await provider.GetFileAsync("", fileId, ct);
+                ct.ThrowIfCancellationRequested();
+                projectId = file.ProjectId;
+                item.Name = file.DisplayName;
+            }
+            if (projectId is null) return;
+            var project = await provider.GetProjectAsync(projectId, ct);
             if (!ct.IsCancellationRequested) item.Name = project.Title;
         }
-        catch (Exception e) when (e is HttpRequestException or OperationCanceledException or NotSupportedException or InvalidOperationException or System.Text.Json.JsonException)
+        catch (Exception e) when (e is HttpRequestException or OperationCanceledException or NotSupportedException or InvalidOperationException or InvalidDataException or System.Text.Json.JsonException)
         {
             // 名字查不到就显示 id。
         }
@@ -824,13 +835,14 @@ public sealed partial class SourceOption(string label, bool enabled) : Observabl
 }
 
 /// <summary>详情面板里的一个可选依赖：勾上就和主文件一起装。</summary>
-public sealed partial class OptionalDependencyItem(string projectId, ContentSource source) : ObservableObject
+public sealed partial class OptionalDependencyItem(string? projectId, ContentSource source, string? fileId = null) : ObservableObject
 {
-    public string ProjectId { get; } = projectId;
+    public string? ProjectId { get; } = projectId;
+    public string? FileId { get; } = fileId;
     public ContentSource Source { get; } = source;
 
     [ObservableProperty]
-    public partial string Name { get; set; } = projectId;
+    public partial string Name { get; set; } = projectId ?? fileId ?? "";
 
     [ObservableProperty]
     public partial bool Include { get; set; }
