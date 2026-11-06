@@ -144,6 +144,29 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
 
     public bool HasManualDownload => !string.IsNullOrWhiteSpace(ManualDownloadUrl);
 
+    private enum ManualDownloadContext { Resource, ModpackArchive, ModpackImport }
+    private ManualDownloadContext _manualDownloadContext;
+
+    /// <summary>整合包导入失败会回滚新目标，不能让玩家往已不存在的实例里补文件。</summary>
+    public string ManualDownloadHint => L.T(_manualDownloadContext switch
+    {
+        ManualDownloadContext.ModpackArchive => "content.curseforge.manual_pack_archive_hint",
+        ManualDownloadContext.ModpackImport => "content.curseforge.manual_pack_import_hint",
+        _ => "content.curseforge.manual_hint",
+    });
+
+    private void SetManualDownloadContext(ManualDownloadContext context)
+    {
+        if (_manualDownloadContext == context) return;
+        _manualDownloadContext = context;
+        OnPropertyChanged(nameof(ManualDownloadHint));
+    }
+
+    partial void OnManualDownloadUrlChanged(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) SetManualDownloadContext(ManualDownloadContext.Resource);
+    }
+
     [ObservableProperty]
     public partial string NewInstanceName { get; set; } = "";
 
@@ -236,6 +259,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     partial void OnSelectedFileChanged(FileItem? value)
     {
         ManualDownloadUrl = value?.File.ManualDownloadPage;
+        SetManualDownloadContext(value is not null && IsModpack ? ManualDownloadContext.ModpackArchive : ManualDownloadContext.Resource);
         LoadOptionalDependencies(value);
         InstallCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(InstallHint));
@@ -620,10 +644,13 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
     }
 
-    private void ShowManualDownload(ContentFile file)
+    private void ShowManualDownload(ContentFile file, ManualDownloadContext context = ManualDownloadContext.Resource)
     {
         ManualDownloadUrl = file.ManualDownloadPage;
-        SetStatus(StatusMessage.Warning("core.content.curseforge.manual_download", file.DisplayName, file.ManualDownloadPage ?? ""));
+        SetManualDownloadContext(context);
+        var key = context == ManualDownloadContext.ModpackImport
+            ? "content.curseforge.pack_import_incomplete" : "core.content.curseforge.manual_download";
+        SetStatus(StatusMessage.Warning(key, file.DisplayName, file.ManualDownloadPage ?? ""));
     }
 
     // 最后一次校验紧贴系统调用，避免新提供方或手工构造的项目绕过入口校验。
@@ -640,7 +667,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         if (SelectedFile?.File is not { } file) return;
         if (file.RequiresManualDownload)
         {
-            ShowManualDownload(file);
+            ShowManualDownload(file, IsModpack ? ManualDownloadContext.ModpackArchive : ManualDownloadContext.Resource);
             return;
         }
         ManualDownloadUrl = null;
@@ -779,16 +806,19 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     {
         IsBusy = true;
         _workCts = new CancellationTokenSource();
+        var importStarted = false;
         var temp = Path.Combine(Path.GetTempPath(), "amber-pack-" + Guid.NewGuid().ToString("N"), ContentInstaller.SafeFileName(file.FileName));
         try
         {
             SetStatus(StatusMessage.Info("content.modpack.downloading"));
             await _service.Downloader.DownloadOneAsync(ContentInstaller.ToItem(file, Path.GetDirectoryName(temp)!), _workCts.Token);
+            importStarted = true;
             await ImportCoreAsync(temp, NewInstanceName, _workCts.Token);
         }
         catch (ManualDownloadRequiredException e)
         {
-            ShowManualDownload(e.File);
+            await Ui.FlushAsync();
+            ShowManualDownload(e.File, importStarted ? ManualDownloadContext.ModpackImport : ManualDownloadContext.ModpackArchive);
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
@@ -821,7 +851,8 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
         catch (ManualDownloadRequiredException e)
         {
-            ShowManualDownload(e.File);
+            await Ui.FlushAsync();
+            ShowManualDownload(e.File, ManualDownloadContext.ModpackImport);
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
