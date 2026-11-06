@@ -177,6 +177,22 @@ public class ContentTests : IDisposable
         Assert.Contains("GONE", problem);
     }
 
+    [Fact]
+    public async Task Resolver_InstallsOnlyTheOptionalDepsThePlayerChecked()
+    {
+        // #22：Xaero's Minimap 这类模组有必需依赖和可选依赖，可选的要能勾选。
+        var a = File_("A", "a1", deps: [Dep("API"), Dep("OPAC", DependencyKind.Optional), Dep("OTHER", DependencyKind.Optional)]);
+        var provider = new FakeProvider(a, File_("API", "api1"), File_("OPAC", "opac1"), File_("OTHER", "other1"));
+        var installer = new ContentInstaller(null!, new Dictionary<ContentSource, IContentProvider> { [ContentSource.Modrinth] = provider });
+        var instance = new GameInstance("i", "1.21.1", "fabric", "0.1", _root);
+
+        var none = await installer.ResolveAsync(a, instance);
+        var picked = await installer.ResolveAsync(a, instance, optionalProjects: new HashSet<string> { "OPAC" });
+
+        Assert.Equal(["a1", "api1"], none.Files.Select(f => f.FileId));
+        Assert.Equal(["a1", "api1", "opac1"], picked.Files.Select(f => f.FileId));
+    }
+
     /// <summary>按加载器过滤的假数据源：同一个项目可以有 Fabric 版和 NeoForge 版。</summary>
     private sealed class LoaderProvider(params ContentFile[] files) : IContentProvider
     {

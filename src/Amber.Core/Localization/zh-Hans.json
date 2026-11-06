@@ -1249,5 +1249,20 @@
   "instance.shaderpacks.empty": "还没有光影。点“在线浏览…”找一个，或者点“添加文件”。",
   "instance.export.dialog_title": "导出整合包",
   "content.context.for_instance": "正在给 {0} 找{1}",
-  "content.context.back": "← 返回实例"
+  "content.context.back": "← 返回实例",
+  "common.retry": "重试",
+  "content.search.searching_from": "正在从 {0} 搜索…",
+  "content.search.slow_modrinth": "Modrinth 在国内可能较慢，已等待 {0} 秒",
+  "content.search.slow": "{0} 响应较慢，已等待 {1} 秒",
+  "content.search.switch_source": "切换来源",
+  "content.search.empty_query_filtered": "没找到「{0}」。试试英文名，或取消“只看适用于这个实例的内容”。",
+  "content.search.empty_query": "没找到「{0}」。试试英文名。",
+  "content.search.empty_filtered": "没有适用于这个实例的内容。可以取消“只看适用于这个实例的内容”看看全部。",
+  "content.search.show_all": "显示全部版本",
+  "content.source.needs_key": "CurseForge 需要 API 密钥，在「设置」里填写后才能用。",
+  "content.source.go_fill": "去填写",
+  "content.source.use_modrinth": "改用 Modrinth",
+  "content.install.pick_file": "先在上面选一个版本文件",
+  "content.install.vanilla_blocked": "{0} 是原版实例，模组装进去也不会加载。先到「下载」页装一个带 Fabric、Forge 等加载器的实例，或在“安装到”里换一个。",
+  "content.install.optional_heading": "可选依赖（勾上的一起装）"
 }

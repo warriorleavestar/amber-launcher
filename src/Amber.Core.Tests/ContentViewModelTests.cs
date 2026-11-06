@@ -24,6 +24,123 @@ public sealed class ContentViewModelTests
     });
 
     [Fact]
+    public void PagingKeepsTheDetailPanelOpen() => Run((vm, _, _) =>
+    {
+        // #22：点“下一页”时右侧详情不收起，鼠标不用挪就能接着翻。
+        vm.Activate();
+        var item = vm.Results[0];
+        vm.Selected = item;
+        Assert.True(vm.HasSelection);
+
+        vm.NextPageCommand.ExecuteAsync(null).GetAwaiter().GetResult();
+
+        Assert.Same(item, vm.Detail);
+        Assert.True(vm.HasSelection);
+
+        vm.Query = "其他";
+        vm.SearchCommand.ExecuteAsync(null).GetAwaiter().GetResult();
+        Assert.False(vm.HasSelection);
+    });
+
+    [Fact]
+    public void OptionalDependenciesAreListedOnceAndOnlyWithProjects()
+    {
+        var file = new ContentFile(ContentSource.Modrinth, "A", "a1", "a", "a.jar", "https://x/a", null, 1, ["1.21.1"], ["fabric"], "release", default,
+        [
+            new(ContentSource.Modrinth, "API", null, DependencyKind.Required),
+            new(ContentSource.Modrinth, "OPAC", null, DependencyKind.Optional),
+            new(ContentSource.Modrinth, "OPAC", "f2", DependencyKind.Optional),
+            new(ContentSource.Modrinth, null, "f3", DependencyKind.Optional),
+        ]);
+        Assert.Equal(["OPAC"], ContentViewModel.OptionalDependencyIds(file).Select(d => d.ProjectId));
+    }
+
+    [Fact]
+    public void CurseForgeWithoutKeyIsGreyedAndNeverQueried() => Run((vm, _, curseForge) =>
+    {
+        vm.Activate();
+        Assert.False(vm.SourceOptions[1].Enabled);
+
+        vm.SourceIndex = 1;
+
+        Assert.Empty(curseForge.Queries);
+        Assert.True(vm.NeedsCurseForgeKey);
+        Assert.False(vm.IsSearching);
+        Assert.Equal("core.content.curseforge.missingapikey", vm.StatusInfo?.Key);
+
+        vm.UseModrinthCommand.Execute(null);
+        Assert.Equal(0, vm.SourceIndex);
+        Assert.False(vm.NeedsCurseForgeKey);
+    }, hasCurseForge: false);
+
+    [Fact]
+    public void EmptyAndFailedSearchesShowTheirOwnState() => Run((vm, modrinth, _) =>
+    {
+        vm.Activate();
+        Assert.False(vm.IsEmptyResult);
+
+        modrinth.Empty = true;
+        vm.Query = "不存在的模组";
+        vm.SearchCommand.ExecuteAsync(null).GetAwaiter().GetResult();
+        Assert.True(vm.IsEmptyResult);
+        Assert.Contains("不存在的模组", vm.EmptyText);
+        Assert.False(vm.IsSearching);
+
+        modrinth.Empty = false;
+        modrinth.Failure = new HttpRequestException("boom");
+        vm.SearchCommand.ExecuteAsync(null).GetAwaiter().GetResult();
+        Assert.True(vm.IsSearchError);
+        Assert.False(vm.IsEmptyResult);
+
+        modrinth.Failure = null;
+        vm.SearchCommand.ExecuteAsync(null).GetAwaiter().GetResult();
+        Assert.False(vm.IsSearchError);
+        Assert.Single(vm.Results);
+        Assert.False(vm.IsIdle);
+    });
+
+    [Fact]
+    public void ShowAllVersionsTurnsOffInstanceFilterAndSearchesAgain() => Run((vm, modrinth, _) =>
+    {
+        vm.Activate();
+        var before = modrinth.Queries.Count;
+        Assert.True(vm.FilterByInstance);
+
+        vm.ShowAllVersionsCommand.Execute(null);
+
+        Assert.False(vm.FilterByInstance);
+        Assert.Equal(before + 1, modrinth.Queries.Count);
+    });
+
+    [Fact]
+    public void InstallIsDisabledUntilAFileIsPicked() => Run((vm, _, _) =>
+    {
+        vm.Activate();
+        Assert.False(vm.InstallCommand.CanExecute(null));
+        Assert.Equal(L.T("content.install.pick_file"), vm.InstallHint);
+    });
+
+    [Fact]
+    public void ModsAreBlockedOnlyForVanillaInstances()
+    {
+        var vanilla = new GameInstance("v", "1.21.1", null, null, "x");
+        var fabric = vanilla with { Loader = "fabric" };
+        Assert.True(ContentViewModel.BlocksVanillaModInstall(ContentType.Mod, vanilla));
+        Assert.False(ContentViewModel.BlocksVanillaModInstall(ContentType.Mod, fabric));
+        Assert.False(ContentViewModel.BlocksVanillaModInstall(ContentType.ResourcePack, vanilla));
+        Assert.False(ContentViewModel.BlocksVanillaModInstall(ContentType.Shader, vanilla));
+    }
+
+    [Fact]
+    public void SlowHintMentionsModrinthAndWaitedSeconds()
+    {
+        Assert.Contains("12", ContentViewModel.SlowMessage(0, 12));
+        Assert.Contains("Modrinth", ContentViewModel.SlowMessage(0, 12));
+        Assert.Contains("CurseForge", ContentViewModel.SlowMessage(1, 12));
+        Assert.Equal(TimeSpan.FromSeconds(10), ContentViewModel.SlowAfter);
+    }
+
+    [Fact]
     public void BrowseForFromInstanceShowsContextAndReturnClearsIt() => Run((vm, modrinth, _) =>
     {
         vm.Activate();
@@ -177,7 +294,9 @@ public sealed class ContentViewModelTests
         Assert.Empty(vm.Results);
     });
 
-    private static void Run(Action<ContentViewModel, FakeProvider, FakeProvider> test)
+    private static void Run(Action<ContentViewModel, FakeProvider, FakeProvider> test) => Run(test, hasCurseForge: true);
+
+    private static void Run(Action<ContentViewModel, FakeProvider, FakeProvider> test, bool hasCurseForge)
     {
         var root = Path.Combine(Path.GetTempPath(), "amber-content-vm-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -188,7 +307,7 @@ public sealed class ContentViewModelTests
                 using var service = new LauncherService(new AppSettings { GameDirectory = root, PlayerName = "" });
                 var modrinth = new FakeProvider(ContentSource.Modrinth);
                 var curseForge = new FakeProvider(ContentSource.CurseForge);
-                var vm = new ContentViewModel(service, index => index == 0 ? modrinth : curseForge);
+                var vm = new ContentViewModel(service, index => index == 0 ? modrinth : curseForge, () => hasCurseForge);
                 test(vm, modrinth, curseForge);
             });
         }
@@ -205,6 +324,7 @@ public sealed class ContentViewModelTests
         public List<CancellationToken> Tokens { get; } = [];
         public Exception? Failure { get; set; }
         public Task<SearchResult>? PendingSearch { get; set; }
+        public bool Empty { get; set; }
 
         public Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken ct = default)
         {
@@ -212,6 +332,7 @@ public sealed class ContentViewModelTests
             Tokens.Add(ct);
             if (PendingSearch is { } pending) return pending;
             if (Failure is { } failure) return Task.FromException<SearchResult>(failure);
+            if (Empty) return Task.FromResult(new SearchResult([], 0));
             var project = new ContentProject(Source, $"{Source}-{query.Offset}", "测试模组", "", null, null, 1, null);
             return Task.FromResult(new SearchResult([project], 40));
         }

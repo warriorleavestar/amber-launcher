@@ -174,6 +174,7 @@ public sealed partial class MainViewModel : ObservableObject
         };
         instance.NavigateHome = () => CurrentPage = home;
         instance.NavigateToNewInstance = () => CurrentPage = download;
+        content.NavigateToSettings = () => CurrentPage = Pages.OfType<SettingsViewModel>().First();
         instance.NavigateToContent = (id, type) =>
         {
             CurrentPage = content;

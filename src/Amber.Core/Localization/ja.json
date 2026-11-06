@@ -1249,5 +1249,20 @@
   "instance.shaderpacks.empty": "シェーダーパックはまだありません。「オンラインで探す…」で見つけるか、「ファイルを追加」を選んでください。",
   "instance.export.dialog_title": "MODパックをエクスポート",
   "content.context.for_instance": "{0} 用の{1}を探しています",
-  "content.context.back": "← インスタンスに戻る"
+  "content.context.back": "← インスタンスに戻る",
+  "common.retry": "再試行",
+  "content.search.searching_from": "{0} で検索しています…",
+  "content.search.slow_modrinth": "Modrinth は地域によって遅いことがあります。{0} 秒待っています",
+  "content.search.slow": "{0} の応答が遅れています。{1} 秒待っています",
+  "content.search.switch_source": "ソースを切り替え",
+  "content.search.empty_query_filtered": "「{0}」は見つかりませんでした。英語名で試すか、「このインスタンスに対応するコンテンツのみ表示」をオフにしてください。",
+  "content.search.empty_query": "「{0}」は見つかりませんでした。英語名で試してください。",
+  "content.search.empty_filtered": "このインスタンスに合うものはありません。「このインスタンスに対応するコンテンツのみ表示」をオフにするとすべて表示されます。",
+  "content.search.show_all": "すべてのバージョンを表示",
+  "content.source.needs_key": "CurseForge には API キーが必要です。設定で入力すると使えます。",
+  "content.source.go_fill": "設定を開く",
+  "content.source.use_modrinth": "Modrinth を使う",
+  "content.install.pick_file": "先に上でファイルを選んでください",
+  "content.install.vanilla_blocked": "{0} はバニラのインスタンスなので、MOD は読み込まれません。「ダウンロード」ページで Fabric や Forge などのローダー付きインスタンスを入れるか、「インストール先」で別のものを選んでください。",
+  "content.install.optional_heading": "任意の前提 MOD（チェックしたものも一緒に入れます）"
 }

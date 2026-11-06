@@ -14,8 +14,9 @@ public sealed class ContentInstaller(Downloader downloader, IReadOnlyDictionary<
     /// installedProjects 里的项目（实例已有的模组）不重复安装。
     /// </summary>
     /// <param name="loaderPreference">依赖按这个顺序找版本（比如经 Connector 装 Fabric 模组时先找原生 NeoForge 版，再找 Fabric 版）；为空时只用实例的加载器。</param>
+    /// <param name="optionalProjects">玩家勾选的可选依赖（项目 id）：当作必需依赖一起装，其余可选依赖不装。</param>
     public async Task<InstallPlan> ResolveAsync(ContentFile root, GameInstance instance, ISet<string>? installedProjects = null, CancellationToken ct = default,
-        IReadOnlyList<string?>? loaderPreference = null)
+        IReadOnlyList<string?>? loaderPreference = null, ISet<string>? optionalProjects = null)
     {
         var plan = new List<ContentFile>();
         var problems = new List<string>();
@@ -32,7 +33,9 @@ public sealed class ContentInstaller(Downloader downloader, IReadOnlyDictionary<
                 ct.ThrowIfCancellationRequested();
                 if (dep.Kind == DependencyKind.Incompatible && dep.ProjectId is { } bad && installedProjects?.Contains(bad) == true)
                     problems.Add(L.F("core.content.install.incompatible", file.DisplayName, bad));
-                if (dep.Kind != DependencyKind.Required) continue;
+                var wanted = dep.Kind == DependencyKind.Required
+                    || dep.Kind == DependencyKind.Optional && dep.ProjectId is { } optional && optionalProjects?.Contains(optional) == true;
+                if (!wanted) continue;
 
                 var provider = providers[dep.Source];
                 ContentFile? resolved;

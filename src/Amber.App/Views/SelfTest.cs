@@ -424,6 +424,34 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         var instance = Path.Combine(GameRoot(), "versions", FabricName, "mods");
         Check("安装模组到实例", Directory.Exists(instance) && Directory.EnumerateFiles(instance, "sodium*").Any(), content.Status);
 
+        // 1b.4：往原版实例装模组，安装前拦下；没选文件时安装按钮禁用。
+        var vanillaId = Environment.GetEnvironmentVariable("AMBER_SELFTEST_VERSION") ?? "1.21.1";
+        if (content.Instances.Contains(vanillaId))
+        {
+            var keepTarget = content.TargetInstance;
+            content.TargetInstance = vanillaId;
+            await WaitAsync(() => content.SelectedFile is not null || content.Files.Count == 0, 20);
+            if (content.SelectedFile is not null)
+            {
+                var vanillaMods = Path.Combine(GameRoot(), "versions", vanillaId, "mods");
+                var before = Directory.Exists(vanillaMods) ? Directory.GetFiles(vanillaMods).Length : 0;
+                await content.InstallCommand.ExecuteAsync(null);
+                var after = Directory.Exists(vanillaMods) ? Directory.GetFiles(vanillaMods).Length : 0;
+                Check("原版实例装模组前拦下", content.StatusInfo?.Key == "content.install.vanilla_blocked" && after == before, content.Status);
+            }
+            content.TargetInstance = keepTarget;
+        }
+        var keepFile = content.SelectedFile;
+        content.SelectedFile = null;
+        Check("没选文件时安装按钮禁用", !content.InstallCommand.CanExecute(null));
+        content.SelectedFile = keepFile;
+
+        // #22：翻页时右侧详情不收起。
+        var detail = content.Detail;
+        await content.NextPageCommand.ExecuteAsync(null);
+        Check("翻页时详情面板不收起（#22）", detail is not null && ReferenceEquals(content.Detail, detail) && content.HasSelection, content.Status);
+        await content.PreviousPageCommand.ExecuteAsync(null);
+
         content.SourceIndex = 1;
         await WaitAsync(() => content.Status.Contains("失败") || content.Results.Count > 0, 20);
         Check("没配 Key 时 CurseForge 给出明确提示", content.Status.Contains("API 密钥") || content.Results.Count > 0, content.Status);

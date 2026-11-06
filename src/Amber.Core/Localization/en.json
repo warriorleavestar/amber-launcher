@@ -1280,5 +1280,20 @@
   "instance.shaderpacks.empty": "No shader packs yet. Select “Browse online…” to find one, or “Add files”.",
   "instance.export.dialog_title": "Export modpack",
   "content.context.for_instance": "Finding {1} for {0}",
-  "content.context.back": "← Back to instance"
+  "content.context.back": "← Back to instance",
+  "common.retry": "Retry",
+  "content.search.searching_from": "Searching {0}…",
+  "content.search.slow_modrinth": "Modrinth can be slow in some regions. Waited {0} s so far",
+  "content.search.slow": "{0} is responding slowly. Waited {1} s so far",
+  "content.search.switch_source": "Switch source",
+  "content.search.empty_query_filtered": "Nothing found for “{0}”. Try the English name, or turn off “Show only content for this instance”.",
+  "content.search.empty_query": "Nothing found for “{0}”. Try the English name.",
+  "content.search.empty_filtered": "Nothing matches this instance. Turn off “Show only content for this instance” to see everything.",
+  "content.search.show_all": "Show all versions",
+  "content.source.needs_key": "CurseForge needs an API key. Add one in Settings to use it.",
+  "content.source.go_fill": "Open Settings",
+  "content.source.use_modrinth": "Use Modrinth",
+  "content.install.pick_file": "Pick a file above first",
+  "content.install.vanilla_blocked": "{0} is a vanilla instance, so mods would not load. Install an instance with a loader such as Fabric or Forge on the Downloads page, or pick another one under “Install to”.",
+  "content.install.optional_heading": "Optional dependencies (checked ones are installed too)"
 }

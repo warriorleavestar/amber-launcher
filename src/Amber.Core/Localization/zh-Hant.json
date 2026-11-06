@@ -1249,5 +1249,20 @@
   "instance.shaderpacks.empty": "還沒有光影。點選「線上瀏覽…」尋找，或點選「新增檔案」。",
   "instance.export.dialog_title": "匯出模組包",
   "content.context.for_instance": "正在為 {0} 尋找{1}",
-  "content.context.back": "← 返回實例"
+  "content.context.back": "← 返回實例",
+  "common.retry": "重試",
+  "content.search.searching_from": "正在從 {0} 搜尋…",
+  "content.search.slow_modrinth": "Modrinth 在部分地區可能較慢，已等待 {0} 秒",
+  "content.search.slow": "{0} 回應較慢，已等待 {1} 秒",
+  "content.search.switch_source": "切換來源",
+  "content.search.empty_query_filtered": "沒找到「{0}」。試試英文名稱，或取消「只顯示適用於這個實例的內容」。",
+  "content.search.empty_query": "沒找到「{0}」。試試英文名稱。",
+  "content.search.empty_filtered": "沒有適用於這個實例的內容。可以取消「只顯示適用於這個實例的內容」看看全部。",
+  "content.search.show_all": "顯示全部版本",
+  "content.source.needs_key": "CurseForge 需要 API 金鑰，在「設定」裡填寫後才能使用。",
+  "content.source.go_fill": "前往填寫",
+  "content.source.use_modrinth": "改用 Modrinth",
+  "content.install.pick_file": "請先在上方選一個版本檔案",
+  "content.install.vanilla_blocked": "{0} 是原版實例，模組裝進去也不會載入。請先到「下載」頁安裝帶有 Fabric、Forge 等載入器的實例，或在「安裝至」裡換一個。",
+  "content.install.optional_heading": "選用相依項目（勾選的一起安裝）"
 }
