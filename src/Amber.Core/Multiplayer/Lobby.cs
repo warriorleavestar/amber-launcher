@@ -154,7 +154,7 @@ public static class LobbyJoin
             find.CancelAfter(FindHostTimeout);
             while (true)
             {
-                if (lobby.HasExited) throw new IOException(L.F("core.mp.component.exited", lobby.RecentOutput.LastOrDefault() ?? ""));
+                if (lobby.HasExited) throw new IOException(L.F("core.mp.lobby.exited", lobby.RecentOutput.LastOrDefault() ?? ""));
                 var peersNow = await lobby.PeersAsync(find.Token);
                 if (peersNow.Any(p => p.Ip == LobbyArgs.HostIp && p.Cost != "Local")) break;
                 try { await Task.Delay(1000, find.Token); }

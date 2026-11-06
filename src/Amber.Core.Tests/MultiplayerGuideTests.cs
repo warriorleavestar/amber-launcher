@@ -129,15 +129,28 @@ public sealed class MultiplayerGuideTests
     });
 
     [Fact]
-    public void RoomCodeInDirectBoxMovesToRoomBox() => UiTestThread.Run(() =>
+    public void InviteInDirectBoxMovesToRoomBox() => UiTestThread.Run(() =>
     {
         var (service, vm, _) = Create();
         using var __ = service;
-        const string code = "AMB-K7Q2M9XD-4HZP8RW2N6TC-25565";
+        const string code = "JAY2-00041061050R3GG28A1C60T3GF-0G2491650N2RBHG68T3CE1T7GZ-2";
         vm.DirectInviteInput = code;
         vm.JoinDirectCommand.Execute(null);
         Assert.Equal("", vm.DirectInviteInput);
         Assert.Equal(code, vm.JoinCode);
+        Assert.True(vm.IsIdle);
+    });
+
+    /// <summary>旧版本的 AMB- 房间码贴进直连框：不再转去加入，提示请房主更新。</summary>
+    [Fact]
+    public void OldRoomCodeInDirectBoxShowsUpdateHint() => UiTestThread.Run(() =>
+    {
+        var (service, vm, _) = Create();
+        using var __ = service;
+        vm.DirectInviteInput = "AMB-K7Q2M9XD-4HZP8RW2N6TC-25565";
+        vm.JoinDirectCommand.Execute(null);
+        Assert.Equal("", vm.JoinCode);
+        Assert.Contains("JAY2-", vm.Status);
         Assert.True(vm.IsIdle);
     });
 

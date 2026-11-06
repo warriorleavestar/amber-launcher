@@ -17,7 +17,7 @@ namespace Amber.Core.Multiplayer;
 public sealed record RoomCredentials(string Network, string Secret, int Epoch, byte[] HostPublicKey, int GamePort, int ChatPort, TunnelSettings Tunnel)
 {
     public static RoomCredentials Create(byte[] hostPublicKey, int gamePort, TunnelSettings tunnel) =>
-        new("jay-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)), Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)), 1,
+        new("jay-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)), Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)), 1,
             (byte[])hostPublicKey.Clone(), gamePort, RoomChat.Port, tunnel);
 
     /// <summary>按凭据建出内部的房间对象（游戏、聊天、封装的密钥都从这个 256 位密钥派生）。</summary>
@@ -111,7 +111,8 @@ public static partial class KnockProtocol
     [GeneratedRegex("^jay-[0-9a-f]{16}$")]
     internal static partial Regex NetworkPattern();
 
-    [GeneratedRegex("^[0-9a-f]{64}$")]
+    /// <summary>32 字节的标准 Base64（44 个字符，末尾一个 =）。</summary>
+    [GeneratedRegex("^[A-Za-z0-9+/]{43}=$")]
     internal static partial Regex SecretPattern();
 
     [GeneratedRegex("^[0-9a-f]{64}$")]
@@ -462,7 +463,8 @@ public sealed class KnockServer : IAsyncDisposable
             {
                 var id = await KnockProtocol.ReadFrameAsync(stream, timeout.Token);
                 invite = id.Length == KnockProtocol.IdLength ? _book.Find(id) : null;
-                if (invite is null || _book.Lobby is not { } lobby)
+                // 不认识、已过期、已用完或已撤销：都直接断开，不握手。
+                if (invite is null || !invite.IsUsable(_book.Now) || _book.Lobby is not { } lobby)
                 {
                     Fail(L.T("core.mp.knock.unknown"));
                     return;

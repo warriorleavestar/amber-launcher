@@ -113,8 +113,9 @@ public sealed partial class MultiplayerViewModel
     [ObservableProperty] public partial bool IsKnocking { get; set; }
 
     /// <summary>加入方：房主的指纹（敲门握手里证明过的身份）。</summary>
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(HasHostFingerprint))] public partial string HostFingerprint { get; set; } = "";
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(HasHostFingerprint), nameof(HostFingerprintText))] public partial string HostFingerprint { get; set; } = "";
     public bool HasHostFingerprint => HostFingerprint.Length > 0;
+    public string HostFingerprintText => L.F("multiplayer.invite.host_fingerprint", HostFingerprint);
 
     /// <summary>测试用：最近一次发出的完整邀请码（界面上默认打码）。</summary>
     internal string? TestInviteText => _lastInvite?.ToString();

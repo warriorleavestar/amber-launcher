@@ -75,7 +75,7 @@ public sealed class KnockTests : IAsyncDisposable
         Assert.Equal(RoomChat.Port, c.ChatPort);
         Assert.Equal(new TunnelSettings(TransportMode.High, true), c.Tunnel);
         Assert.Matches("^jay-[0-9a-f]{16}$", c.Network);
-        Assert.Equal(64, c.Secret.Length);
+        Assert.Equal(32, Convert.FromBase64String(c.Secret).Length);
         // 房主看到的是这位的名字和指纹（握手里证明过的长期公钥）。
         var asked = Assert.Single(_asked);
         Assert.Equal("Steve", asked.Name);
@@ -139,6 +139,25 @@ public sealed class KnockTests : IAsyncDisposable
         Assert.Equal(1, real.UsesLeft);
     }
 
+    /// <summary>编号对、令牌不对（psk 不对）：XXpsk0 的第一条消息房主就读不过，什么都不回（拿不到房主的长期公钥），也不算用掉。</summary>
+    [Fact]
+    public async Task WrongTokenFailsAtFirstMessage()
+    {
+        var real = Invite();
+        var server = Server();
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, server.Port);
+        var stream = client.GetStream();
+        var wrongPsk = LobbyKeys.KnockPsk(RandomNumberGenerator.GetBytes(16));
+        using var handshake = new NoiseHandshake(NoisePattern.XXpsk0, true, KnockProtocol.Prologue(LobbyKeys.LobbyName(real.Invite.LobbyKey)), wrongPsk, _guest);
+        await KnockProtocol.WriteFrameAsync(stream, LobbyKeys.InviteId(real.Invite.Token), default);
+        await KnockProtocol.WriteFrameAsync(stream, handshake.WriteMessage([]), default);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, await ReadToEndAsync(stream, timeout.Token));
+        Assert.Empty(_asked);
+        Assert.Equal(1, real.UsesLeft);
+    }
+
     [Fact]
     public async Task WrongLobbyKeyFailsHandshake()
     {
@@ -156,8 +175,7 @@ public sealed class KnockTests : IAsyncDisposable
         var invite = Invite(life: TimeSpan.FromMinutes(10));
         Invite(life: null);
         _now += TimeSpan.FromMinutes(11);
-        var outcome = await KnockAsync(invite.Invite);
-        Assert.Equal("expired", outcome.Reason);
+        await Assert.ThrowsAnyAsync<IOException>(() => KnockAsync(invite.Invite));
         Assert.Empty(_asked);
     }
 
@@ -167,7 +185,7 @@ public sealed class KnockTests : IAsyncDisposable
         var invite = Invite(uses: 2);
         Assert.True((await KnockAsync(invite.Invite)).Approved);
         Assert.True((await KnockAsync(invite.Invite)).Approved);
-        Assert.Equal("expired", (await KnockAsync(invite.Invite)).Reason);
+        await Assert.ThrowsAnyAsync<IOException>(() => KnockAsync(invite.Invite));
         Assert.Equal(2, _asked.Count);
         Assert.False(_book.HasPending);
     }
@@ -178,7 +196,7 @@ public sealed class KnockTests : IAsyncDisposable
         var keep = Invite();
         var revoked = Invite();
         _book.Revoke(revoked);
-        Assert.Equal("expired", (await KnockAsync(revoked.Invite)).Reason);
+        await Assert.ThrowsAnyAsync<IOException>(() => KnockAsync(revoked.Invite));
         // 最后一张也撤销了：大厅密钥丢掉，再敲直接断开。
         _book.Revoke(keep);
         Assert.Null(_book.Lobby);

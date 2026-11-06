@@ -69,6 +69,7 @@
               <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.join.hint}" />
               <TextBox Text="{Binding JoinCode}" PlaceholderText="{l:T multiplayer.join.code_placeholder}" />
               <Button Classes="primary" Content="{l:T multiplayer.join.join}" Command="{Binding JoinCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+              <Button Content="{l:T multiplayer.invite.cancel}" Command="{Binding CancelKnockCommand}" IsVisible="{Binding IsKnocking}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
             </StackPanel>
           </Border>
         </Grid>
@@ -135,6 +136,31 @@
           </StackPanel>
         </Border>
 
+        <!-- 我的联机身份和信任列表 -->
+        <Expander HorizontalAlignment="Stretch">
+          <Expander.Header>
+            <TextBlock Text="{Binding MyFingerprint}" TextWrapping="Wrap" FontWeight="SemiBold" />
+          </Expander.Header>
+          <StackPanel Spacing="8">
+            <TextBlock Text="{l:T multiplayer.identity.title}" FontWeight="SemiBold" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.identity.reset_hint}" />
+            <Button Content="{l:T multiplayer.identity.reset}" Command="{Binding ResetIdentityCommand}" IsEnabled="{Binding IsIdle}" HorizontalAlignment="Left" />
+            <TextBlock Text="{l:T multiplayer.trusted.title}" FontWeight="SemiBold" Margin="0,6,0,0" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.trusted.hint}" />
+            <TextBlock Classes="hint" Text="{l:T multiplayer.trusted.empty}" IsVisible="{Binding !TrustedPeople.Count}" />
+            <ItemsControl ItemsSource="{Binding TrustedPeople}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:TrustedItem">
+                  <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                    <TextBlock Text="{Binding Label}" FontFamily="Consolas,monospace" VerticalAlignment="Center" TextWrapping="Wrap" />
+                    <Button Grid.Column="1" Content="{l:T multiplayer.trusted.remove}" Command="{Binding $parent[ItemsControl].((vm:MultiplayerViewModel)DataContext).RemoveTrustedCommand}" CommandParameter="{Binding}" Margin="6,0,0,0" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Expander>
+
         <!-- 高级选项：默认收起，标题里显示开了哪些 -->
         <Expander IsVisible="{Binding IsIdle}" HorizontalAlignment="Stretch">
           <Expander.Header>
@@ -197,12 +223,89 @@
         <Border Classes="card" Margin="0" IsVisible="{Binding IsHosting}">
           <StackPanel Spacing="8">
             <TextBlock Classes="h2" Text="{l:T multiplayer.host.active}" Margin="0" />
-            <TextBlock Text="{l:T multiplayer.room.code_label}" />
-            <Grid ColumnDefinitions="*,Auto">
-              <TextBox Text="{Binding RoomCodeText}" IsReadOnly="True" FontFamily="Consolas,monospace" FontSize="16" />
-              <Button Grid.Column="1" Content="{l:T common.copy}" Command="{Binding CopyRoomCodeCommand}" Margin="6,0,0,0" />
-            </Grid>
-            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.room.code_hint}" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.invite.hint}" />
+            <Button Classes="primary" Content="{l:T multiplayer.invite.button}" Command="{Binding OpenInviteDialogCommand}" IsVisible="{Binding !InviteDialogOpen}" HorizontalAlignment="Left" />
+            <!-- 邀请朋友：次数、有效期、自动批准；生成后默认打码显示 -->
+            <Border Classes="card" Margin="0" IsVisible="{Binding InviteDialogOpen}">
+              <StackPanel Spacing="8">
+                <TextBlock Text="{l:T multiplayer.invite.dialog_title}" FontWeight="SemiBold" />
+                <WrapPanel ItemSpacing="8" LineSpacing="6">
+                  <TextBlock Text="{l:T multiplayer.invite.uses}" VerticalAlignment="Center" />
+                  <NumericUpDown Value="{Binding InviteUses}" Minimum="1" Maximum="20" Increment="1" FormatString="0" MinWidth="110" />
+                  <TextBlock Text="{l:T multiplayer.invite.expiry}" VerticalAlignment="Center" />
+                  <ComboBox ItemsSource="{Binding InviteExpiryChoices}" SelectedItem="{Binding SelectedInviteExpiry}" MinWidth="150">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate DataType="vm:InviteExpiryChoice"><TextBlock Text="{Binding Label}" /></DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                </WrapPanel>
+                <CheckBox Content="{l:T multiplayer.invite.auto_approve}" IsChecked="{Binding InviteAutoApprove}" />
+                <WrapPanel ItemSpacing="6" LineSpacing="6">
+                  <Button Classes="primary" Content="{l:T multiplayer.invite.create}" Command="{Binding CreateInviteCommand}" />
+                  <Button Content="{l:T multiplayer.invite.close}" Command="{Binding CloseInviteDialogCommand}" />
+                </WrapPanel>
+                <Grid ColumnDefinitions="*,Auto,Auto" IsVisible="{Binding HasInvite}">
+                  <TextBox Text="{Binding InviteDisplay}" IsReadOnly="True" FontFamily="Consolas,monospace" TextWrapping="Wrap" />
+                  <Button Grid.Column="1" Command="{Binding ToggleInviteShownCommand}" Margin="6,0,0,0" VerticalAlignment="Top">
+                    <Panel>
+                      <TextBlock Text="{l:T multiplayer.invite.show}" IsVisible="{Binding !InviteShown}" />
+                      <TextBlock Text="{l:T multiplayer.invite.hide}" IsVisible="{Binding InviteShown}" />
+                    </Panel>
+                  </Button>
+                  <Button Grid.Column="2" Content="{l:T multiplayer.invite.copy}" Command="{Binding CopyInviteCommand}" Margin="6,0,0,0" VerticalAlignment="Top" />
+                </Grid>
+              </StackPanel>
+            </Border>
+            <!-- 有人敲门：批准 / 拒绝（120 秒没点算拒绝） -->
+            <StackPanel Spacing="6" IsVisible="{Binding !!ApprovalCards.Count}">
+              <TextBlock Text="{l:T multiplayer.invite.approvals_title}" FontWeight="SemiBold" />
+              <ItemsControl ItemsSource="{Binding ApprovalCards}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="vm:ApprovalCard">
+                    <Border Classes="card" Margin="0,2" BorderBrush="{DynamicResource Warning}" BorderThickness="1">
+                      <StackPanel Spacing="4">
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding Detail}" FontFamily="Consolas,monospace" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding Warning}" IsVisible="{Binding HasWarning}" Foreground="{DynamicResource WarningText}" TextWrapping="Wrap" FontSize="12" />
+                        <WrapPanel ItemSpacing="6" LineSpacing="6">
+                          <Button Classes="primary" Content="{l:T multiplayer.invite.approve}" Command="{Binding $parent[ItemsControl].((vm:MultiplayerViewModel)DataContext).ApproveKnockCommand}" CommandParameter="{Binding}" />
+                          <Button Content="{l:T multiplayer.invite.deny}" Command="{Binding $parent[ItemsControl].((vm:MultiplayerViewModel)DataContext).DenyKnockCommand}" CommandParameter="{Binding}" />
+                        </WrapPanel>
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+            <!-- 待用的邀请：可撤销 -->
+            <StackPanel Spacing="4" IsVisible="{Binding !!PendingInvites.Count}">
+              <TextBlock Text="{l:T multiplayer.invite.pending_title}" FontWeight="SemiBold" />
+              <ItemsControl ItemsSource="{Binding PendingInvites}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="vm:PendingInviteItem">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                      <TextBlock Text="{Binding Label}" FontFamily="Consolas,monospace" VerticalAlignment="Center" TextWrapping="Wrap" />
+                      <Button Grid.Column="1" Content="{l:T multiplayer.invite.revoke}" Command="{Binding $parent[ItemsControl].((vm:MultiplayerViewModel)DataContext).RevokeInviteCommand}" CommandParameter="{Binding}" Margin="6,0,0,0" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+            <!-- 经邀请加入的人：名字和指纹，可加入信任列表 -->
+            <StackPanel Spacing="4" IsVisible="{Binding !!Members.Count}">
+              <TextBlock Text="{l:T multiplayer.invite.members_title}" FontWeight="SemiBold" />
+              <ItemsControl ItemsSource="{Binding Members}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="vm:MemberItem">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                      <TextBlock Text="{Binding Label}" FontFamily="Consolas,monospace" VerticalAlignment="Center" TextWrapping="Wrap" />
+                      <Button Grid.Column="1" Content="{l:T multiplayer.invite.trust}" IsVisible="{Binding CanTrust}" Command="{Binding $parent[ItemsControl].((vm:MultiplayerViewModel)DataContext).TrustMemberCommand}" CommandParameter="{Binding}" Margin="6,0,0,0" />
+                      <TextBlock Grid.Column="1" Text="{l:T multiplayer.invite.trusted_badge}" IsVisible="{Binding Trusted}" Classes="hint" VerticalAlignment="Center" Margin="6,0,0,0" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
             <TextBlock Text="{Binding MyVirtualIpText}" IsVisible="{Binding MyVirtualIp, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
           </StackPanel>
         </Border>
@@ -214,6 +317,7 @@
             <TextBlock Text="{l:T multiplayer.join.address_label}" />
             <TextBox Text="{Binding JoinAddress}" IsReadOnly="True" FontFamily="Consolas,monospace" FontSize="16" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.join.address_hint}" />
+            <TextBlock Text="{Binding HostFingerprintText}" FontFamily="Consolas,monospace" IsVisible="{Binding HasHostFingerprint}" TextWrapping="Wrap" />
             <TextBlock Text="{Binding MyVirtualIpText}" IsVisible="{Binding MyVirtualIp, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             <!-- 窄窗口、长译文时按钮换到下一行。 -->
             <WrapPanel ItemSpacing="6" LineSpacing="6">
