@@ -74,6 +74,12 @@ public sealed class AppSettings
     /// <summary>打开启动器时检查一次更新（只在设置导航上显示提示，不自动下载）。</summary>
     public bool CheckUpdatesOnStart { get; set; } = true;
 
+    /// <summary>实验功能“烘焙”：Fabric / Quilt 实例启动前先用通用加载器预先处理，启动时用处理结果。</summary>
+    public bool ExperimentalBake { get; set; }
+
+    /// <summary>通用加载器原型的目录（实验）；为空时看环境变量 AMBER_BAKE_LOADER。</summary>
+    public string? BakeLoaderPath { get; set; }
+
     /// <summary>删除的模组、存档等在回收目录里保留几天，过期自动清掉。</summary>
     public int TrashRetentionDays { get; set; } = 7;
 

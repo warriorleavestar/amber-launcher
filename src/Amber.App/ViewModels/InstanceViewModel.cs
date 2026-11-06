@@ -470,6 +470,27 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         RecheckCompat();
     }
 
+    /// <summary>实验功能“烘焙”开着时显示“立即烘焙”。</summary>
+    public bool BakeEnabled => _service.Settings.ExperimentalBake;
+
+    /// <summary>立即烘焙：不启动游戏，只把模组和实例预先处理好，下次启动直接用。</summary>
+    [RelayCommand]
+    private async Task BakeNowAsync()
+    {
+        if (Current is not { } c) return;
+        await RunWorkAsync(async ct =>
+        {
+            SetStatus(StatusMessage.Info("home.status.checking_game_files"));
+            await _service.Installer.CompleteAsync(c.Id, null, ct);
+            var settings = _service.EffectiveSettings(c.Id);
+            var version = _service.Directory.ResolveVersion(c.Id);
+            var java = !string.IsNullOrEmpty(settings.JavaPath) && File.Exists(settings.JavaPath) ? settings.JavaPath : await _service.Java.ForVersionAsync(version, ct);
+            SetStatus(StatusMessage.Info("home.status.baking"));
+            var (baked, reason) = await _service.PrepareBakeAsync(c.Id, java, new Progress<Amber.Core.Bake.BakeEvent>(e => Status = e.Message), ct);
+            SetStatus(baked is null ? StatusMessage.Warning("instance.bake.skipped", reason) : StatusMessage.Success("instance.bake.done", reason));
+        });
+    }
+
     public async Task ExportLaunchScriptAsync(string path)
     {
         if (Current is not { } c) return;
