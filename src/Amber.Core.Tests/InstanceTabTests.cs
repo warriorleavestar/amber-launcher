@@ -28,6 +28,31 @@ public sealed class InstanceTabTests : IDisposable
         Assert.Equal(InstanceTab.Worlds, InstanceViewModel.DefaultTab(new GameInstance("v", "1.21.1", null, null, _root)));
     }
 
+    /// <summary>保存实例设置后按新设置重新读实例：改了隔离，工作目录跟着变（不用重新选一次实例）。</summary>
+    [Fact]
+    public void SavingIsolationRefreshesWorkDir() => UiTestThread.Run(() =>
+    {
+        var dir = Path.Combine(_root, "versions", "a");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "a.json"), """{"id":"a","mainClass":"Example","libraries":[]}""");
+        File.WriteAllBytes(Path.Combine(dir, "a.jar"), []);
+        var service = new LauncherService(new AppSettings
+        {
+            GameDirectory = _root,
+            SavePathForTest = Path.Combine(_root, "settings.json"),
+            PlayerName = "",
+            AutoJavaDownload = false,
+        });
+        var vm = new InstanceViewModel(service);
+        vm.SelectedId = "a";
+        vm.IsolateIndex = 2; // 不隔离
+        vm.SaveSettingsCommand.Execute(null);
+        Assert.Equal(Path.GetFullPath(_root), Path.GetFullPath(vm.Current!.WorkDir));
+        vm.IsolateIndex = 1; // 隔离
+        vm.SaveSettingsCommand.Execute(null);
+        Assert.Equal(Path.GetFullPath(dir), Path.GetFullPath(vm.Current!.WorkDir));
+    });
+
     [Fact]
     public void EachInstanceRemembersItsLastTab() => UiTestThread.Run(() =>
     {

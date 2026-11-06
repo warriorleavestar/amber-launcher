@@ -37,7 +37,9 @@ public sealed class LauncherService : IDisposable
     public bool IsCurrentDirectory(GameContext ctx) =>
         ReferenceEquals(ctx, Context)
         || string.Equals(Path.GetFullPath(ctx.Directory.Root).TrimEnd(Path.DirectorySeparatorChar),
-            Path.GetFullPath(Directory.Root).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+            Path.GetFullPath(Directory.Root).TrimEnd(Path.DirectorySeparatorChar),
+            // Linux 区分大小写：/games/Pack 和 /games/pack 是两个目录。
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     /// <summary>已安装版本列表变化（安装完成、切换目录）时触发。</summary>
     public event Action? InstalledVersionsChanged;

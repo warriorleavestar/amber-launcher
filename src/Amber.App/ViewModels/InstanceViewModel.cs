@@ -646,7 +646,9 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
         };
         s.Save(_service.Directory, c.Id);
         var id = c.Id;
-        OnSelectedIdChanged(id);
+        // 隔离设置可能变了：按新的设置重新读实例（工作目录、各个 Tab）。
+        // 只实现了两个参数的 OnSelectedIdChanged，单参数的分部方法没有实现，调用它什么也不做。
+        OnSelectedIdChanged(id, id);
         SetStatus(StatusMessage.Success("instance.settings.saved", id));
     }
 
