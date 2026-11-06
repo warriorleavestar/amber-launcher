@@ -93,6 +93,14 @@
               </Grid>
             </Border>
             <Border Classes="card">
+              <StackPanel Spacing="6">
+                <TextBlock Classes="h2" Text="{l:T settings.bake.title}" Margin="0" />
+                <CheckBox IsChecked="{Binding ExperimentalBake}" Content="{l:T settings.bake.toggle}" />
+                <TextBlock Classes="hint" FontSize="12" Text="{l:T settings.bake.hint}" TextWrapping="Wrap" />
+                <TextBox Text="{Binding BakeLoaderPath}" IsEnabled="{Binding ExperimentalBake}" PlaceholderText="{l:T settings.bake.loader_hint}" />
+              </StackPanel>
+            </Border>
+            <Border Classes="card">
               <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
                 <TextBlock Text="{l:T settings.curseforge.key}" VerticalAlignment="Center" />
                 <TextBox Grid.Column="1" Text="{Binding CurseForgeKey}" PasswordChar="●" PlaceholderText="{l:T settings.curseforge.key_hint}" />

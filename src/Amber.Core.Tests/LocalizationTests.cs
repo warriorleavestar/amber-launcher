@@ -11,7 +11,7 @@ public partial class LocalizationTests
     private static readonly string Src = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
 
     /// <summary>开发用的自检文件不翻译。</summary>
-    private static readonly string[] Excluded = ["SelfTest.cs", "LayoutCheck.cs", "Spike.cs"];
+    private static readonly string[] Excluded = ["SelfTest.cs", "SelfTest.MultiplayerGuide.cs", "SelfTest.BakeNotice.cs", "LayoutCheck.cs", "Spike.cs"];
 
     // 汉字（含扩展 A）、假名、中日文标点和全角符号，以及中文里常用的 …“”—：写死在代码里的标点换语言后也会留在文字中间。
     [GeneratedRegex(@"[㐀-䶿一-鿿぀-ヿ　-〿＀-￯…“”—]")]

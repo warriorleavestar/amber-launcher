@@ -519,6 +519,8 @@ try
             var joinServer = TakeOption(argList, "--server");
             var joinWorld = TakeOption(argList, "--world");
             var extraJvm = TakeOption(argList, "--jvm");
+            // --bake <加载器目录>：实验功能，先用通用加载器烘焙模组和实例，再用烘焙结果启动。
+            var bakeLoader = TakeOption(argList, "--bake");
 
             await installer.CompleteAsync(id, null, cts.Token);
             var version = dir.ResolveVersion(id);
@@ -544,6 +546,25 @@ try
                 var jar = await new AuthlibInjector(http, Path.Combine(dir.Root, "authlib-injector")).EnsureJarAsync(cts.Token);
                 options = options with { ExtraJvmArgs = AuthlibInjector.JvmArgs(jar, api, await external.GetMetadataAsync(api, cts.Token)) };
                 Console.WriteLine($"authlib-injector：{jar} → {api}");
+            }
+            if (bakeLoader is not null)
+            {
+                var toolkit = Amber.Core.Bake.BakeToolkit.Find(bakeLoader) ?? throw new DirectoryNotFoundException(bakeLoader);
+                var bake = new Amber.Core.Bake.BakeService(toolkit, Path.Combine(dir.Root, ".amber-bake-cache"));
+                var instance = Instance(id, isolate);
+                var (_, _, supported) = await bake.VersionAsync(javaPath, cts.Token);
+                if (!Amber.Core.Bake.BakeService.Supports(instance, supported, out var reason)) throw new InvalidOperationException(reason);
+                var major = version.JavaVersion?.MajorVersion ?? 21;
+                var bakeWatch = System.Diagnostics.Stopwatch.StartNew();
+                var events = new SyncProgress<Amber.Core.Bake.BakeEvent>(e => Console.WriteLine("BAKE " + e.Message));
+                var baked = bake.Current(dir, instance, major);
+                if (baked is null)
+                {
+                    await bake.BakeModsAsync(javaPath, dir, instance, events, cts.Token);
+                    baked = await bake.BakeInstanceAsync(javaPath, major, dir, instance, events, cts.Token);
+                }
+                Console.WriteLine($"BAKE READY {bakeWatch.Elapsed.TotalSeconds:F1}s {baked.StateFile}");
+                options = options with { Baked = baked };
             }
             var launcher = new GameLauncher(dir);
             if (dryRun)
