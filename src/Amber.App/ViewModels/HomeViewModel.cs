@@ -407,6 +407,7 @@ public sealed partial class HomeViewModel : PageViewModel
 
     private async Task RunAsync(LaunchRequest request, bool allowSecond = false)
     {
+        Toasts.DismissBakeFailures();
         if (_runs.Any(r => r.Game is null))
         {
             SetStatus(StatusMessage.Warning("home.status.preparing_other"));

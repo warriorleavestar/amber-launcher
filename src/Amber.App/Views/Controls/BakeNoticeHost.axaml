@@ -3,37 +3,14 @@
              xmlns:c="using:Amber.App.Views.Controls"
              xmlns:l="using:Amber.App.Localization"
              x:Class="Amber.App.Views.Controls.BakeNoticeHost"
-             x:DataType="c:BakeNoticeHost" x:Name="Root"
-             IsVisible="{Binding !!Notices.Count, ElementName=Root}">
-  <!-- 最多三条，限制高度并滚动，最小窗口仍给崩溃详情和启动栏留出空间。 -->
-  <ScrollViewer MaxHeight="172" Margin="0,0,0,16" HorizontalScrollBarVisibility="Disabled"
-                VerticalScrollBarVisibility="Auto">
-    <ItemsControl ItemsSource="{Binding Notices, ElementName=Root}" MaxWidth="720" HorizontalAlignment="Stretch">
-      <ItemsControl.ItemTemplate>
-        <DataTemplate x:DataType="c:BakeNotice">
-          <Border Background="{DynamicResource WarningTint}" BorderBrush="{DynamicResource Warning}"
-                  BorderThickness="1" CornerRadius="{DynamicResource RadiusLg}"
-                  Padding="{DynamicResource CardPadding}" Margin="0,0,0,8">
-            <Grid ColumnDefinitions="24,*,Auto" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="8">
-              <Border Width="22" Height="22" CornerRadius="11" BorderBrush="{DynamicResource Warning}" BorderThickness="1" VerticalAlignment="Top">
-                <TextBlock Text="!" FontWeight="Bold" Foreground="{DynamicResource WarningText}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-              </Border>
-              <TextBlock Grid.Column="1" Text="{l:T home.bake.failed_title}" FontSize="{DynamicResource FontSubtitle}"
-                         FontWeight="SemiBold" Foreground="{DynamicResource WarningText}" TextWrapping="Wrap" />
-              <Button Grid.Column="2" Content="×" Command="{Binding DismissCommand}" Padding="4,0" MinWidth="24" MinHeight="24"
-                      VerticalAlignment="Top" ToolTip.Tip="{l:T common.close}" AutomationProperties.Name="{l:T common.close}" />
-              <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding Text}" FontSize="{DynamicResource FontBody}"
-                         LineHeight="21" TextWrapping="Wrap" Foreground="{DynamicResource TextPrimary}" />
-              <WrapPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" ItemSpacing="12" LineSpacing="6">
-                <Button Classes="secondary" Content="{l:T home.bake.retry_without}" Command="{Binding RetryCommand}"
-                        MinHeight="36" Padding="14,6" />
-                <TextBlock Text="{l:T home.bake.retry_once}" FontSize="{DynamicResource FontCaption}"
-                           Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" />
-              </WrapPanel>
-            </Grid>
-          </Border>
-        </DataTemplate>
-      </ItemsControl.ItemTemplate>
-    </ItemsControl>
-  </ScrollViewer>
+             x:DataType="c:BakeNoticeState"
+             IsVisible="{Binding HasNotice}">
+  <!-- 状态框内只呈现最新一条，不因同时失败的实例数量增加高度。 -->
+  <StackPanel Spacing="6">
+    <TextBlock Text="{Binding Current.Text}" Foreground="{DynamicResource WarningText}"
+               FontSize="{DynamicResource FontBody}" LineHeight="18" MaxLines="2"
+               TextWrapping="Wrap" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Current.Text}" />
+    <Button Classes="secondary" Content="{l:T home.bake.retry_without}" Command="{Binding Current.RetryCommand}"
+            MinHeight="28" Padding="10,4" HorizontalAlignment="Left" ToolTip.Tip="{l:T home.bake.retry_once}" />
+  </StackPanel>
 </UserControl>

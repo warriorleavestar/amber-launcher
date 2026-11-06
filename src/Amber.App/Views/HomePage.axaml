@@ -77,10 +77,20 @@
       </StackPanel>
     </ScrollViewer>
 
-    <Border Grid.Row="2" Classes="card" Margin="0">
+    <Border x:Name="LaunchStatusCard" Grid.Row="2" Classes="card" Margin="0">
       <Grid ColumnDefinitions="*,Auto,Auto">
         <StackPanel VerticalAlignment="Center" Spacing="6">
-          <c:StatusBar Message="{Binding StatusInfo}" />
+          <c:StatusBar Message="{Binding StatusInfo}">
+            <c:StatusBar.IsVisible>
+              <MultiBinding Converter="{x:Static BoolConverters.Or}">
+                <Binding Path="IsBusy" />
+                <Binding Path="!IsVisible" ElementName="BakeWarnings" />
+              </MultiBinding>
+            </c:StatusBar.IsVisible>
+          </c:StatusBar>
+          <Panel IsVisible="{Binding !IsBusy}">
+            <c:BakeNoticeHost x:Name="BakeWarnings" />
+          </Panel>
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding ShowProgress}" IsIndeterminate="{Binding ProgressIndeterminate}" />
         </StackPanel>
         <!-- 退出等太久才出现；确认文字放在 Flyout 里，不塞进主按钮 -->

@@ -1,16 +1,33 @@
 using System.Collections.ObjectModel;
 using Avalonia.Controls;
 using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 namespace Amber.App.Views.Controls;
 
-/// <summary>仅用于烘焙失败的短提示；在主内容区排版，不遮挡启动操作。</summary>
+/// <summary>烘焙失败的紧凑提示，放在启动状态框内。</summary>
 public partial class BakeNoticeHost : UserControl
 {
-    public ObservableCollection<BakeNotice> Notices { get; } = [];
+    public BakeNoticeHost()
+    {
+        InitializeComponent();
+        DataContext = Services.Toasts.BakeNotices ?? new BakeNoticeState();
+    }
+}
 
-    public BakeNoticeHost() => InitializeComponent();
+/// <summary>通知属于窗口，启动页重新创建时仍延续原计时和原实例回调。</summary>
+public sealed class BakeNoticeState : ObservableObject
+{
+    public ObservableCollection<BakeNotice> Notices { get; } = [];
+    public BakeNotice? Current => Notices.FirstOrDefault();
+    public bool HasNotice => Current is not null;
+
+    public BakeNoticeState() => Notices.CollectionChanged += (_, _) =>
+    {
+        OnPropertyChanged(nameof(Current));
+        OnPropertyChanged(nameof(HasNotice));
+    };
 
     internal BakeNotice Show(string text, Action retry)
     {

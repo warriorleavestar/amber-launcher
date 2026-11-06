@@ -13,7 +13,7 @@ public sealed class BakeNoticeTests
     [Fact]
     public void RetryIsSingleUseEvenWhenCallbackReenters() => OnUi(() =>
     {
-        var host = new BakeNoticeHost();
+        var host = new BakeNoticeState();
         var calls = 0;
         BakeNotice? notice = null;
         notice = host.Show("instance", () => { calls++; notice!.RetryCommand.Execute(null); });
@@ -26,7 +26,7 @@ public sealed class BakeNoticeTests
     [Fact]
     public void DismissedNoticeCannotRetryOrDismissItsReplacement() => OnUi(() =>
     {
-        var host = new BakeNoticeHost();
+        var host = new BakeNoticeState();
         var calls = new List<string>();
         var old = host.Show("old", () => calls.Add("old"));
         old.DismissCommand.Execute(null);
@@ -34,6 +34,7 @@ public sealed class BakeNoticeTests
         old.DismissCommand.Execute(null);
         old.RetryCommand.Execute(null);
         Assert.Same(current, Assert.Single(host.Notices));
+        Assert.Same(current, host.Current);
         current.RetryCommand.Execute(null);
         Assert.Equal(["current"], calls);
     });
@@ -41,17 +42,22 @@ public sealed class BakeNoticeTests
     [Fact]
     public void OverflowAndWindowCleanupInvalidateOnlyTheirOwnCallbacks() => OnUi(() =>
     {
-        var host = new BakeNoticeHost();
+        var host = new BakeNoticeState();
         var calls = new List<int>();
         var all = Enumerable.Range(0, 4).Select(i => host.Show(i.ToString(), () => calls.Add(i))).ToArray();
         Assert.Equal(3, host.Notices.Count);
+        Assert.Same(all[3], host.Current);
         all[0].RetryCommand.Execute(null);
         Assert.Empty(calls);
         all[2].RetryCommand.Execute(null);
         Assert.Equal([2], calls);
+        Assert.Same(all[3], host.Current);
+        all[3].RetryCommand.Execute(null);
+        Assert.Same(all[1], host.Current);
         host.Clear();
         foreach (var notice in all) notice.RetryCommand.Execute(null);
         Assert.Empty(host.Notices);
-        Assert.Equal([2], calls);
+        Assert.Equal([2, 3], calls);
+        Assert.False(host.HasNotice);
     });
 }
