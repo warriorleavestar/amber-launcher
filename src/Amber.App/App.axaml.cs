@@ -43,7 +43,8 @@ public sealed class App : Application
             StartupTrace.Mark("window");
             desktop.Exit += (_, _) => service.Dispose();
             // 开发截图只查看界面，不清理游戏回收目录或真实用户的无痕配置。
-            if (Environment.GetEnvironmentVariable("AMBER_SNAPSHOT_DIR") is not { Length: > 0 })
+            if (Environment.GetEnvironmentVariable("AMBER_SNAPSHOT_DIR") is not { Length: > 0 }
+                && Environment.GetEnvironmentVariable("AMBER_SELFTEST") is not { Length: > 0 })
             {
                 // 回收目录里过期的条目放到后台清，不拖慢启动。
                 _ = Task.Run(() =>

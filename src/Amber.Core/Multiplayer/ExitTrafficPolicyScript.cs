@@ -9,6 +9,9 @@ internal static class ExitTrafficPolicyScript
 {
     internal const string Script = """
         $script:ExitTrafficEngine = [IntPtr]::Zero
+        $script:ExitTrafficSubLayer = [Guid]::Empty
+        $script:ExitTrafficAdapterGuid = [Guid]::Empty
+        $script:ExitTrafficAdapterIndex = [uint32]0
         $script:ExitWfpNative = $null
         $script:ExitWfpTypes = @{}
 
@@ -125,11 +128,11 @@ internal static class ExitTrafficPolicyScript
             } finally { foreach ($pointer in $allocations) { [Runtime.InteropServices.Marshal]::FreeHGlobal($pointer) } }
         }
 
-        function Add-ExitWfpFilter([IntPtr]$engine, [Guid]$subLayer, $rule) {
+        function Add-ExitWfpFilter([IntPtr]$engine, [Guid]$subLayer, $rule, [Guid]$filterKey = [Guid]::Empty) {
             $allocations = New-Object 'Collections.Generic.List[IntPtr]'
             try {
                 $filter = [Activator]::CreateInstance($script:ExitWfpTypes.Filter)
-                $filter.Key = [Guid]::NewGuid()
+                $filter.Key = if ($filterKey -eq [Guid]::Empty) { [Guid]::NewGuid() } else { $filterKey }
                 $filter.Display = New-ExitWfpDisplay ('Amber exit ' + $rule.Name) $allocations
                 $filter.LayerKey = [Guid]$rule.Layer
                 $filter.SubLayerKey = $subLayer
@@ -229,6 +232,9 @@ internal static class ExitTrafficPolicyScript
                 }
                 Invoke-ExitWfpApi 'FwpmTransactionCommit0' @($engine)
                 $transaction = $false
+                $script:ExitTrafficSubLayer = $subLayer
+                $script:ExitTrafficAdapterGuid = [Guid]$current.InterfaceGuid
+                $script:ExitTrafficAdapterIndex = [uint32]$current.ifIndex
             } catch {
                 $failure = $_
                 if ($transaction) { try { Invoke-ExitWfpApi 'FwpmTransactionAbort0' @($script:ExitTrafficEngine) } catch { } }
@@ -242,6 +248,9 @@ internal static class ExitTrafficPolicyScript
             Invoke-ExitWfpApi 'FwpmEngineClose0' @($script:ExitTrafficEngine)
             # On failure keep the handle for a retry in finally; BFE still revokes the dynamic session's filters when the process ends.
             $script:ExitTrafficEngine = [IntPtr]::Zero
+            $script:ExitTrafficSubLayer = [Guid]::Empty
+            $script:ExitTrafficAdapterGuid = [Guid]::Empty
+            $script:ExitTrafficAdapterIndex = [uint32]0
         }
         """;
 }

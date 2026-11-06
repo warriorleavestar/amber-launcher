@@ -136,6 +136,9 @@
           </Grid>
         </Border>
 
+        <!-- 手机通过当前网络出口上网。共享状态由提权守护确认。 -->
+        <c:HotspotSharingPanel DataContext="{Binding Hotspot}" />
+
         <!-- 房主 -->
         <Border Classes="card" Margin="0" IsVisible="{Binding IsHosting}">
           <StackPanel Spacing="8">

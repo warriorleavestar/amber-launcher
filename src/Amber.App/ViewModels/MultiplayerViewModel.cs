@@ -246,6 +246,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             if (_service.CurrentInstance is { } id && Instances.Contains(id)) TargetInstance = id;
         });
         InitDirect();
+        InitHotspot();
     }
 
     protected override void OnFirstActivated()
@@ -549,6 +550,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _timer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => _ = RefreshPeersAsync());
         _timer.Start();
         OnPropertyChanged(nameof(CanUseExit));
+        SyncHotspotSharing();
         return true;
     }
 
@@ -805,6 +807,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             if (_session is not { HasExited: false } ready) throw new IOException(L.T("core.mp.component.startfailed"));
             _currentOptions = ready.Options;
             ExitNodeIp = ready.Options.ExitNode ?? "";
+            SyncHotspotSharing();
             MarkJoinStarted(newRoom: false);
             return true;
         }
@@ -818,6 +821,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
                 {
                     _currentOptions = preserved.Options;
                     ExitNodeIp = preserved.Options.ExitNode ?? "";
+                    SyncHotspotSharing();
                 }
                 else StopSession();
                 SetStatus(StatusMessage.Failure("multiplayer.exit.switch_failed", e, ErrorText.Of(e)));
@@ -869,11 +873,13 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _refreshing = true;
         try
         {
+            SyncHotspotSharing();
             ExitWarning = _transport?.ExitProblem ?? "";
             var peers = await session.PeersAsync();
             TickDirect(peers);
             if (UsingExit) OnPropertyChanged(nameof(ExitBanner));
             if (_session != session) return;
+            SyncHotspotSharing();
             Peers.Clear();
             foreach (var p in peers.Where(p => p.Ip.StartsWith(EasyTierArgs.Subnet, StringComparison.Ordinal)).OrderBy(p => p.Ip)) Peers.Add(new PeerItem(p));
             var others = Peers.Where(p => p.Peer.Cost != "Local").ToList();
@@ -966,6 +972,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         else _session?.Dispose();
         _session = null;
         _service.ActiveMultiplayer = null;
+        SyncHotspotSharing();
         StopTransport();
         Peers.Clear();
         if (_room is { } leftRoom) SaveChatHistory(leftRoom);
