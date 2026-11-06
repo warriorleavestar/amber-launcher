@@ -139,27 +139,54 @@ public class ChatTests
     [Fact]
     public async Task Hub_DropsFloodAndDisconnectsBadClients()
     {
-        await using var hub = new ChatHub(Room, 0);
         var (a, aInbox) = NewClient("a");
+        // 故意暂缓观察者的转发，完成条件必须来自协议顺序，不能依赖固定 500 ms。
+        var holdForwarding = 0;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var hub = new ChatHub(Room, 0)
+        {
+            BeforeSendForTest = (id, ct) => id == a.SenderId && Volatile.Read(ref holdForwarding) != 0
+                ? gate.Task.WaitAsync(ct) : Task.CompletedTask,
+        };
+        await using var aLifetime = a;
         var (spammer, _) = NewClient("spam");
+        await using var spammerLifetime = spammer;
         await a.ConnectAsync("127.0.0.1", hub.Port);
         await spammer.ConnectAsync("127.0.0.1", hub.Port);
-        await WaitAsync(() => aInbox.Count(m => m.Kind == ChatKind.Join) == 2);
+        Assert.True(await WaitAsync(() => aInbox.Count(m => m.Kind == ChatKind.Join) == 2));
+        Volatile.Write(ref holdForwarding, 1);
 
         // 绕过客户端自己的限速，直接发 20 条，房主只转发前 5 条。
         for (var i = 0; i < 20; i++) await spammer.SendRawAsync(new ChatMessage(ChatKind.Message, spammer.SenderId, "spam", "m" + i, DateTimeOffset.UtcNow), default);
-        await Task.Delay(500);
+        // 同一 TCP 连接的离开帧排在 20 条消息之后；观察者收到离开时，前面的转发也已读完。
+        await spammer.SendRawAsync(new ChatMessage(ChatKind.Leave, spammer.SenderId, "spam", "", DateTimeOffset.UtcNow), default);
+        Assert.True(await WaitAsync(() => hub.MemberCount == 1));
+        Assert.DoesNotContain(aInbox, m => m.Kind == ChatKind.Message);
+        gate.TrySetResult();
+        Assert.True(await WaitAsync(() => aInbox.Any(m => m.Kind == ChatKind.Leave && m.SenderId == spammer.SenderId)));
         Assert.Equal(5, aInbox.Count(m => m.Kind == ChatKind.Message));
+
+        // 上面主动离开仅用作完成屏障；补回一个正常成员，保留下面拒绝连接的原始人数前置。
+        var (member, _) = NewClient("member");
+        await using var memberLifetime = member;
+        await member.ConnectAsync("127.0.0.1", hub.Port);
+        Assert.True(await WaitAsync(() => hub.MemberCount == 2
+            && aInbox.Any(m => m.Kind == ChatKind.Join && m.SenderId == member.SenderId)));
 
         // 用错误的房间密钥加密的连接被断开。
         var (intruder, _) = NewClient("x", Room with { Secret = "000000000000" });
+        await using var intruderLifetime = intruder;
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        intruder.Disconnected += () => disconnected.TrySetResult();
         await intruder.ConnectAsync("127.0.0.1", hub.Port);
+        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(await WaitAsync(() => hub.MemberCount == 2));
 
         // 超长帧：断开。
         var (big, _) = NewClient("big");
+        await using var bigLifetime = big;
         await big.ConnectAsync("127.0.0.1", hub.Port);
-        await WaitAsync(() => hub.MemberCount == 3);
+        Assert.True(await WaitAsync(() => hub.MemberCount == 3));
         await big.SendFrameAsync(new byte[RoomChat.MaxFrameBytes + 1]);
         Assert.True(await WaitAsync(() => hub.MemberCount == 2));
         Assert.True(await WaitAsync(() => aInbox.Any(m => m.Kind == ChatKind.Leave && m.Name == "big")));
@@ -169,7 +196,6 @@ public class ChatTests
         var sent = 0;
         for (var i = 0; i < 10; i++) if (await a.SendAsync("hi" + i)) sent++;
         Assert.Equal(5, sent);
-        foreach (var c in new[] { a, spammer, intruder, big }) await c.DisposeAsync();
     }
 }
 
