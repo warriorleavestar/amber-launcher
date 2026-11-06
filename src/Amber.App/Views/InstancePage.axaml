@@ -30,11 +30,13 @@
           </Button.Flyout>
         </Button>
       </WrapPanel>
-      <TextBlock Classes="hint" FontSize="12" Text="{Binding InfoText}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding InfoText}" />
+      <TextBlock Classes="hint" FontSize="12" Text="{Binding InfoText}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding InfoText}" />
     </StackPanel>
 
     <Border Grid.Row="2" Classes="card" Padding="10" IsVisible="{Binding HasInstance}">
-      <TabControl SelectedIndex="{Binding TabIndex}" Padding="0,8,0,0">
+      <!-- 小窗口有状态提示时，页签和工具栏一起滚动；页签内容仍有有限高度，列表继续虚拟滚动。 -->
+      <ScrollViewer x:Name="InstanceTabsScroll" HorizontalScrollBarVisibility="Disabled">
+      <TabControl SelectedIndex="{Binding TabIndex}" Padding="0,8,0,0" Height="{Binding #InstanceTabsScroll.Viewport.Height}" MinHeight="320">
         <TabItem Header="{l:T instance.mods.title}" FontSize="14">
           <Grid RowDefinitions="Auto,Auto,*">
             <!-- 汇总一行、按钮一行（按钮放不下时换行），英文、日文的长按钮不会把汇总挤没。 -->
@@ -74,7 +76,7 @@
               <TextBlock Classes="hint" Text="{l:T instance.mods.empty}" TextWrapping="Wrap" TextAlignment="Center" />
               <Button Classes="primary" HorizontalAlignment="Center" Content="{l:T instance.browse_online}" Command="{Binding BrowseOnlineCommand}" CommandParameter="{x:Static core:ContentType.Mod}" />
             </StackPanel>
-            <ListBox Grid.Row="2" ItemsSource="{Binding Mods}" Background="Transparent">
+            <ListBox Grid.Row="2" ItemsSource="{Binding Mods}" Background="Transparent" IsVisible="{Binding !!Mods.Count}">
               <ListBox.ItemTemplate>
                 <DataTemplate DataType="vm:ModItem">
                   <Grid ColumnDefinitions="Auto,40,*,Auto" Margin="2">
@@ -376,6 +378,7 @@
           </ScrollViewer>
         </TabItem>
       </TabControl>
+      </ScrollViewer>
     </Border>
 
     <Border Grid.Row="3" Classes="card" Margin="0">

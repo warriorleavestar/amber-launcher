@@ -8,6 +8,7 @@ using Avalonia;
 using Avalonia.Automation.Peers;
 using Avalonia.Automation.Provider;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
@@ -216,8 +217,69 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
             && await File.ReadAllTextAsync(oldPath) == "old", instance.Status);
         await ShotAsync("CurseForge更新手动下载");
         await LayoutHereAsync("CurseForge更新手动下载");
+        await CheckInstanceScrollReachabilityAsync(instance, oldPath);
         main.CurrentPage = previous;
         main.Pages[pageIndex] = originalContent;
+    }
+
+    /// <summary>长路径与手动下载提示同时存在时，验证真正能滚到并命中操作；不下载或启动游戏。</summary>
+    private async Task CheckInstanceScrollReachabilityAsync(InstanceViewModel instance, string fixturePath)
+    {
+        async Task<bool> ReachAsync(Control control)
+        {
+            control.BringIntoView();
+            await Ui.FlushAsync();
+            await Task.Delay(100);
+            var bounds = new Rect(control.TranslatePoint(default, window) ?? default, control.Bounds.Size);
+            var hit = window.InputHitTest(bounds.Center) as Visual;
+            return control.IsEffectivelyVisible && control.IsEffectivelyEnabled && new Rect(window.ClientSize).Contains(bounds)
+                && hit is not null && (ReferenceEquals(hit, control) || hit.GetVisualAncestors().Contains(control));
+        }
+
+        foreach (var language in new[] { "en", "ja" })
+        {
+            L.SetLanguage(language);
+            window.Width = 760;
+            window.Height = 440;
+            await Ui.FlushAsync();
+            var buttons = window.GetVisualDescendants().OfType<Button>().Where(b => b.IsEffectivelyVisible).ToList();
+            var manual = buttons.Single(b => b.Command == instance.OpenManualDownloadCommand);
+            Check($"实例窄窗 {language}：CurseForge 官网入口完整可见且中心命中", await ReachAsync(manual));
+            var browse = buttons.Where(b => b.Command == instance.BrowseOnlineCommand).ToList();
+            Check($"实例窄窗 {language}：模组工具栏可滚动到达且中心命中", await ReachAsync(browse.First()));
+            if (instance.BakeEnabled)
+                Check($"实例窄窗 {language}：烘焙入口可滚动到达且中心命中", await ReachAsync(buttons.Single(b => b.Command == instance.BakeNowCommand)));
+            Check($"实例窄窗 {language}：空态在线浏览可滚动到达且中心命中", browse.Count == 2 && await ReachAsync(browse.Last()));
+            await ShotAsync($"实例窄窗滚动命中-{language}");
+        }
+
+        var original = instance.Mods.ToArray();
+        try
+        {
+            L.SetLanguage("zh-Hans");
+            window.Width = 1280;
+            window.Height = 700;
+            instance.Mods.Clear();
+            for (var i = 0; i < 120; i++)
+                instance.Mods.Add(new ModItem(new LocalMod(fixturePath, $"scroll-{i}.jar", true, $"scroll-{i}", $"滚动测试 {i}", "1.0", null, null, null)));
+            await Ui.FlushAsync();
+            var list = window.GetVisualDescendants().OfType<ListBox>().Single(l => ReferenceEquals(l.ItemsSource, instance.Mods));
+            var realized = list.GetVisualDescendants().OfType<ListBoxItem>().Count();
+            Check("实例非空模组列表保持有限高度与虚拟化", list.Bounds.Height > 0 && list.Bounds.Height < window.ClientSize.Height
+                && realized > 0 && realized < instance.Mods.Count, $"120 项，仅实现 {realized} 行，列表高 {list.Bounds.Height:F0}");
+            list.ScrollIntoView(instance.Mods[^1]);
+            await Ui.FlushAsync();
+            Check("实例非空模组列表可滚到末项并实际命中", list.ContainerFromIndex(instance.Mods.Count - 1) is { } last && await ReachAsync(last));
+            list.ScrollIntoView(instance.Mods[0]);
+            await Ui.FlushAsync();
+            Check("实例非空模组列表可滚回首项并实际命中", list.ContainerFromIndex(0) is { } first && await ReachAsync(first));
+            await ShotAsync("实例模组列表有限视口");
+        }
+        finally
+        {
+            instance.Mods.Clear();
+            foreach (var item in original) instance.Mods.Add(item);
+        }
     }
 
     private sealed class ManualDownloadProvider : IContentProvider
