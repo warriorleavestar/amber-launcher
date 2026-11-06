@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -95,7 +96,7 @@ public sealed class GateStore
     /// <summary>第一次部署：生成网关长期密钥和访问密钥。已经有了就不动（不会把已有成员踢掉）。</summary>
     public static GateStore Initialize(string dir, string publicHost, int publicPort, int listenPort)
     {
-        if (!GateInvite.IsValidHost(publicHost)) throw new ArgumentException("公网地址只能是域名或 IP");
+        if (!GateInvite.IsValidHost(publicHost)) throw new ArgumentException(L.T("core.gate.admin.badhost"));
         System.IO.Directory.CreateDirectory(dir);
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var store = new GateStore(dir);
@@ -177,9 +178,9 @@ public sealed class GateStore
     /// <summary>生成一份邀请。令牌只出现在返回的邀请码里，落盘的是派生出的 psk。</summary>
     public GateInvite CreateInvite(string name, TimeSpan ttl, int uses, byte[] serverPublicKey)
     {
-        if (!GateInvite.IsValidUsername(name)) throw new ArgumentException("用户名只能是 3–16 个字母、数字或下划线");
-        if (uses < 1 || uses > 100) throw new ArgumentException("使用次数要在 1–100 之间");
-        if (ttl <= TimeSpan.Zero || ttl > TimeSpan.FromDays(30)) throw new ArgumentException("有效期要在 30 天以内");
+        if (!GateInvite.IsValidUsername(name)) throw new ArgumentException(L.T("core.gate.admin.badname"));
+        if (uses < 1 || uses > 100) throw new ArgumentException(L.T("core.gate.admin.baduses"));
+        if (ttl <= TimeSpan.Zero || ttl > TimeSpan.FromDays(30)) throw new ArgumentException(L.T("core.gate.admin.badttl"));
         var config = LoadConfig();
         var keyHash = GateProtocol.ServerKeyHash(serverPublicKey);
         var token = RandomNumberGenerator.GetBytes(GateInvite.TokenLength);

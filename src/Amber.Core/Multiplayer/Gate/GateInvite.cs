@@ -156,5 +156,5 @@ public sealed record GateInvite(string Host, int Port, byte[] ServerKeyHash, byt
     }
 
     /// <summary>日志和界面上显示：不带令牌。</summary>
-    public override string ToString() => $"{Prefix}… ({Username}@{Host}:{Port})";
+    public override string ToString() => $"{Prefix}... ({Username}@{Host}:{Port})";
 }

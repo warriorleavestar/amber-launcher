@@ -128,7 +128,7 @@ public static class Program
         var log = (string line) => Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Jay] {line}");
         await using var gate = new GateServer(store, config, key, log);
         gate.Start();
-        log($"网关在 {config.ListenAddress} 端口 {config.ListenPort} 上等待玩家；服务器身份 {MemberIdentity.FingerprintOf(key.PublicKey)}");
+        log($"网关在端口 {gate.Port} 上等待玩家（玩家连 {config.PublicHost}:{config.PublicPort}）；服务器身份 {MemberIdentity.FingerprintOf(key.PublicKey)}");
 
         McServerHost.RunningServer? mc = null;
         if (withMc)
@@ -137,10 +137,13 @@ public static class Program
             log($"MC 服务端已启动（进程 {mc.Process.Id}）");
         }
 
-        using var stop = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => stop.Cancel();
-        PosixSignals(stop);
+        // 不 Dispose：退出时 ProcessExit 还可能来取消它。
+        var stop = new CancellationTokenSource();
+        void Stop() { try { stop.Cancel(); } catch (ObjectDisposedException) { } }
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; Stop(); };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => Stop();
+        using var sigterm = OperatingSystem.IsWindows() ? null
+            : System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; Stop(); });
 
         // 控制台：普通输入交给 MC；jay 开头的是管理命令。没有可交互的控制台（作为服务运行）时只等结束信号。
         var input = Task.Run(async () =>
@@ -183,12 +186,6 @@ public static class Program
             mc.Dispose();
         }
         return 0;
-    }
-
-    private static void PosixSignals(CancellationTokenSource stop)
-    {
-        if (OperatingSystem.IsWindows()) return;
-        System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; stop.Cancel(); });
     }
 
     internal static int Admin(string root, Options options, TextWriter output)

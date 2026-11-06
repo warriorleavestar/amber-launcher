@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -47,23 +48,23 @@ public sealed class McServerHost
     public async Task<McServerSettings> SetupAsync(Downloader downloader, string versionId, int memoryMb, Action<string> status, CancellationToken ct = default)
     {
         Directory.CreateDirectory(McDirectory);
-        status("读取版本清单……");
+        status(L.T("core.gate.mc.reading_manifest"));
         var manifest = await new VanillaInstaller(downloader, new GameDirectory(Path.Combine(_root, "launcher-cache"))).GetManifestAsync(ct);
-        if (versionId == "latest") versionId = manifest.Latest.GetValueOrDefault("release") ?? throw new InvalidDataException("版本清单里没有最新正式版");
-        var entry = manifest.Versions.FirstOrDefault(v => v.Id == versionId) ?? throw new ArgumentException($"没有 {versionId} 这个版本");
+        if (versionId == "latest") versionId = manifest.Latest.GetValueOrDefault("release") ?? throw new InvalidDataException(L.T("core.gate.mc.no_latest"));
+        var entry = manifest.Versions.FirstOrDefault(v => v.Id == versionId) ?? throw new ArgumentException(L.F("core.gate.mc.no_version", versionId));
         var versionPath = Path.Combine(_root, "launcher-cache", versionId + ".json");
         await downloader.DownloadOneAsync(new DownloadItem(entry.Url, versionPath, entry.Sha1), ct);
         var version = JsonSerializer.Deserialize(await File.ReadAllTextAsync(versionPath, ct), Json.Options.Info<VersionJson>())
-                      ?? throw new InvalidDataException("版本文件损坏");
-        var server = version.Downloads?.GetValueOrDefault("server") is { Url: { } url } s ? s : throw new InvalidDataException($"{versionId} 没有官方服务端");
-        status($"下载 {versionId} 服务端……");
+                      ?? throw new InvalidDataException(L.T("core.gate.mc.bad_version"));
+        var server = version.Downloads?.GetValueOrDefault("server") is { Url: { } url } s ? s : throw new InvalidDataException(L.F("core.gate.mc.no_server", versionId));
+        status(L.F("core.gate.mc.downloading_server", versionId));
         await downloader.DownloadOneAsync(new DownloadItem(url, Path.Combine(McDirectory, "server.jar"), server.Sha1, server.Size, Within: McDirectory), ct);
 
         var major = version.JavaVersion?.MajorVersion ?? 8;
         var java = JavaFinder.Pick(JavaFinder.FindAll(), major)?.JavaPath;
         if (java is null)
         {
-            status($"下载 Java {major}……");
+            status(L.F("core.gate.mc.downloading_java", major));
             java = await new JavaRuntimeInstaller(downloader, _root).InstallAsync(version.JavaVersion?.Component, major, null, ct);
         }
         var settings = new McServerSettings { Version = versionId, JavaPath = java, MemoryMb = memoryMb };
@@ -77,7 +78,7 @@ public sealed class McServerHost
 
     /// <summary>只在管理员明确同意后调用（https://aka.ms/MinecraftEULA）。</summary>
     public void AcceptEula() =>
-        File.WriteAllText(Path.Combine(McDirectory, "eula.txt"), $"# 管理员在 Jay 服务器版里同意了 https://aka.ms/MinecraftEULA（{DateTimeOffset.UtcNow:u}）\neula=true\n");
+        File.WriteAllText(Path.Combine(McDirectory, "eula.txt"), $"# Accepted by the server admin in Jay Server: https://aka.ms/MinecraftEULA ({DateTimeOffset.UtcNow:u})\neula=true\n");
 
     /// <summary>
     /// 改 server.properties 里和安全有关的几项，其他（motd、难度……）不动。
@@ -134,7 +135,7 @@ public sealed class McServerHost
         info.ArgumentList.Add("-jar");
         info.ArgumentList.Add("server.jar");
         info.ArgumentList.Add("nogui");
-        var process = Process.Start(info) ?? throw new InvalidOperationException("启动 Java 失败");
+        var process = Process.Start(info) ?? throw new InvalidOperationException(L.T("core.gate.mc.java_failed"));
         process.OutputDataReceived += (_, e) => { if (e.Data is not null) output(e.Data); };
         process.ErrorDataReceived += (_, e) => { if (e.Data is not null) output(e.Data); };
         process.BeginOutputReadLine();

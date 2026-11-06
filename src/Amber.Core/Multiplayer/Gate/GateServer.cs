@@ -1,3 +1,4 @@
+using Amber.Core.Localization;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
@@ -35,8 +36,16 @@ public sealed class GateServer : IAsyncDisposable
         _log = log;
         _slots = new SemaphoreSlim(config.MaxConnections);
         var address = IPAddress.Parse(config.ListenAddress);
-        _listener = new TcpListener(address, config.ListenPort);
-        if (address.AddressFamily == AddressFamily.InterNetworkV6) _listener.Server.DualMode = true;
+        try
+        {
+            _listener = new TcpListener(address, config.ListenPort);
+            if (address.AddressFamily == AddressFamily.InterNetworkV6) _listener.Server.DualMode = true;
+        }
+        catch (SocketException) when (address.Equals(IPAddress.IPv6Any))
+        {
+            // 有的 VPS / 容器关掉了 IPv6：退回只听 IPv4。
+            _listener = new TcpListener(IPAddress.Any, config.ListenPort);
+        }
     }
 
     public void Start()
@@ -120,7 +129,7 @@ public sealed class GateServer : IAsyncDisposable
                         };
                         await GateProtocol.SendEnrollResultAsync(secure, status, status == GateStatus.Ok ? _store.AccessKey() : null, bound, timeout.Token);
                         await secure.CloseAsync(timeout.Token);
-                        _log(status == GateStatus.Ok ? $"入服：{bound} 绑定了设备 {fingerprint}" : $"入服被拒（{outcome}）：设备 {fingerprint}");
+                        _log(status == GateStatus.Ok ? L.F("core.gate.log.enrolled", bound!, fingerprint) : L.F("core.gate.log.enroll_refused", outcome, fingerprint));
                         return;
                     }
                     var names = _store.AllowedNames(device);
@@ -128,7 +137,7 @@ public sealed class GateServer : IAsyncDisposable
                     {
                         await GateProtocol.SendJoinResultAsync(secure, GateStatus.NotMember, timeout.Token);
                         await secure.CloseAsync(timeout.Token);
-                        _log($"拒绝：设备 {fingerprint} 不在名单里");
+                        _log(L.F("core.gate.log.not_member", fingerprint));
                         return;
                     }
                     await GateProtocol.SendJoinResultAsync(secure, GateStatus.Ok, timeout.Token);
@@ -138,9 +147,9 @@ public sealed class GateServer : IAsyncDisposable
                         name = names.FirstOrDefault(n => string.Equals(n, login.Username, StringComparison.OrdinalIgnoreCase));
                         if (name is null)
                         {
-                            await WriteLoginDisconnectAsync(secure, $"用户名 {login.Username} 没有绑定这台设备", timeout.Token);
+                            await WriteLoginDisconnectAsync(secure, L.F("core.gate.mc.name_not_bound", login.Username!), timeout.Token);
                             await secure.CloseAsync(timeout.Token);
-                            _log($"拒绝：设备 {fingerprint} 想用 {login.Username} 登录（绑定的是 {string.Join("、", names)}）");
+                            _log(L.F("core.gate.log.wrong_name", fingerprint, login.Username!, string.Join(", ", names)));
                             return;
                         }
                     }
@@ -156,7 +165,7 @@ public sealed class GateServer : IAsyncDisposable
                 {
                     _store.Touch(name, device!);
                     Interlocked.Increment(ref Online);
-                    _log($"进服：{name}");
+                    _log(L.F("core.gate.log.joined", name));
                 }
                 try
                 {
@@ -167,7 +176,7 @@ public sealed class GateServer : IAsyncDisposable
                     if (name is not null)
                     {
                         Interlocked.Decrement(ref Online);
-                        _log($"离开：{name}");
+                        _log(L.F("core.gate.log.left", name));
                     }
                 }
                 secure = null;
@@ -176,7 +185,7 @@ public sealed class GateServer : IAsyncDisposable
             {
                 secure?.Abort();
                 Pump.Abort(client);
-                if (device is not null) _log($"连接出错（设备 {MemberIdentity.FingerprintOf(device)}）：{e.Message}");
+                if (device is not null) _log(L.F("core.gate.log.error", MemberIdentity.FingerprintOf(device), e.Message));
             }
             finally
             {
