@@ -1424,5 +1424,10 @@
   "home.bake.failed_title": "Baked launch failed",
   "home.bake.retry_once": "Skips baking once; settings stay unchanged",
   "home.bake.retry_directory_changed": "The game directory has changed. Switch back to the original game directory before launching this instance again.",
-  "core.mp.lobby.exited": "The lobby's network component exited unexpectedly: {0}"
+  "core.mp.lobby.exited": "The lobby's network component exited unexpectedly: {0}",
+  "core.mp.member.unknown": "Unknown member ID",
+  "core.mp.transport.exit_host_only": "In an invite room that uses tunneling, only the host can be the exit.",
+  "multiplayer.proxy.host_only": "In an invite room that uses tunneling, game-only forwarding can only go through the host.",
+  "multiplayer.invite.member_confirmed": "confirmed",
+  "multiplayer.invite.member_unconfirmed": "not confirmed"
 }

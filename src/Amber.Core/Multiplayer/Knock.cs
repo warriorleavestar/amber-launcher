@@ -11,17 +11,27 @@ using Amber.Core.Multiplayer.Transport;
 namespace Amber.Core.Multiplayer;
 
 /// <summary>
-/// 房主批准后发给加入方的房间凭据：EasyTier 网络名、256 位随机密钥、端口和封装方式。
-/// 只在内存里，从不显示、复制或保存；ToString 不含任何值。
+/// 房主批准后发给加入方的房间凭据：EasyTier 网络名、256 位随机密钥（只用于 EasyTier）、端口、封装方式，
+/// 以及这个人自己的成员编号和 psk（游戏通道和聊天用）。只在内存里，从不显示、复制或保存；ToString 不含任何值。
 /// </summary>
 public sealed record RoomCredentials(string Network, string Secret, int Epoch, byte[] HostPublicKey, int GamePort, int ChatPort, TunnelSettings Tunnel)
 {
+    /// <summary>这个成员的钥匙。房主手里的“房间级”凭据没有，批准某个人时才配上。</summary>
+    public MemberKey? Member { get; init; }
+
     public static RoomCredentials Create(byte[] hostPublicKey, int gamePort, TunnelSettings tunnel) =>
         new("jay-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)), Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)), 1,
             (byte[])hostPublicKey.Clone(), gamePort, RoomChat.Port, tunnel);
 
-    /// <summary>按凭据建出内部的房间对象（游戏、聊天、封装的密钥都从这个 256 位密钥派生）。</summary>
-    public RoomCode ToRoom() => RoomCode.FromCredentials(Network, Secret, GamePort, Tunnel);
+    /// <summary>加入方：按凭据建出内部的房间对象。</summary>
+    public RoomCode ToRoom() => RoomCode.FromCredentials(Network, Secret, GamePort, Tunnel, Member ?? throw new InvalidOperationException("no member key"));
+
+    /// <summary>房主：建房间对象，带上成员表，并给自己（本机的聊天客户端）发一把钥匙。</summary>
+    public RoomCode ToHostRoom(MemberTable members, string hostName)
+    {
+        var self = members.Issue(HostPublicKey, hostName, isHost: true);
+        return RoomCode.FromCredentials(Network, Secret, GamePort, Tunnel, self.Key, members);
+    }
 
     public override string ToString() => "RoomCredentials";
 
@@ -34,6 +44,8 @@ public sealed record RoomCredentials(string Network, string Secret, int Epoch, b
         ["hostPub"] = Convert.ToHexStringLower(HostPublicKey),
         ["ports"] = new JsonObject { ["game"] = GamePort, ["chat"] = ChatPort },
         ["tunnel"] = new JsonObject { ["mode"] = (int)Tunnel.Mode, ["disguise"] = Tunnel.Disguise },
+        ["memberId"] = Member?.IdHex ?? throw new InvalidOperationException("no member key"),
+        ["memberPsk"] = Member.PskBase64,
     };
 
     internal static RoomCredentials FromJson(JsonNode json)
@@ -46,11 +58,22 @@ public sealed record RoomCredentials(string Network, string Secret, int Epoch, b
         var chat = json["ports"]?["chat"]?.GetValue<int>() ?? throw new InvalidDataException();
         var mode = json["tunnel"]?["mode"]?.GetValue<int>() ?? throw new InvalidDataException();
         var disguise = json["tunnel"]?["disguise"]?.GetValue<bool>() ?? throw new InvalidDataException();
+        var memberId = json["memberId"]?.GetValue<string>() ?? throw new InvalidDataException();
+        var memberPsk = json["memberPsk"]?.GetValue<string>() ?? throw new InvalidDataException();
+        if (!KnockProtocol.MemberIdPattern().IsMatch(memberId) || !KnockProtocol.SecretPattern().IsMatch(memberPsk)) throw new InvalidDataException(L.T("core.mp.knock.badreply"));
         if (!KnockProtocol.NetworkPattern().IsMatch(net) || !KnockProtocol.SecretPattern().IsMatch(secret) || !KnockProtocol.KeyPattern().IsMatch(hostPub)
             || epoch < 1 || game is < 1 or > 65535 || chat is < 1 or > 65535 || mode is < 0 or > 3)
             throw new InvalidDataException(L.T("core.mp.knock.badreply"));
         var tunnel = mode == 0 ? TunnelSettings.Default : new TunnelSettings((TransportMode)mode, disguise);
-        return new RoomCredentials(net, secret, epoch, Convert.FromHexString(hostPub), game, chat, tunnel);
+        var psk = Convert.FromBase64String(memberPsk);
+        try
+        {
+            return new RoomCredentials(net, secret, epoch, Convert.FromHexString(hostPub), game, chat, tunnel) { Member = new MemberKey(Convert.FromHexString(memberId), psk) };
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(psk);
+        }
     }
 }
 
@@ -62,7 +85,8 @@ public static partial class KnockProtocol
     public const int MaxNameLength = 32;
     public const int IdLength = 8;
 
-    public static byte[] Prologue(string lobbyName) => Encoding.ASCII.GetBytes("JAY-KNOCK-1" + lobbyName);
+    /// <summary>"JAY-KNOCK-1" + 大厅名 + 8 字节邀请编号：握手同时确认了双方说的是同一张邀请。</summary>
+    public static byte[] Prologue(string lobbyName, ReadOnlySpan<byte> inviteId) => [.. Encoding.ASCII.GetBytes("JAY-KNOCK-1" + lobbyName), .. inviteId];
 
     public static async Task WriteFrameAsync(Stream stream, ReadOnlyMemory<byte> payload, CancellationToken ct)
     {
@@ -117,6 +141,9 @@ public static partial class KnockProtocol
 
     [GeneratedRegex("^[0-9a-f]{64}$")]
     internal static partial Regex KeyPattern();
+
+    [GeneratedRegex("^[0-9a-f]{16}$")]
+    internal static partial Regex MemberIdPattern();
 }
 
 /// <summary>敲门的结果：批准时带凭据；拒绝时带原因（denied / expired / full）。</summary>
@@ -138,12 +165,13 @@ public static class KnockClient
     {
         var lobbyName = LobbyKeys.LobbyName(invite.LobbyKey);
         var psk = LobbyKeys.KnockPsk(invite.Token);
-        using var handshake = new NoiseHandshake(NoisePattern.XXpsk0, true, KnockProtocol.Prologue(lobbyName), psk, me);
+        var inviteId = LobbyKeys.InviteId(invite.Token);
+        using var handshake = new NoiseHandshake(NoisePattern.XXpsk0, true, KnockProtocol.Prologue(lobbyName, inviteId), psk, me);
         CryptographicOperations.ZeroMemory(psk);
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
             timeout.CancelAfter(handshakeTimeout ?? HandshakeTimeout);
-            await KnockProtocol.WriteFrameAsync(stream, LobbyKeys.InviteId(invite.Token), timeout.Token);
+            await KnockProtocol.WriteFrameAsync(stream, inviteId, timeout.Token);
             await KnockProtocol.WriteFrameAsync(stream, handshake.WriteMessage([]), timeout.Token);
             var hello = KnockProtocol.ParseJson(handshake.ReadMessage(await KnockProtocol.ReadFrameAsync(stream, timeout.Token)));
             if (hello["v"]?.GetValue<int>() != 1) throw new InvalidDataException(L.T("core.mp.knock.badreply"));
@@ -347,6 +375,7 @@ public sealed record KnockLimits
 public sealed class KnockServer : IAsyncDisposable
 {
     private readonly InviteBook _book;
+    private readonly MemberTable _members;
     private readonly X25519KeyPair _identity;
     private readonly Func<RoomCredentials> _credentials;
     private readonly Func<byte[], bool> _isTrusted;
@@ -361,8 +390,13 @@ public sealed class KnockServer : IAsyncDisposable
     private int _active;
     private DateTimeOffset _pausedUntil;
 
-    /// <summary>批准并发出了凭据（对方确认收到之后）。</summary>
+    /// <summary>批准了，给这个人发了钥匙（发出凭据之前就触发：对方不回确认也已经拿到了，房主必须看得到他）。</summary>
+    public event Action<KnockRequest, MemberEntry>? Issued;
+    /// <summary>对方确认收到了凭据。</summary>
     public event Action<KnockRequest>? Admitted;
+
+    /// <summary>批准时往这里发钥匙；房间的游戏通道和聊天按它认人。</summary>
+    public MemberTable Members => _members;
     /// <summary>失败太多，暂停一会儿。</summary>
     public event Action? Paused;
     /// <summary>一次敲门结束了（不管结果）。</summary>
@@ -377,9 +411,11 @@ public sealed class KnockServer : IAsyncDisposable
     public int Port { get; }
 
     public KnockServer(InviteBook book, X25519KeyPair identity, Func<RoomCredentials> credentials, Func<byte[], bool> isTrusted,
-        Func<KnockRequest, CancellationToken, Task<bool>> approve, IPAddress address, int port = KnockProtocol.Port, Action<string>? log = null, KnockLimits? limits = null)
+        Func<KnockRequest, CancellationToken, Task<bool>> approve, IPAddress address, int port = KnockProtocol.Port, Action<string>? log = null, KnockLimits? limits = null,
+        MemberTable? members = null)
     {
         _book = book;
+        _members = members ?? new MemberTable();
         _identity = identity;
         _credentials = credentials;
         _isTrusted = isTrusted;
@@ -463,14 +499,14 @@ public sealed class KnockServer : IAsyncDisposable
             {
                 var id = await KnockProtocol.ReadFrameAsync(stream, timeout.Token);
                 invite = id.Length == KnockProtocol.IdLength ? _book.Find(id) : null;
-                // 不认识、已过期、已用完或已撤销：都直接断开，不握手。
+                // 不认识、已过期、已用完或已撤销：都直接断开，不握手。不算失败次数：拿着大厅密钥乱报编号的人不能借此让敲门一直暂停。
                 if (invite is null || !invite.IsUsable(_book.Now) || _book.Lobby is not { } lobby)
                 {
-                    Fail(L.T("core.mp.knock.unknown"));
+                    _log?.Invoke(L.F("core.mp.knock.failed", L.T("core.mp.knock.unknown")));
                     return;
                 }
                 var psk = LobbyKeys.KnockPsk(invite.Invite.Token);
-                handshake = new NoiseHandshake(NoisePattern.XXpsk0, false, KnockProtocol.Prologue(lobby.Name), psk, _identity);
+                handshake = new NoiseHandshake(NoisePattern.XXpsk0, false, KnockProtocol.Prologue(lobby.Name, invite.Id), psk, _identity);
                 CryptographicOperations.ZeroMemory(psk);
                 handshake.ReadMessage(await KnockProtocol.ReadFrameAsync(stream, timeout.Token));
                 await KnockProtocol.WriteFrameAsync(stream, handshake.WriteMessage(KnockProtocol.Json(new JsonObject { ["v"] = 1 })), timeout.Token);
@@ -498,18 +534,28 @@ public sealed class KnockServer : IAsyncDisposable
                 catch (Exception e) when (e is InvalidOperationException or FormatException) { }
                 var request = new KnockRequest(name ?? "", (byte[])guestPub.Clone(), version ?? "", _isTrusted(guestPub), invite);
                 JsonObject reply;
+                MemberEntry? member = null;
                 if (!_book.TryConsume(invite)) reply = Reject("expired");
-                else if (request.Trusted || invite.AutoApprove || await AskAsync(request, ct)) reply = _credentials().ToJson();
+                else if (request.Trusted || invite.AutoApprove || await AskAsync(request, ct))
+                {
+                    member = _members.Issue(guestPub, request.Name);
+                    reply = (_credentials() with { Member = member.Key }).ToJson();
+                }
                 else reply = Reject("denied");
-                var approved = reply["ok"]?.GetValue<bool>() == true;
-                _log?.Invoke(L.F(approved ? "core.mp.knock.approved" : "core.mp.knock.rejected", request.Name, request.Fingerprint));
+                _log?.Invoke(L.F(member is not null ? "core.mp.knock.approved" : "core.mp.knock.rejected", request.Name, request.Fingerprint));
+                // 发出去之前就记上：对方拿到凭据后不回确认也能进房间，房主得看得到他。
+                if (member is not null) Issued?.Invoke(request, member);
                 using var answer = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 answer.CancelAfter(_limits.HandshakeTimeout);
                 await KnockProtocol.WriteFrameAsync(stream, send.EncryptWithAd([], KnockProtocol.Json(reply)), answer.Token);
-                if (!approved) return;
+                if (member is null) return;
                 var sealedAck = await KnockProtocol.ReadFrameAsync(stream, answer.Token);
                 var ack = KnockProtocol.ParseJson(receive.DecryptWithAd([], sealedAck));
-                if (ack["ack"]?.GetValue<bool>() == true) Admitted?.Invoke(request);
+                if (ack["ack"]?.GetValue<bool>() == true)
+                {
+                    _members.Confirm(member);
+                    Admitted?.Invoke(request);
+                }
             }
         }
         catch (Exception e) when (e is IOException or EndOfStreamException or CryptographicException or InvalidDataException

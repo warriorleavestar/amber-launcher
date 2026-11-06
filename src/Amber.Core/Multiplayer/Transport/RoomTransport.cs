@@ -69,19 +69,22 @@ public sealed class RoomTransport : IAsyncDisposable
         // 不建网卡时 EasyTier 把发往自己虚拟地址的连接交给本机同一端口；完整局域网模式下连接从虚拟网卡进来，听虚拟地址。
         var listen = o.Tun && IPAddress.TryParse(EasyTierArgs.VirtualIp(o), out var vip) ? vip : IPAddress.Loopback;
 
-        if (o.AllowProxy)
+        // 邀请房间的封装通道用每个成员和房主之间的钥匙：成员之间没有共同的钥匙，所以只有房主能当“仅游戏”转发的出口。
+        var memberOnlyHost = room.FromInvite && settings.Wraps;
+        var allowProxy = o.AllowProxy && (o.IsHost || !memberOnlyHost);
+        if (allowProxy)
         {
             // 别人借我上网：不许连我自己的电脑、路由器和家里的设备。公网 IPv4 用 STUN 在后台查一次。
             _exitPolicy = new ExitPolicy();
             _exitPolicy.Start(log: _log);
         }
-        if (o.IsHost && settings.Wraps || o.AllowProxy)
+        if (o.IsHost && settings.Wraps || allowProxy)
         {
             Server = Add(new TunnelServer(room, settings, settings.Wraps ? TunnelSettings.Port : TunnelSettings.PlainSocksPort, service => service switch
             {
                 TunnelService.Game when o.IsHost && settings.Wraps => TunnelServer.ToLocalPort(room.Port),
                 TunnelService.Chat when o.IsHost && settings.Wraps => TunnelServer.ToLocalPort(RoomChat.Port),
-                TunnelService.Socks when o.AllowProxy => async (stream, ct) =>
+                TunnelService.Socks when allowProxy => async (stream, ct) =>
                 {
                     // 收到 CONNECT 请求时（不是连接刚开时）确认公网 IP：查到太久了（路由器可能重新拨号）就先重查（最多 8 秒）；
                     // 还是不行就回“出口还没准备好”，不去解析和连接。
@@ -102,6 +105,7 @@ public sealed class RoomTransport : IAsyncDisposable
 
         if (o.ProxyExit is { } exit && o.LocalSocksPort is { } socks)
         {
+            if (memberOnlyHost && exit != EasyTierArgs.HostIp) throw new ArgumentException(L.T("core.mp.transport.exit_host_only"));
             var exitPort = settings.Wraps ? TunnelSettings.Port : TunnelSettings.PlainSocksPort;
             var (host, port) = o.Tun ? (exit, exitPort) : ("127.0.0.1", o.LocalExitPort ?? throw new ArgumentException(L.T("core.mp.transport.exit_port_required")));
             var open = TunnelClient.Wrapped(host, port, room, settings, TunnelService.Socks);

@@ -1393,5 +1393,10 @@
   "home.bake.failed_title": "烘焙啟動異常",
   "home.bake.retry_once": "僅本次跳過烘焙，不更改設定",
   "home.bake.retry_directory_changed": "遊戲目錄已切換。請切回原來的遊戲目錄後，再啟動這個實例。",
-  "core.mp.lobby.exited": "大廳的連線元件意外結束：{0}"
+  "core.mp.lobby.exited": "大廳的連線元件意外結束：{0}",
+  "core.mp.member.unknown": "不認識的成員編號",
+  "core.mp.transport.exit_host_only": "邀請房間開了封裝時只能經房主轉發。",
+  "multiplayer.proxy.host_only": "邀請房間開了封裝時，「僅遊戲」轉發只能選房主。",
+  "multiplayer.invite.member_confirmed": "已確認",
+  "multiplayer.invite.member_unconfirmed": "未確認"
 }

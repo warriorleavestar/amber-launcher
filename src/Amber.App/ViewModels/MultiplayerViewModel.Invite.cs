@@ -35,11 +35,12 @@ public sealed record ApprovalCard(KnockRequest Request, string? Warning) : Local
     public bool HasWarning => Warning is not null;
 }
 
-/// <summary>经邀请进来的成员（房主看）。</summary>
-public sealed record MemberItem(string Name, byte[] PublicKey, bool Trusted) : LocalizedRecord
+/// <summary>经邀请进来的成员（房主看）。发出凭据时就列上；对方回了确认再标“已确认”。</summary>
+public sealed record MemberItem(string Name, byte[] PublicKey, bool Trusted, bool Confirmed = false) : LocalizedRecord
 {
     public string Fingerprint => MemberIdentity.FingerprintOf(PublicKey);
-    public string Label => (Name.Length > 0 ? Name : L.T("multiplayer.peers.player")) + " · " + Fingerprint;
+    public string Label => (Name.Length > 0 ? Name : L.T("multiplayer.peers.player")) + " · " + Fingerprint
+        + " · " + L.T(Confirmed ? "multiplayer.invite.member_confirmed" : "multiplayer.invite.member_unconfirmed");
     public bool CanTrust => !Trusted;
 }
 
@@ -59,6 +60,7 @@ public sealed partial class MultiplayerViewModel
     private TrustedMembers? _trusted;
     private HostLobby? _lobby;
     private RoomCredentials? _credentials;
+    private MemberTable? _members;
     private CancellationTokenSource? _knockCts;
     private JayInvite? _lastInvite;
 
@@ -142,20 +144,30 @@ public sealed partial class MultiplayerViewModel
         [.. (host ? TestListeners ?? [] : []), .. TestPeers ?? _service.MultiplayerPeers];
 
     /// <summary>房间开好之后：准备大厅（有邀请时才真的启动）。</summary>
-    private void StartHostLobby(RoomCredentials credentials)
+    private void StartHostLobby(RoomCredentials credentials, MemberTable members)
     {
         _credentials = credentials;
+        _members = members;
         var lobby = HostLobby.Create(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier", "lobby"), () => LobbyPeers(host: true),
-            Identity.KeyPair, () => _credentials ?? throw new InvalidOperationException(), pub => Trusted.IsTrusted(pub), AskApprovalAsync,
+            Identity.KeyPair, () => _credentials ?? throw new InvalidOperationException(), pub => Trusted.IsTrusted(pub), AskApprovalAsync, members,
             line => _diag.Add(L.T("multiplayer.invite.diagnostics_category"), line));
         lobby.Book.Changed += () => Dispatcher.UIThread.Post(RefreshInvites);
         lobby.StateChanged += () => Dispatcher.UIThread.Post(RefreshInvites);
         lobby.Paused += () => Dispatcher.UIThread.Post(() => SetStatus(StatusMessage.Warning("multiplayer.invite.paused")));
+        // 发出凭据时就列上（对方不回确认也已经能进房间）；确认后改成“已确认”。同一个人重新敲门进来时替换旧的那行。
+        lobby.Issued += (request, _) => Dispatcher.UIThread.Post(() =>
+        {
+            if (_lobby != lobby) return;
+            for (var i = Members.Count - 1; i >= 0; i--)
+                if (Members[i].PublicKey.AsSpan().SequenceEqual(request.PublicKey)) Members.RemoveAt(i);
+            Members.Insert(0, new MemberItem(request.Name, request.PublicKey, request.Trusted));
+            SetStatus(StatusMessage.Success("multiplayer.invite.admitted", request.Name, request.Fingerprint));
+        });
         lobby.Admitted += request => Dispatcher.UIThread.Post(() =>
         {
             if (_lobby != lobby) return;
-            Members.Insert(0, new MemberItem(request.Name, request.PublicKey, request.Trusted));
-            SetStatus(StatusMessage.Success("multiplayer.invite.admitted", request.Name, request.Fingerprint));
+            for (var i = 0; i < Members.Count; i++)
+                if (Members[i].PublicKey.AsSpan().SequenceEqual(request.PublicKey)) Members[i] = Members[i] with { Confirmed = true };
         });
         _lobby = lobby;
     }
@@ -165,6 +177,8 @@ public sealed partial class MultiplayerViewModel
         var lobby = _lobby;
         _lobby = null;
         _credentials = null;
+        _members?.Clear();
+        _members = null;
         _lastInvite = null;
         InviteShown = false;
         OnPropertyChanged(nameof(InviteDisplay));

@@ -469,7 +469,9 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         // 房间的网络名和密钥随机生成，只在批准加入时经加密的敲门通道发给对方；没有可以直接分享的房间码，靠“邀请”。
         var credentials = NewCredentials(port.Value, new TunnelSettings(SelectedTransport.Mode, CanDisguise && DisguiseAsMinecraft));
-        var room = credentials.ToRoom();
+        // 成员表：批准一个人时发给他自己的钥匙（游戏通道和聊天按它认人）；房主自己的聊天客户端也有一把。
+        var members = new MemberTable();
+        var room = credentials.ToHostRoom(members, ChatName);
         if (!TryStartSession(new EasyTierOptions(room, true, TestPeers ?? _service.MultiplayerPeers, EasyTierArgs.FreeTcpPort(), null, TestListeners, Guid.NewGuid().ToString(), FullLanMode, null, FullLanMode && AllowExitNode)
             {
                 AllowProxy = AllowGameProxy,
@@ -479,7 +481,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _room = room;
         RestoreChatHistory(room);
         StartHub(room);
-        StartHostLobby(credentials);
+        StartHostLobby(credentials, members);
         Status = FullLanMode
             ? L.T("multiplayer.room.created_full_lan")
             : L.T("multiplayer.room.created");
@@ -609,6 +611,12 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private async Task UseGameProxyAsync()
     {
         if (SelectedExitPeer is not { } peer || _session is null || _currentOptions is not { } current) return;
+        // 邀请房间的封装通道只在成员和房主之间有钥匙：只能经房主转发。
+        if (current.Room.FromInvite && current.Room.Tunnel.Wraps && peer.Peer.Ip != EasyTierArgs.HostIp)
+        {
+            SetStatus(StatusMessage.Warning("multiplayer.proxy.host_only"));
+            return;
+        }
         var options = current with
         {
             ProxyExit = peer.Peer.Ip,

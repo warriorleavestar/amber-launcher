@@ -1011,6 +1011,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         Check("联机：批准后加入房间", guest.IsJoined && guest.JoinAddress.StartsWith("127.0.0.1:", StringComparison.Ordinal), guest.Status);
         Check("联机：加入方看到房主指纹", guest.HostFingerprint == host.Identity.Fingerprint, guest.HostFingerprint);
         Check("联机：房主的成员列表带指纹", await WaitAsync(() => host.Members.Count == 1, 10) && host.Members[0].Fingerprint == guest.Identity.Fingerprint, string.Join(" | ", host.Members.Select(m => m.Label)));
+        Check("联机：成员确认收到凭据后标“已确认”", await WaitAsync(() => host.Members.Count == 1 && host.Members[0].Confirmed, 10), string.Join(" | ", host.Members.Select(m => m.Label)));
 
         var connected = await WaitAsync(() => guest.Peers.Any(p => p.Peer.Ip == Amber.Core.Multiplayer.EasyTierArgs.HostIp), 60);
         Check("联机：加入方看到房主", connected, guest.Status);
@@ -1043,6 +1044,11 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         await host.SendChatCommand.ExecuteAsync(null);
         var chatOk = await WaitAsync(() => host.ChatLines.Any(l => l.Text == "你好，房主" && !l.Mine) && guest.ChatLines.Any(l => l.Text == "欢迎" && !l.Mine), 15);
         Check("联机：聊天消息双向送达", chatOk, string.Join(" | ", host.ChatLines.Select(l => l.Name + ":" + l.Text)));
+        // 每个成员到房主是自己的 Noise 通道；房主按成员表给消息盖上发送者的指纹（成员自己写的发送者不算数）。
+        var stamped = host.ChatLines.FirstOrDefault(l => l.Text == "你好，房主" && !l.Mine);
+        Check("联机：房主给聊天消息盖上发送者指纹", stamped?.Message.Fingerprint == guest.Identity.Fingerprint, stamped?.Message.Fingerprint ?? "没有消息");
+        var welcome = guest.ChatLines.FirstOrDefault(l => l.Text == "欢迎" && !l.Mine);
+        Check("联机：加入方看到房主的指纹", welcome?.Message.Fingerprint == host.Identity.Fingerprint, welcome?.Message.Fingerprint ?? "没有消息");
         Check("联机：进入房间通知", host.ChatLines.Any(l => l.Message.Kind == Amber.Core.Multiplayer.ChatKind.Join && !l.Mine));
         main.CurrentPage = Page<HomeViewModel>();
         guest.ChatInput = "看得到未读吗";
@@ -1128,6 +1134,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         guest.ChatInput = "封装后的聊天";
         await guest.SendChatCommand.ExecuteAsync(null);
         Check("封装：聊天经封装通道送达", chatUp && await WaitAsync(() => host.ChatLines.Any(l => l.Text == "封装后的聊天" && !l.Mine), 15), $"{host.ChatStatus} / {guest.ChatStatus}");
+        Check("封装：聊天发送者由房主按成员钥匙认出", host.ChatLines.FirstOrDefault(l => l.Text == "封装后的聊天" && !l.Mine)?.Message.Fingerprint == guest.Identity.Fingerprint);
 
         guest.SelectedExitPeer = guest.ExitCandidates.FirstOrDefault(p => p.Peer.Ip == Amber.Core.Multiplayer.EasyTierArgs.HostIp);
         await guest.UseGameProxyCommand.ExecuteAsync(null);

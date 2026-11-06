@@ -26,7 +26,9 @@ public sealed class HostLobby : IAsyncDisposable
 
     /// <summary>大厅运行状态变了（开了 / 关了）。</summary>
     public event Action? StateChanged;
-    /// <summary>有人通过敲门进了房间（已批准、对方确认收到凭据）。</summary>
+    /// <summary>批准了一个人、发了他的钥匙（发出凭据前就触发，对方不确认也算进了房间）。</summary>
+    public event Action<KnockRequest, MemberEntry>? Issued;
+    /// <summary>对方确认收到了凭据。</summary>
     public event Action<KnockRequest>? Admitted;
     /// <summary>失败的敲门太多，暂停 60 秒。</summary>
     public event Action? Paused;
@@ -49,14 +51,14 @@ public sealed class HostLobby : IAsyncDisposable
 
     /// <summary>用真的 EasyTier 和 47660 端口的房主大厅。</summary>
     public static HostLobby Create(EasyTierInstaller installer, string workDir, Func<IReadOnlyList<string>> peers, X25519KeyPair identity,
-        Func<RoomCredentials> credentials, Func<byte[], bool> isTrusted, Func<KnockRequest, CancellationToken, Task<bool>> approve, Action<string>? log = null)
+        Func<RoomCredentials> credentials, Func<byte[], bool> isTrusted, Func<KnockRequest, CancellationToken, Task<bool>> approve, MemberTable members, Action<string>? log = null)
     {
         HostLobby? lobby = null;
         lobby = new HostLobby(
             options => EasyTierLobby.Start(installer, options, workDir),
             peers,
             // 不建网卡时 EasyTier 把发往房主大厅地址 10.234.0.1:47660 的连接交给本机 127.0.0.1:47660。
-            book => new KnockServer(book, identity, credentials, isTrusted, approve, IPAddress.Loopback, KnockProtocol.Port, log),
+            book => new KnockServer(book, identity, credentials, isTrusted, approve, IPAddress.Loopback, KnockProtocol.Port, log, members: members),
             log);
         return lobby;
     }
@@ -83,6 +85,7 @@ public sealed class HostLobby : IAsyncDisposable
                 try
                 {
                     _knock = _startKnock(Book);
+                    _knock.Issued += (r, m) => Issued?.Invoke(r, m);
                     _knock.Admitted += r => Admitted?.Invoke(r);
                     _knock.Paused += () => Paused?.Invoke();
                     _knock.SessionEnded += () => _ = UpdateQuietlyAsync();
