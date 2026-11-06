@@ -696,8 +696,15 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         var host = Page<MultiplayerViewModel>();
         main.CurrentPage = host;
         await Task.Delay(500);
-        host.JoinCode = "AMB-123";
-        Check("联机：房间码格式错误有提示", Press(await FindAsync<Button>(b => b.Content as string == "加入房间")) && host.Status.Contains("格式") || !host.IsComponentReady && host.Status.Contains("组件"), host.Status);
+        host.JoinCode = "JAY2-123";
+        Check("联机：邀请码格式错误有提示", Press(await FindAsync<Button>(b => b.Content as string == "加入房间")) && host.Status.Contains("格式") || !host.IsComponentReady && host.Status.Contains("组件"), host.Status);
+        if (host.IsComponentReady)
+        {
+            host.JoinCode = "AMB-K7Q2M9XD-4HZP8RW2N6TC-25565";
+            await host.JoinCommand.ExecuteAsync(null);
+            Check("联机：旧版本房间码提示对方更新", host.IsIdle && host.Status.Contains("旧版本"), host.Status);
+        }
+        Check("联机：显示自己的指纹", host.MyFingerprint.Contains('-') && host.MyFingerprint.Length > 16, host.MyFingerprint);
         await ShotAsync("联机页");
         if (!host.IsComponentReady)
         {
@@ -728,16 +735,25 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         host.TestPeers = [];
         host.ManualPort = gamePort.ToString();
         await host.CreateRoomCommand.ExecuteAsync(null);
-        Check("联机：创建房间", host.IsHosting && host.RoomCodeText.StartsWith("AMB-", StringComparison.Ordinal), host.Status);
+        Check("联机：创建房间（没有可分享的房间码）", host.IsHosting && host.RoomCodeText.Length == 0, host.Status);
         await ShotAsync("联机房主");
         await LayoutHereAsync("联机房主");
 
         var guest = host.CreateTestPeer();
         guest.Activate();
         guest.TestPeers = [$"tcp://127.0.0.1:{relayPort}"];
-        guest.JoinCode = "朋友发来的：" + host.RoomCodeText;
-        guest.JoinCommand.Execute(null);
-        Check("联机：加入房间", guest.IsJoined && guest.JoinAddress.StartsWith("127.0.0.1:", StringComparison.Ordinal), guest.Status);
+        // 邀请两次：第一次要房主点批准，之后把对方加进信任列表，第二次重新加入时直接批准。
+        var invite = await CreateInviteAsync(host, uses: 2, auto: false);
+        guest.JoinCode = "朋友发来的：" + invite;
+        var joining = guest.JoinCommand.ExecuteAsync(null);
+        var asked = await WaitAsync(() => host.ApprovalCards.Count > 0, 90);
+        Check("联机：房主收到敲门卡片（带指纹）", asked && host.ApprovalCards[0].Detail.Contains(guest.Identity.Fingerprint), guest.Status);
+        await ShotAsync("联机敲门卡片");
+        if (asked) host.ApproveKnockCommand.Execute(host.ApprovalCards[0]);
+        await joining;
+        Check("联机：批准后加入房间", guest.IsJoined && guest.JoinAddress.StartsWith("127.0.0.1:", StringComparison.Ordinal), guest.Status);
+        Check("联机：加入方看到房主指纹", guest.HostFingerprint == host.Identity.Fingerprint, guest.HostFingerprint);
+        Check("联机：房主的成员列表带指纹", await WaitAsync(() => host.Members.Count == 1, 10) && host.Members[0].Fingerprint == guest.Identity.Fingerprint, string.Join(" | ", host.Members.Select(m => m.Label)));
 
         var connected = await WaitAsync(() => guest.Peers.Any(p => p.Peer.Ip == Amber.Core.Multiplayer.EasyTierArgs.HostIp), 60);
         Check("联机：加入方看到房主", connected, guest.Status);
@@ -783,15 +799,21 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         main.CurrentPage = host;
         await ShotAsync("联机房主有玩家");
 
-        // 结束后用同一个房间码再加入：之前的聊天还在（只在内存里），后面有分隔行。
-        var code = host.RoomCodeText;
+        // 信任这个人，再用同一张邀请重新加入：直接批准；之前的聊天还在（只在内存里），后面有分隔行。
+        host.TrustMemberCommand.Execute(host.Members[0]);
+        Check("联机：信任列表记下了这个人", host.TrustedPeople.Any(p => p.Member.Fingerprint == guest.Identity.Fingerprint));
         guest.StopCommand.Execute(null);
         Check("联机：结束后聊天清空", guest.ChatLines.Count == 0);
-        guest.JoinCode = code;
-        guest.JoinCommand.Execute(null);
+        guest.JoinCode = invite;
+        await guest.JoinCommand.ExecuteAsync(null);
+        Check("联机：信任的人重新加入不用批准", guest.IsJoined && host.ApprovalCards.Count == 0, guest.Status);
+        Check("联机：一张邀请用完后不再列为待用", await WaitAsync(() => host.PendingInvites.Count == 0, 10), host.PendingInvites.Count.ToString());
         var restored = guest.ChatLines.Any(l => l.Text == "欢迎") && guest.ChatLines.Any(l => l.IsSeparator);
         Check("联机：重新加入同一房间看到之前的消息", restored, string.Join(" | ", guest.ChatLines.Select(l => l.Text)));
         Check("联机：重新加入后聊天重连", await WaitAsync(() => guest.ChatReady, 40), guest.ChatStatus);
+        var trusted = host.TrustedPeople.FirstOrDefault(p => p.Member.Fingerprint == guest.Identity.Fingerprint);
+        host.RemoveTrustedCommand.Execute(trusted);
+        Check("联机：从信任列表移除", await WaitAsync(() => host.TrustedPeople.All(p => p.Member.Fingerprint != guest.Identity.Fingerprint), 5));
         guest.StopCommand.Execute(null);
         host.StopCommand.Execute(null);
 
@@ -818,10 +840,13 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         host.AllowGameProxy = true;
         host.ManualPort = gamePort.ToString();
         await host.CreateRoomCommand.ExecuteAsync(null);
-        Check("封装：创建高加密 + 伪装的房间", host.IsHosting && host.RoomCodeText.StartsWith("AMB-T2D-", StringComparison.Ordinal) && host.TransportText.Contains("高加密"), host.TransportText + " / " + host.Status);
-        guest.JoinCode = host.RoomCodeText;
-        guest.JoinCommand.Execute(null);
-        Check("封装：加入方按房间码用同样的封装", guest.IsJoined && guest.TransportText.Contains("高加密") && guest.TransportText.Contains("伪装"), guest.TransportText);
+        Check("封装：创建高加密 + 伪装的房间", host.IsHosting && host.TransportText.Contains("高加密"), host.TransportText + " / " + host.Status);
+        // 这次勾“自动批准”：不出卡片直接进。
+        var invite = await CreateInviteAsync(host, uses: 1, auto: true);
+        Check("封装：邀请码带模式段", invite.StartsWith("JAY2-T2D-", StringComparison.Ordinal), invite[..9]);
+        guest.JoinCode = invite;
+        await guest.JoinCommand.ExecuteAsync(null);
+        Check("封装：自动批准，加入方按房主发来的设置用同样的封装", guest.IsJoined && host.ApprovalCards.Count == 0 && guest.TransportText.Contains("高加密") && guest.TransportText.Contains("伪装"), guest.TransportText + " / " + guest.Status);
         await WaitAsync(() => guest.Peers.Any(p => p.Peer.Ip == Amber.Core.Multiplayer.EasyTierArgs.HostIp), 60);
         string? reply = null;
         for (var attempt = 0; attempt < 15 && reply is null; attempt++)
@@ -994,6 +1019,23 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
     }
 
     private static string AppSettingsDataDir() => Amber.App.Services.AppSettings.DataDir;
+
+    /// <summary>房主开“邀请朋友”对话框、生成一张邀请；界面上默认打码，返回完整的码。</summary>
+    private async Task<string> CreateInviteAsync(MultiplayerViewModel host, int uses, bool auto)
+    {
+        host.OpenInviteDialogCommand.Execute(null);
+        host.InviteUses = uses;
+        host.SelectedInviteExpiry = host.InviteExpiryChoices[0];
+        host.InviteAutoApprove = auto;
+        await host.CreateInviteCommand.ExecuteAsync(null);
+        var full = host.TestInviteText ?? "";
+        Check("邀请：生成邀请码，默认打码显示", host.HasInvite && full.StartsWith("JAY2-", StringComparison.Ordinal) && host.InviteDisplay != full && !host.InviteDisplay.Contains(full[^20..]), host.Status);
+        Check("邀请：待用邀请列表里有它", host.PendingInvites.Count > 0, host.PendingInvites.Count.ToString());
+        await ShotAsync(auto ? "邀请对话框（自动批准）" : "邀请对话框");
+        host.InviteAutoApprove = false;
+        host.CloseInviteDialogCommand.Execute(null);
+        return full;
+    }
 
     private static void FakeJar(string path, string entry, string text)
     {
