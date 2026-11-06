@@ -173,6 +173,13 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         window.Height = 700;
         await ShotAsync("CurseForge手动下载");
         await LayoutHereAsync("CurseForge手动下载");
+        content.Selected = null;
+        content.Detail = null;
+        content.ManualDownloadUrl = provider.File.ManualDownloadPage;
+        await content.SearchCommand.ExecuteAsync(null);
+        await Ui.FlushAsync();
+        Check("CurseForge：重新搜索清除导入遗留的官网入口", !content.HasManualDownload
+            && !window.GetVisualDescendants().OfType<Button>().Any(b => b.Command == content.OpenManualDownloadCommand && b.IsEffectivelyVisible), "");
         var instance = Page<InstanceViewModel>();
         main.CurrentPage = instance;
         var oldPath = Path.Combine(reportDir, "manual-update-old.jar");
