@@ -259,7 +259,7 @@ public sealed partial class ModpackService
         var ids = curse.Select(f => f["fileID"]!.GetValue<long>()).ToList();
         var files = await curseForge.GetFilesByIdAsync(ids, ct);
         var folders = await curseForge.GetProjectFoldersAsync(files.Select(f => long.Parse(f.ProjectId)).Distinct().ToList(), ct);
-        var items = files.Select(f => ContentInstaller.ToItem(f, Path.Combine(workDir, folders.GetValueOrDefault(f.ProjectId, "mods")))).ToList();
+        var items = await ContentInstaller.PrepareDownloadItemsAsync(files.Select(f => (f, Path.Combine(workDir, folders.GetValueOrDefault(f.ProjectId, "mods")))), ct);
         await ctx.Downloader.DownloadAllAsync(items, new Progress<Net.DownloadProgress>(p => progress?.Report(new(L.F("core.content.modpack.downloadprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
         if (ids.Count > files.Count) throw new InvalidDataException(L.P("core.content.modpack.missingcursefiles", ids.Count - files.Count, ids.Count - files.Count));
     }

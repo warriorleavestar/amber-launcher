@@ -1236,5 +1236,8 @@
   "core.mp.matrix.requestexpired": "ホストのテスト要求に長時間応答がなかったため、無効になりました",
   "multiplayer.matrix.request_gone": "このテスト要求は無効になりました（タイムアウトまたはホストが取り消し）。テストは開始されていません",
   "content.modpack.installed_skipped": "Modpack を {0} としてインストールしました。不審なファイルまたはランチャー専用のファイル {1} 件をスキップしました：{2}",
-  "core.auth.external.insecure_saved": "外部アカウント {0} のサーバーは http のため、パスワードとトークンが暗号化されずに送信されます。起動には使用できません。アカウントページで削除し、https のアドレスで追加し直してください。"
+  "core.auth.external.insecure_saved": "外部アカウント {0} のサーバーは http のため、パスワードとトークンが暗号化されずに送信されます。起動には使用できません。アカウントページで削除し、https のアドレスで追加し直してください。",
+  "core.content.curseforge.manual_download": "{0} はアプリ内ダウンロードが許可されていないか、CurseForge がダウンロード URL を提供していません。こちらから手動でダウンロードしてください：{1}",
+  "content.curseforge.manual_hint": "CurseForge のページからファイルをダウンロードして、インスタンス内の適切なフォルダーに手動で配置してください。",
+  "content.curseforge.open_manual": "CurseForge でダウンロード…"
 }

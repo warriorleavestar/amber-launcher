@@ -193,6 +193,12 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     [ObservableProperty]
     public partial double Progress { get; set; }
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasManualDownload))]
+    public partial string? ManualDownloadUrl { get; set; }
+
+    public bool HasManualDownload => !string.IsNullOrWhiteSpace(ManualDownloadUrl);
+
     public InstanceViewModel(LauncherService service)
     {
         _service = service;
@@ -484,11 +490,17 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
     private async Task RunWorkAsync(Func<CancellationToken, Task> work)
     {
         if (IsBusy) return;
+        ManualDownloadUrl = null;
         IsBusy = true;
         _workCts = new CancellationTokenSource();
         try
         {
             await work(_workCts.Token);
+        }
+        catch (ManualDownloadRequiredException e)
+        {
+            ManualDownloadUrl = e.File.ManualDownloadPage;
+            SetStatus(StatusMessage.Warning("core.content.curseforge.manual_download", e.File.DisplayName, ManualDownloadUrl ?? ""));
         }
         catch (OperationCanceledException) when (_workCts.IsCancellationRequested)
         {
@@ -511,6 +523,20 @@ public sealed partial class InstanceViewModel : PageViewModel, ISnapshotDemo
 
     [RelayCommand]
     private void CancelWork() => _workCts?.Cancel();
+
+    [RelayCommand]
+    private void OpenManualDownload()
+    {
+        try
+        {
+            if (!ContentViewModel.TryOpenProjectPage(ManualDownloadUrl, start => Process.Start(start)))
+                SetStatus(StatusMessage.Error("tools.download.invalid_url"));
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            SetStatus(StatusMessage.Failure("content.project.open_failed", e, ErrorText.Of(e)));
+        }
+    }
 
     // ---- 设置 ----
 

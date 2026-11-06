@@ -1236,5 +1236,8 @@
   "core.mp.matrix.requestexpired": "房主的测试请求太久没有回答，已作废",
   "multiplayer.matrix.request_gone": "这次测试请求已经作废（超时或房主已取消），没有开始测试",
   "content.modpack.installed_skipped": "整合包已安装为 {0}。跳过了 {1} 个可疑或属于启动器的文件：{2}",
-  "core.auth.external.insecure_saved": "外置账号 {0} 的服务器地址是 http，密码和令牌会明文传输，已不能用来启动。请到账号页删掉它，再用 https 地址重新添加。"
+  "core.auth.external.insecure_saved": "外置账号 {0} 的服务器地址是 http，密码和令牌会明文传输，已不能用来启动。请到账号页删掉它，再用 https 地址重新添加。",
+  "core.content.curseforge.manual_download": "{0} 不允许应用内下载，或 CurseForge 未提供下载地址。请在网页手动下载：{1}",
+  "content.curseforge.manual_hint": "请在 CurseForge 页面下载这个文件，再手动放入实例对应的文件夹。",
+  "content.curseforge.open_manual": "在 CurseForge 页面下载…"
 }

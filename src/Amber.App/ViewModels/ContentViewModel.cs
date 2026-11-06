@@ -116,7 +116,16 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     public bool HasSelection => Selected is not null;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedRequiresManualDownload))]
     public partial FileItem? SelectedFile { get; set; }
+
+    public bool SelectedRequiresManualDownload => SelectedFile?.File.RequiresManualDownload == true;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasManualDownload))]
+    public partial string? ManualDownloadUrl { get; set; }
+
+    public bool HasManualDownload => !string.IsNullOrWhiteSpace(ManualDownloadUrl);
 
     [ObservableProperty]
     public partial string NewInstanceName { get; set; } = "";
@@ -181,6 +190,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         if (value >= 0) _ = SearchFromStart();
     }
     partial void OnSelectedChanged(ProjectItem? value) => _ = LoadFilesAsync();
+    partial void OnSelectedFileChanged(FileItem? value) => ManualDownloadUrl = value?.File.ManualDownloadPage;
     partial void OnShowUnstableChanged(bool value) => _ = LoadFilesAsync();
     /// <summary>“装到”临时换成了不是当前实例的那个（显示“仅本次”）。</summary>
     public bool IsTemporaryTarget => TargetInstance is { } t && _service.CurrentInstance is { } c && t != c && Instances.Contains(c);
@@ -392,6 +402,26 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         }
     }
 
+    [RelayCommand]
+    private void OpenManualDownload()
+    {
+        try
+        {
+            if (!TryOpenProjectPage(ManualDownloadUrl, start => Process.Start(start)))
+                SetStatus(StatusMessage.Error("tools.download.invalid_url"));
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            SetStatus(StatusMessage.Failure("content.project.open_failed", e, ErrorText.Of(e)));
+        }
+    }
+
+    private void ShowManualDownload(ContentFile file)
+    {
+        ManualDownloadUrl = file.ManualDownloadPage;
+        SetStatus(StatusMessage.Warning("core.content.curseforge.manual_download", file.DisplayName, file.ManualDownloadPage ?? ""));
+    }
+
     // 最后一次校验紧贴系统调用，避免新提供方或手工构造的项目绕过入口校验。
     internal static bool TryOpenProjectPage(string? url, Action<ProcessStartInfo> start)
     {
@@ -404,6 +434,12 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     private async Task InstallAsync()
     {
         if (SelectedFile?.File is not { } file) return;
+        if (file.RequiresManualDownload)
+        {
+            ShowManualDownload(file);
+            return;
+        }
+        ManualDownloadUrl = null;
         if (IsModpack)
         {
             await InstallModpackFromFileAsync(file);
@@ -457,6 +493,10 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             SetStatus(new StatusMessage("content.install.completed", [file.DisplayName, extra, where, problems, noLoader], kind));
             _service.NotifyContentChanged();
         }
+        catch (ManualDownloadRequiredException e)
+        {
+            ShowManualDownload(e.File);
+        }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
             SetStatus(StatusMessage.Warning("common.cancelled"));
@@ -483,6 +523,10 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
             await _service.Downloader.DownloadOneAsync(ContentInstaller.ToItem(file, Path.GetDirectoryName(temp)!), _workCts.Token);
             await ImportCoreAsync(temp, NewInstanceName, _workCts.Token);
         }
+        catch (ManualDownloadRequiredException e)
+        {
+            ShowManualDownload(e.File);
+        }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
             SetStatus(StatusMessage.Warning("common.cancelled"));
@@ -502,6 +546,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     /// <summary>导入本地整合包文件（由界面的文件选择器调用）。</summary>
     public async Task ImportLocalPackAsync(string path)
     {
+        ManualDownloadUrl = null;
         // 快捷导入会先进入资源页，取消首次搜索，避免它迟到后覆盖导入状态。
         _searchCts?.Cancel();
         IsBusy = true;
@@ -510,6 +555,10 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         {
             var info = ModpackService.Inspect(path);
             await ImportCoreAsync(path, SafeName(info.Name), _workCts.Token);
+        }
+        catch (ManualDownloadRequiredException e)
+        {
+            ShowManualDownload(e.File);
         }
         catch (OperationCanceledException) when (_workCts?.IsCancellationRequested == true)
         {
