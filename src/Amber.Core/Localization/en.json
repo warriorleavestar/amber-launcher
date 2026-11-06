@@ -1268,5 +1268,7 @@
   "multiplayer.matrix.request_gone": "This test request is no longer valid (it timed out or the host cancelled it). No test was started.",
   "content.modpack.installed_skipped": "Modpack installed as {0}. Skipped {1} suspicious or launcher-owned files: {2}",
   "core.auth.external.insecure_saved": "The external account {0} uses an http server, which would send its password and tokens unencrypted, so it can no longer be used to launch. Remove it on the Accounts page and add it again with an https address.",
-  "core.mp.noise.staticrequired": "The XXpsk3 handshake needs a local static key; other handshakes must not have one"
+  "core.mp.noise.staticrequired": "The XXpsk3 handshake needs a local static key; other handshakes must not have one",
+  "core.mp.identity.corrupt": "Your multiplayer identity file was damaged or couldn't be decrypted (maybe a different system user), so a new identity was created. Hosts who knew you will see you as a new member.",
+  "core.mp.identity.otherplatform": "The multiplayer identity file was encrypted on another system and can't be decrypted here"
 }

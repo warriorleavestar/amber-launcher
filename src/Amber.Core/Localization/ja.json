@@ -1237,5 +1237,7 @@
   "multiplayer.matrix.request_gone": "このテスト要求は無効になりました（タイムアウトまたはホストが取り消し）。テストは開始されていません",
   "content.modpack.installed_skipped": "Modpack を {0} としてインストールしました。不審なファイルまたはランチャー専用のファイル {1} 件をスキップしました：{2}",
   "core.auth.external.insecure_saved": "外部アカウント {0} のサーバーは http のため、パスワードとトークンが暗号化されずに送信されます。起動には使用できません。アカウントページで削除し、https のアドレスで追加し直してください。",
-  "core.mp.noise.staticrequired": "XXpsk3 ハンドシェイクにはローカルの長期鍵が必要です。他のハンドシェイクには指定できません"
+  "core.mp.noise.staticrequired": "XXpsk3 ハンドシェイクにはローカルの長期鍵が必要です。他のハンドシェイクには指定できません",
+  "core.mp.identity.corrupt": "マルチプレイ用 ID ファイルが壊れているか復号できなかったため（システムユーザーが変わった可能性があります）、新しい ID を作成しました。以前あなたを知っていたホストからは新しいメンバーとして扱われます。",
+  "core.mp.identity.otherplatform": "マルチプレイ用 ID ファイルは別のシステムで暗号化されているため、ここでは復号できません"
 }
