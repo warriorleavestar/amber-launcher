@@ -489,7 +489,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         var normalized = relative.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
         var full = Path.GetFullPath(Path.Combine(rootFull, normalized));
         var prefix = rootFull.EndsWith(Path.DirectorySeparatorChar) ? rootFull : rootFull + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        // 区分大小写的文件系统上（Linux），“../INST/x” 会落到和 root 只差大小写的另一个目录：只在 Windows 上忽略大小写。
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!full.StartsWith(prefix, comparison))
             throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
         return full;
     }
