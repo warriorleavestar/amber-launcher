@@ -17,6 +17,8 @@ public sealed class HostLobby : IAsyncDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Timer _timer;
     private IDisposable? _lobby;
+    /// <summary>当前大厅是按哪个网络名开的（邀请簿换了大厅密钥时用来发现旧大厅已经没用了）。</summary>
+    private string? _openName;
     private KnockServer? _knock;
     private bool _disposed;
 
@@ -67,7 +69,16 @@ public sealed class HostLobby : IAsyncDisposable
         {
             if (_disposed) return;
             var pending = Book.HasPending;
-            if (pending && _lobby is null && Book.Lobby is { } lobby)
+            var key = Book.Lobby;
+            // 最后一次用掉时，那个人可能还在等房主批准、还没收到凭据（连接就走在大厅里）：等进行中的敲门都结束再关。
+            // 大厅密钥换了也要关掉重开：上一张邀请用完、还有人在等批准时又发了新邀请，邀请簿已经换了新的大厅密钥，旧大厅里没人能用新邀请。
+            if ((_lobby is not null || _knock is not null) && (_knock?.Active ?? 0) == 0 && (!pending || key?.Name != _openName))
+            {
+                await CloseCoreAsync();
+                _log?.Invoke(L.T("core.mp.lobby.closed"));
+                StateChanged?.Invoke();
+            }
+            if (pending && _lobby is null && key is { } lobby)
             {
                 try
                 {
@@ -76,6 +87,7 @@ public sealed class HostLobby : IAsyncDisposable
                     _knock.Paused += () => Paused?.Invoke();
                     _knock.SessionEnded += () => _ = UpdateQuietlyAsync();
                     _lobby = _startLobby(new LobbyOptions(lobby.Name, lobby.Secret, true, _peers(), EasyTierArgs.FreeTcpPort()));
+                    _openName = lobby.Name;
                     _log?.Invoke(L.T("core.mp.lobby.opened"));
                 }
                 catch (Exception e) when (e is SocketException or IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
@@ -84,13 +96,6 @@ public sealed class HostLobby : IAsyncDisposable
                     await CloseCoreAsync();
                     throw;
                 }
-                StateChanged?.Invoke();
-            }
-            // 最后一次用掉时，那个人可能还在等房主批准、还没收到凭据（连接就走在大厅里）：等进行中的敲门都结束再关。
-            else if (!pending && (_lobby is not null || _knock is not null) && (_knock?.Active ?? 0) == 0)
-            {
-                await CloseCoreAsync();
-                _log?.Invoke(L.T("core.mp.lobby.closed"));
                 StateChanged?.Invoke();
             }
         }
@@ -111,6 +116,7 @@ public sealed class HostLobby : IAsyncDisposable
     {
         _lobby?.Dispose();
         _lobby = null;
+        _openName = null;
         if (_knock is { } knock)
         {
             _knock = null;
