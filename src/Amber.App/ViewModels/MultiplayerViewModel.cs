@@ -246,6 +246,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             if (_service.CurrentInstance is { } id && Instances.Contains(id)) TargetInstance = id;
         });
         InitDirect();
+        InitGuide();
     }
 
     protected override void OnFirstActivated()
@@ -349,6 +350,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     {
         Nodes.Clear();
         foreach (var url in _service.MultiplayerPeers) Nodes.Add(new NodeItem(url));
+        NodesExpanded = Nodes.Count == 0;
     }
 
     private void SaveNodes()
@@ -483,6 +485,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private void Join()
     {
         if (!IsIdle) return;
+        if (RouteMisplacedCode(JoinCode, PastedCodeKind.Room, () => JoinCode = "")) return;
         if (!IsComponentReady)
         {
             SetStatus(StatusMessage.Warning("multiplayer.component.download_required"));
