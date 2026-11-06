@@ -111,6 +111,25 @@ public sealed class InviteTests
         Assert.Equal("d26c0be6019c48dc094652dc45ef58587870be69d7cca11f4bdf0b989a2cb981", Convert.ToHexStringLower(LobbyKeys.KnockPsk(K)));
     }
 
+    /// <summary>诊断报告里：邀请码整段、大厅和房间的网络名、房间的 256 位密钥都不留。</summary>
+    [Fact]
+    public void DiagnosticsRedactInvitesAndRoomSecrets()
+    {
+        var credentials = RoomCredentials.Create(new byte[32], 25565, TunnelSettings.Default);
+        var room = credentials.ToRoom();
+        var lobby = LobbyKeys.LobbyName(L);
+        var text = $"发邀请 {Plain} / {Wrapped.ToLowerInvariant()} 大厅 {lobby} 房间 {room.EasyTierNetworkName} 密钥 {room.EasyTierSecret} " +
+            $"network_secret: \"{LobbyKeys.LobbySecret(L)}\"";
+        var report = NetDiagnostics.Redact(text, room.Secrets, includePublicIps: true);
+        Assert.DoesNotContain("0G2491650N2RBHG68T3CE1T7GZ", report, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("00041061050R3GG28A1C60T3GF", report, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(lobby, report);
+        Assert.DoesNotContain(room.EasyTierNetworkName, report);
+        Assert.DoesNotContain(room.EasyTierSecret, report);
+        Assert.DoesNotContain(LobbyKeys.LobbySecret(L), report);
+        Assert.Contains("JAY2-", report);
+    }
+
     [Theory]
     [InlineData("AMB-K7Q2M9XD-4HZP8RW2N6TC-25565", true)]
     [InlineData("AMBDIRECT1-abc", true)]

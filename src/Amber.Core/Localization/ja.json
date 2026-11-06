@@ -1239,5 +1239,15 @@
   "core.auth.external.insecure_saved": "外部アカウント {0} のサーバーは http のため、パスワードとトークンが暗号化されずに送信されます。起動には使用できません。アカウントページで削除し、https のアドレスで追加し直してください。",
   "core.mp.noise.staticrequired": "XXpsk3 ハンドシェイクにはローカルの長期鍵が必要です。他のハンドシェイクには指定できません",
   "core.mp.identity.corrupt": "マルチプレイ用 ID ファイルが壊れているか復号できなかったため（システムユーザーが変わった可能性があります）、新しい ID を作成しました。以前あなたを知っていたホストからは新しいメンバーとして扱われます。",
-  "core.mp.identity.otherplatform": "マルチプレイ用 ID ファイルは別のシステムで暗号化されているため、ここでは復号できません"
+  "core.mp.identity.otherplatform": "マルチプレイ用 ID ファイルは別のシステムで暗号化されているため、ここでは復号できません",
+  "core.mp.knock.badreply": "相手の返信の形式が正しくありません",
+  "core.mp.knock.toolarge": "ノックのメッセージが長すぎます",
+  "core.mp.knock.hostmismatch": "ホストから届いた身元がハンドシェイクで証明されたものと一致しないため、参加を中止しました",
+  "core.mp.knock.failed": "ノックに失敗しました：{0}",
+  "core.mp.knock.paused": "失敗したノックが多すぎるため、ロビーを 60 秒間停止します",
+  "core.mp.knock.unknown": "不明な招待です",
+  "core.mp.knock.timeout": "ハンドシェイクがタイムアウトしました",
+  "core.mp.knock.approved": "{0}（{1}）を承認しました",
+  "core.mp.knock.rejected": "{0}（{1}）の参加を許可しませんでした",
+  "core.mp.diagnostics.redactedinvite": "JAY2-<招待コード非表示>"
 }

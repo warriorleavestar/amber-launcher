@@ -1239,5 +1239,15 @@
   "core.auth.external.insecure_saved": "外置账号 {0} 的服务器地址是 http，密码和令牌会明文传输，已不能用来启动。请到账号页删掉它，再用 https 地址重新添加。",
   "core.mp.noise.staticrequired": "XXpsk3 握手必须提供本机长期密钥，其他握手不能提供",
   "core.mp.identity.corrupt": "联机身份文件损坏或解不开（可能换了系统用户），已换成新的身份。之前认识你的房主会把你当成新成员。",
-  "core.mp.identity.otherplatform": "联机身份文件是在别的系统上加密的，这里解不开"
+  "core.mp.identity.otherplatform": "联机身份文件是在别的系统上加密的，这里解不开",
+  "core.mp.knock.badreply": "对方的回复格式不对",
+  "core.mp.knock.toolarge": "敲门消息太长",
+  "core.mp.knock.hostmismatch": "房主发来的身份和握手时证明的不一致，已停止加入",
+  "core.mp.knock.failed": "敲门失败：{0}",
+  "core.mp.knock.paused": "失败的敲门太多，大厅暂停 60 秒",
+  "core.mp.knock.unknown": "不认识的邀请",
+  "core.mp.knock.timeout": "握手超时",
+  "core.mp.knock.approved": "已批准 {0}（{1}）",
+  "core.mp.knock.rejected": "未让 {0}（{1}）进入",
+  "core.mp.diagnostics.redactedinvite": "JAY2-<邀请码已隐藏>"
 }

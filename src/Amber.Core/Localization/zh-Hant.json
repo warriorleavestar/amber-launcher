@@ -1239,5 +1239,15 @@
   "core.auth.external.insecure_saved": "外置帳號 {0} 的伺服器位址是 http，密碼和權杖會明文傳輸，已不能用來啟動。請到帳號頁刪除它，再用 https 位址重新新增。",
   "core.mp.noise.staticrequired": "XXpsk3 握手必須提供本機長期金鑰，其他握手不能提供",
   "core.mp.identity.corrupt": "連線身分檔案損壞或無法解開（可能換了系統使用者），已換成新的身分。之前認得你的房主會把你當成新成員。",
-  "core.mp.identity.otherplatform": "連線身分檔案是在別的系統上加密的，這裡無法解開"
+  "core.mp.identity.otherplatform": "連線身分檔案是在別的系統上加密的，這裡無法解開",
+  "core.mp.knock.badreply": "對方的回覆格式不對",
+  "core.mp.knock.toolarge": "敲門訊息太長",
+  "core.mp.knock.hostmismatch": "房主傳來的身分和握手時證明的不一致，已停止加入",
+  "core.mp.knock.failed": "敲門失敗：{0}",
+  "core.mp.knock.paused": "失敗的敲門太多，大廳暫停 60 秒",
+  "core.mp.knock.unknown": "不認識的邀請",
+  "core.mp.knock.timeout": "握手逾時",
+  "core.mp.knock.approved": "已批准 {0}（{1}）",
+  "core.mp.knock.rejected": "未讓 {0}（{1}）進入",
+  "core.mp.diagnostics.redactedinvite": "JAY2-<邀請碼已隱藏>"
 }
