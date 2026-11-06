@@ -1249,5 +1249,9 @@
   "core.mp.knock.timeout": "握手逾時",
   "core.mp.knock.approved": "已批准 {0}（{1}）",
   "core.mp.knock.rejected": "未讓 {0}（{1}）進入",
-  "core.mp.diagnostics.redactedinvite": "JAY2-<邀請碼已隱藏>"
+  "core.mp.diagnostics.redactedinvite": "JAY2-<邀請碼已隱藏>",
+  "core.mp.lobby.opened": "大廳已開啟，等待持邀請碼的人敲門",
+  "core.mp.lobby.closed": "沒有可用的邀請了，大廳已關閉",
+  "core.mp.lobby.failed": "大廳開不起來：{0}",
+  "core.mp.lobby.nohost": "進了大廳，但 60 秒內沒找到房主。邀請可能已過期，或者房主已經關掉了房間"
 }

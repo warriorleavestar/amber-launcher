@@ -1249,5 +1249,9 @@
   "core.mp.knock.timeout": "ハンドシェイクがタイムアウトしました",
   "core.mp.knock.approved": "{0}（{1}）を承認しました",
   "core.mp.knock.rejected": "{0}（{1}）の参加を許可しませんでした",
-  "core.mp.diagnostics.redactedinvite": "JAY2-<招待コード非表示>"
+  "core.mp.diagnostics.redactedinvite": "JAY2-<招待コード非表示>",
+  "core.mp.lobby.opened": "ロビーを開きました。招待コードを持つ人のノックを待っています",
+  "core.mp.lobby.closed": "使える招待がなくなったため、ロビーを閉じました",
+  "core.mp.lobby.failed": "ロビーを開けません：{0}",
+  "core.mp.lobby.nohost": "ロビーに入りましたが、60 秒以内にホストが見つかりませんでした。招待の期限切れか、ホストが部屋を閉じた可能性があります"
 }

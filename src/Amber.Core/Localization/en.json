@@ -1280,5 +1280,9 @@
   "core.mp.knock.timeout": "Handshake timed out",
   "core.mp.knock.approved": "Approved {0} ({1})",
   "core.mp.knock.rejected": "Did not let {0} ({1}) in",
-  "core.mp.diagnostics.redactedinvite": "JAY2-<invite hidden>"
+  "core.mp.diagnostics.redactedinvite": "JAY2-<invite hidden>",
+  "core.mp.lobby.opened": "Lobby open; waiting for people with an invite to knock",
+  "core.mp.lobby.closed": "No usable invites left; lobby closed",
+  "core.mp.lobby.failed": "Couldn't open the lobby: {0}",
+  "core.mp.lobby.nohost": "Joined the lobby but found no host within 60 s. The invite may have expired, or the host closed the room"
 }

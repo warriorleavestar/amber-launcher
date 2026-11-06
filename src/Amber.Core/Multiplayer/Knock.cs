@@ -364,6 +364,14 @@ public sealed class KnockServer : IAsyncDisposable
     public event Action<KnockRequest>? Admitted;
     /// <summary>失败太多，暂停一会儿。</summary>
     public event Action? Paused;
+    /// <summary>一次敲门结束了（不管结果）。</summary>
+    public event Action? SessionEnded;
+
+    /// <summary>正在进行的敲门（包括在等房主点批准的）。邀请用完后大厅要等它们结束再关。</summary>
+    public int Active
+    {
+        get { lock (_gate) return _active; }
+    }
 
     public int Port { get; }
 
@@ -409,6 +417,7 @@ public sealed class KnockServer : IAsyncDisposable
                 {
                     client.Dispose();
                     lock (_gate) _active--;
+                    SessionEnded?.Invoke();
                 }
             });
         }
