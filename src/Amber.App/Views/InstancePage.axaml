@@ -198,7 +198,7 @@
               <TextBlock Classes="hint" Text="{l:T instance.resourcepacks.empty}" TextWrapping="Wrap" TextAlignment="Center" />
               <Button Classes="primary" HorizontalAlignment="Center" Content="{l:T instance.browse_online}" Command="{Binding BrowseOnlineCommand}" CommandParameter="{x:Static core:ContentType.ResourcePack}" />
             </StackPanel>
-            <ListBox Grid.Row="1" ItemsSource="{Binding ResourcePacks}" Background="Transparent">
+            <ListBox Grid.Row="1" ItemsSource="{Binding ResourcePacks}" Background="Transparent" IsVisible="{Binding !!ResourcePacks.Count}">
               <ListBox.ItemTemplate>
                 <DataTemplate DataType="vm:PackFileItem">
                   <Grid ColumnDefinitions="*,80,Auto">
@@ -237,7 +237,7 @@
               <TextBlock Classes="hint" Text="{l:T instance.shaderpacks.empty}" TextWrapping="Wrap" TextAlignment="Center" />
               <Button Classes="primary" HorizontalAlignment="Center" Content="{l:T instance.browse_online}" Command="{Binding BrowseOnlineCommand}" CommandParameter="{x:Static core:ContentType.Shader}" />
             </StackPanel>
-            <ListBox Grid.Row="1" ItemsSource="{Binding ShaderPacks}" Background="Transparent">
+            <ListBox Grid.Row="1" ItemsSource="{Binding ShaderPacks}" Background="Transparent" IsVisible="{Binding !!ShaderPacks.Count}">
               <ListBox.ItemTemplate>
                 <DataTemplate DataType="vm:PackFileItem">
                   <Grid ColumnDefinitions="*,80,Auto">

@@ -389,10 +389,13 @@ public sealed class ContentViewModelTests
         vm.Activate();
         var missingPack = Path.Combine(Path.GetTempPath(), "amber-missing-pack-" + Guid.NewGuid().ToString("N") + ".zip");
 
+        Assert.True(vm.IsSearching);
         vm.ImportLocalPackAsync(missingPack).GetAwaiter().GetResult();
         var status = vm.StatusInfo;
         Assert.Equal("instance.worlds.import_failed", status?.Key);
         Assert.True(Assert.Single(modrinth.Tokens).IsCancellationRequested);
+        // 被导入取消的搜索不能留着“正在搜索”的转圈。
+        Assert.False(vm.IsSearching);
 
         if (fail) pending.SetException(new HttpRequestException("已取消的资源源请求随后失败"));
         else pending.SetResult(new SearchResult([], 0));

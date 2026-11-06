@@ -77,6 +77,24 @@ public sealed class GameContextTests : IDisposable
         Assert.Equal(["x"], notified);
     }
 
+    /// <summary>区分大小写的系统上，只差大小写的是另一个游戏目录。</summary>
+    [Fact]
+    public void DirectoryThatDiffersOnlyByCaseIsAnotherDirectoryOnLinux()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var upper = Path.Combine(Path.GetDirectoryName(_a)!, Path.GetFileName(_a).ToUpperInvariant());
+        Directory.CreateDirectory(upper);
+        try
+        {
+            var service = Service();
+            var ctx = service.Context;
+            service.Settings.GameDirectory = upper;
+            service.SaveAndReload();
+            Assert.False(service.IsCurrentDirectory(ctx));
+        }
+        finally { Directory.Delete(upper, true); }
+    }
+
     /// <summary>只换了下载源（目录没变）：还算同一个目录，装完照常设成当前实例、通知界面。</summary>
     [Fact]
     public void SameDirectoryReloadStillCounts()

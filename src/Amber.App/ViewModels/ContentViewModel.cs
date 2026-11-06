@@ -842,6 +842,8 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
         ManualDownloadUrl = null;
         // 快捷导入会先进入资源页，取消首次搜索，避免它迟到后覆盖导入状态。
         _searchCts?.Cancel();
+        // 被取消的搜索不会自己收起“正在搜索”：这里收起，不然转圈和慢速提示会一直留着。
+        if (IsSearching) SetSearchState(false);
         IsBusy = true;
         _workCts = new CancellationTokenSource();
         try
