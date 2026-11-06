@@ -28,6 +28,8 @@ public sealed class PackTargetTests
     [InlineData("Pack.jar")]
     [InlineData("natives/lwjgl.dll")]
     [InlineData("NATIVES/x/y.dll")]
+    [InlineData(".amber-ul/jay-bake.json")]
+    [InlineData(".AMBER-UL/state.json")]
     public void LauncherFilesAreSkipped(string relative) => Assert.Null(Isolated.Resolve(relative));
 
     [Theory]

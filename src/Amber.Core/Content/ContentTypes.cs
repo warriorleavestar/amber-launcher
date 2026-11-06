@@ -15,7 +15,11 @@ public sealed record ContentProject(
     string? Author,
     string? IconUrl,
     long Downloads,
-    string? PageUrl);
+    string? PageUrl)
+{
+    /// <summary>CurseForge 作者的第三方分发设置；未设置时保持 API 的默认行为。</summary>
+    public bool? AllowDistribution { get; init; }
+}
 
 public sealed record ContentDependency(ContentSource Source, string? ProjectId, string? FileId, DependencyKind Kind);
 
@@ -36,6 +40,10 @@ public sealed record ContentFile(
     IReadOnlyList<ContentDependency> Dependencies)
 {
     public bool IsRelease => Channel == "release";
+
+    /// <summary>API 没有提供下载地址时，只能在作者的项目页面手动下载。</summary>
+    public bool RequiresManualDownload => Source == ContentSource.CurseForge && string.IsNullOrWhiteSpace(Url);
+    public string? ManualDownloadPage { get; init; }
 }
 
 public static class ContentFileExtensions
@@ -67,3 +75,9 @@ public sealed record IdentifiedFile(string LocalPath, ContentFile File);
 public sealed record ModUpdate(string LocalPath, ContentFile Latest);
 
 public sealed class MissingApiKeyException() : InvalidOperationException(L.T("core.content.curseforge.missingapikey"));
+
+public sealed class ManualDownloadRequiredException(ContentFile file)
+    : InvalidOperationException(L.F("core.content.curseforge.manual_download", file.DisplayName, file.ManualDownloadPage ?? ""))
+{
+    public ContentFile File { get; } = file;
+}

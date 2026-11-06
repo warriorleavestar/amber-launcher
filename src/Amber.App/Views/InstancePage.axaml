@@ -3,27 +3,328 @@
              xmlns:l="using:Amber.App.Localization"
              xmlns:vm="using:Amber.App.ViewModels"
              xmlns:c="using:Amber.App.Views.Controls"
+             xmlns:core="using:Amber.Core.Content"
              x:Class="Amber.App.Views.InstancePage"
              x:DataType="vm:InstanceViewModel">
   <Grid RowDefinitions="Auto,Auto,*,Auto">
-    <TextBlock Classes="h1" Text="{l:T instance.title}" />
+    <Grid ColumnDefinitions="*,Auto">
+      <TextBlock Classes="h1" Text="{l:T instance.title}" />
+      <Button Grid.Column="1" Classes="ghost" Content="{l:T instance.new}" Command="{Binding NewInstanceCommand}" VerticalAlignment="Top" />
+    </Grid>
 
     <StackPanel Grid.Row="1" Spacing="6" Margin="0,0,0,8">
-      <Grid ColumnDefinitions="*,Auto">
-        <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedId}" HorizontalAlignment="Stretch" PlaceholderText="{l:T instance.version.empty}" />
-      </Grid>
-      <!-- 按钮放下一行、放不下自动折行（其他语言的按钮文字更长） -->
-      <WrapPanel ItemSpacing="6" LineSpacing="6">
+      <!-- 选择器占满一行；启动、打开文件夹、更多放下一行，放不下自动折行（853 宽、长译文时不挤压选择器）。 -->
+      <ComboBox ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedId}" HorizontalAlignment="Stretch" PlaceholderText="{l:T instance.version.empty}" />
+      <WrapPanel ItemSpacing="6" LineSpacing="6" IsVisible="{Binding HasInstance}">
+        <Button Classes="primary" Content="{l:T instance.launch}" Command="{Binding LaunchCommand}" />
         <Button Content="{l:T common.open_folder}" Command="{Binding OpenFolderCommand}" />
-        <Button Content="{l:T instance.files.complete}" Command="{Binding CompleteFilesCommand}" />
-        <Button Content="{l:T instance.export.script}" Click="ExportScript_Click" />
-        <Button Classes="danger" Content="{l:T instance.version.delete}" Command="{Binding DeleteVersionCommand}" />
+        <Button Content="{l:T instance.more}">
+          <Button.Flyout>
+            <MenuFlyout Placement="BottomEdgeAlignedLeft">
+              <MenuItem Header="{l:T instance.files.repair}" Command="{Binding CompleteFilesCommand}" />
+              <MenuItem Header="{l:T instance.export.script_menu}" Click="ExportScript_Click" />
+              <MenuItem Header="{l:T instance.export.pack_menu}" Click="ExportPackDialog_Click" />
+              <Separator />
+              <MenuItem Classes="danger" Header="{l:T instance.version.delete}" Command="{Binding DeleteVersionCommand}" />
+            </MenuFlyout>
+          </Button.Flyout>
+        </Button>
       </WrapPanel>
-      <TextBlock Classes="hint" FontSize="12" Text="{Binding InfoText}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding InfoText}" />
+      <TextBlock Classes="hint" FontSize="12" Text="{Binding InfoText}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding InfoText}" />
     </StackPanel>
 
     <Border Grid.Row="2" Classes="card" Padding="10" IsVisible="{Binding HasInstance}">
-      <TabControl SelectedIndex="{Binding TabIndex}" Padding="0,8,0,0">
+      <!-- 小窗口有状态提示时，页签和工具栏一起滚动；页签内容仍有有限高度，列表继续虚拟滚动。 -->
+      <ScrollViewer x:Name="InstanceTabsScroll" HorizontalScrollBarVisibility="Disabled">
+      <TabControl SelectedIndex="{Binding TabIndex}" Padding="0,8,0,0" Height="{Binding #InstanceTabsScroll.Viewport.Height}" MinHeight="320">
+        <TabItem Header="{l:T instance.mods.title}" FontSize="14">
+          <Grid RowDefinitions="Auto,Auto,*">
+            <!-- 汇总一行、按钮一行（按钮放不下时换行），英文、日文的长按钮不会把汇总挤没。 -->
+            <StackPanel Spacing="6" Margin="0,0,0,6">
+              <Border Classes="callout info" IsVisible="{Binding IsSharedDir}">
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Classes="ghost" Content="{l:T instance.shared.enable}" Command="{Binding GoToIsolationSettingCommand}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                  <TextBlock Text="{l:T instance.shared.notice}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </DockPanel>
+              </Border>
+              <TextBlock Classes="hint" Text="{Binding ModSummary}" TextWrapping="Wrap" />
+              <WrapPanel ItemSpacing="6" LineSpacing="6">
+                <Button Classes="primary" Content="{l:T instance.browse_online}" Command="{Binding BrowseOnlineCommand}" CommandParameter="{x:Static core:ContentType.Mod}" />
+                <Button Content="{l:T common.add_files}" Click="AddMods_Click" />
+                <Button Content="{l:T common.open_folder}" Command="{Binding OpenModsFolderCommand}" />
+                <Button Content="{l:T common.check_updates}" Command="{Binding CheckModUpdatesCommand}" />
+                <Button Content="{l:T common.update_all}" Command="{Binding UpdateAllModsCommand}" />
+                <Button Content="{l:T instance.bake.now}" Command="{Binding BakeNowCommand}" IsVisible="{Binding BakeEnabled}" ToolTip.Tip="{l:T instance.bake.now_hint}" />
+              </WrapPanel>
+            </StackPanel>
+            <StackPanel Grid.Row="1" Spacing="4" Margin="0,0,0,6" IsVisible="{Binding CompatSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+              <TextBlock Text="{Binding CompatSummary}" FontSize="12" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding NeedsConnector}">
+                <TextBlock Classes="hint" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"
+                           Text="{l:T instance.connector.hint}" />
+                <Button Content="{l:T instance.connector.install}" Command="{Binding InstallConnectorCommand}" />
+              </StackPanel>
+              <Border Classes="callout info" IsVisible="{Binding HasConnectorPending}">
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Content="{l:T instance.connector.prewarm}" Command="{Binding PrewarmConnectorCommand}" VerticalAlignment="Center" Margin="8,0,0,0"
+                          ToolTip.Tip="{l:T instance.connector.prewarm_hint}" />
+                  <TextBlock Text="{Binding ConnectorPendingText}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </DockPanel>
+              </Border>
+            </StackPanel>
+            <StackPanel Grid.Row="2" Spacing="8" IsVisible="{Binding !Mods.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460">
+              <TextBlock Classes="hint" Text="{l:T instance.mods.empty}" TextWrapping="Wrap" TextAlignment="Center" />
+              <Button Classes="primary" HorizontalAlignment="Center" Content="{l:T instance.browse_online}" Command="{Binding BrowseOnlineCommand}" CommandParameter="{x:Static core:ContentType.Mod}" />
+            </StackPanel>
+            <ListBox Grid.Row="2" ItemsSource="{Binding Mods}" Background="Transparent" IsVisible="{Binding !!Mods.Count}">
+              <ListBox.ItemTemplate>
+                <DataTemplate DataType="vm:ModItem">
+                  <Grid ColumnDefinitions="Auto,40,*,Auto" Margin="2">
+                    <CheckBox IsChecked="{Binding Enabled}" MinWidth="0" Margin="0,0,6,0" ToolTip.Tip="{l:T common.toggle_enabled}" />
+                    <Border Grid.Column="1" Width="40" Height="40" CornerRadius="5" Background="{DynamicResource PageBg}" ClipToBounds="True">
+                      <Image Source="{Binding Icon}" />
+                    </Border>
+                    <StackPanel Grid.Column="2" Margin="10,0">
+                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding Meta}" Classes="caption" ToolTip.Tip="{Binding Meta}" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding UpdateText}" IsVisible="{Binding HasUpdate}" FontSize="{StaticResource FontCaption}" Foreground="{DynamicResource AccentText}" ToolTip.Tip="{Binding UpdateText}" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding CompatText}" IsVisible="{Binding CompatText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" FontSize="{StaticResource FontCaption}" TextWrapping="Wrap"
+                                 Classes="compat" Classes.problem="{Binding HasCompatProblem}" />
+                    </StackPanel>
+                    <!-- 按钮最多占这么宽，多了就换行（窄窗口下名字那一列还有地方）。 -->
+                    <!-- 行内只固定一个主操作（有更新时“更新”），其余放进 ⋯ 菜单（改版规格 4.3）。 -->
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                      <Button Content="{l:T common.update}" IsVisible="{Binding HasUpdate}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).UpdateModCommand}" CommandParameter="{Binding}" />
+                      <Button Classes="ghost" Content="⋯" ToolTip.Tip="{l:T common.more_actions}" AutomationProperties.Name="{l:T common.more_actions}">
+                        <Button.Flyout>
+                          <MenuFlyout>
+                            <MenuItem Header="{l:T instance.mods.find_matching}" IsVisible="{Binding CanFindMatching}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).FindMatchingCommand}" CommandParameter="{Binding}"
+                                      ToolTip.Tip="{l:T instance.mods.find_matching_hint}" />
+                            <MenuItem Classes="danger" Header="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteModCommand}" CommandParameter="{Binding}" />
+                          </MenuFlyout>
+                        </Button.Flyout>
+                      </Button>
+                    </StackPanel>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </TabItem>
+
+        <TabItem Header="{l:T instance.worlds.title}" FontSize="14">
+          <DockPanel>
+            <Button DockPanel.Dock="Top" HorizontalAlignment="Left" Content="{l:T instance.worlds.import}" Click="ImportWorld_Click" Margin="0,0,0,6" />
+            <Border DockPanel.Dock="Bottom" IsVisible="{Binding HasDatapackWorld}" BorderBrush="{DynamicResource PageBg}" BorderThickness="0,1,0,0" Padding="0,8,0,0" Margin="0,6,0,0">
+              <!-- 标题、按钮、说明和列表一起滚动：DockPanel 只给它剩下的高度，小窗口、长译文时也不会超出窗口。 -->
+              <ScrollViewer MaxHeight="260">
+                  <StackPanel Spacing="6">
+                  <TextBlock Text="{Binding DatapackTitle}" FontWeight="SemiBold" ToolTip.Tip="{Binding DatapackTitle}" TextTrimming="CharacterEllipsis" />
+                  <WrapPanel ItemSpacing="6" LineSpacing="6">
+                    <Button Content="{l:T instance.datapacks.download}" Command="{Binding BrowseDatapacksCommand}" />
+                    <Button Content="{l:T common.add_files}" Click="AddDatapacks_Click" />
+                    <Button Content="{l:T common.open_folder}" Command="{Binding OpenDatapacksFolderCommand}" />
+                    <Button Content="{l:T common.collapse}" Command="{Binding CloseDatapacksCommand}" />
+                  </WrapPanel>
+                  <TextBlock Classes="hint" FontSize="12" Margin="0,4" TextWrapping="Wrap"
+                             Text="{l:T instance.datapacks.hint}" />
+                  <ItemsControl ItemsSource="{Binding Datapacks}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate DataType="vm:DatapackItem">
+                        <Grid ColumnDefinitions="Auto,*,Auto" Margin="2,3">
+                          <CheckBox IsChecked="{Binding Enabled}" MinWidth="0" Margin="0,0,6,0" ToolTip.Tip="{l:T common.toggle_enabled}" />
+                          <StackPanel Grid.Column="1">
+                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Meta}" Classes="caption" ToolTip.Tip="{Binding Meta}" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                          <Button Grid.Column="2" Classes="danger" Content="{l:T common.delete}" VerticalAlignment="Center"
+                                  Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).DeleteDatapackCommand}" CommandParameter="{Binding}" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  </StackPanel>
+              </ScrollViewer>
+            </Border>
+            <Panel>
+              <TextBlock Classes="hint" Text="{l:T instance.worlds.empty}" IsVisible="{Binding !Worlds.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              <ListBox ItemsSource="{Binding Worlds}" Background="Transparent">
+                <ListBox.ItemTemplate>
+                  <DataTemplate DataType="vm:WorldItem">
+                    <Grid ColumnDefinitions="*,Auto" Margin="2">
+                      <StackPanel>
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Meta}" Classes="caption" ToolTip.Tip="{Binding Meta}" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
+                      <!-- 主操作“进入”固定显示；删除世界保留两步确认按钮（待确认状态要一直看得见，放不进菜单），其余放进 ⋯ 菜单。 -->
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <Button Content="{l:T common.play}" IsVisible="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).SupportsQuickPlay}"
+                                Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).JoinWorldCommand}" CommandParameter="{Binding}" />
+                        <Button Classes="ghost" Content="⋯" ToolTip.Tip="{l:T common.more_actions}" AutomationProperties.Name="{l:T common.more_actions}">
+                          <Button.Flyout>
+                            <MenuFlyout>
+                              <MenuItem Header="{l:T instance.datapacks.title}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).ShowDatapacksCommand}" CommandParameter="{Binding}" />
+                              <MenuItem Header="{l:T common.backup}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).BackupWorldCommand}" CommandParameter="{Binding}" />
+                              <MenuItem Header="{l:T common.open}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).OpenWorldCommand}" CommandParameter="{Binding}" />
+                            </MenuFlyout>
+                          </Button.Flyout>
+                        </Button>
+                        <c:ConfirmButton Content="{l:T common.delete}" ObjectName="{Binding Name}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteWorldCommand}" CommandParameter="{Binding}" />
+                      </StackPanel>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </Panel>
+          </DockPanel>
+        </TabItem>
+
+        <TabItem Header="{l:T instance.resourcepacks.title}" FontSize="14">
+          <Grid RowDefinitions="Auto,*">
+            <StackPanel Spacing="6" Margin="0,0,0,6">
+              <Border Classes="callout info" IsVisible="{Binding IsSharedDir}">
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Classes="ghost" Content="{l:T instance.shared.enable}" Command="{Binding GoToIsolationSettingCommand}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                  <TextBlock Text="{l:T instance.shared.notice}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </DockPanel>
+              </Border>
+              <WrapPanel ItemSpacing="6" LineSpacing="6">
+                <Button Classes="primary" Content="{l:T instance.browse_online}" Command="{Binding BrowseOnlineCommand}" CommandParameter="{x:Static core:ContentType.ResourcePack}" />
+                <Button Content="{l:T common.add_files}" Click="AddResourcePacks_Click" />
+                <Button Content="{l:T common.open_folder}" Command="{Binding OpenResourcePacksFolderCommand}" />
+              </WrapPanel>
+            </StackPanel>
+            <StackPanel Grid.Row="1" Spacing="8" IsVisible="{Binding !ResourcePacks.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460">
+              <TextBlock Classes="hint" Text="{l:T instance.resourcepacks.empty}" TextWrapping="Wrap" TextAlignment="Center" />
+              <Button Classes="primary" HorizontalAlignment="Center" Content="{l:T instance.browse_online}" Command="{Binding BrowseOnlineCommand}" CommandParameter="{x:Static core:ContentType.ResourcePack}" />
+            </StackPanel>
+            <ListBox Grid.Row="1" ItemsSource="{Binding ResourcePacks}" Background="Transparent" IsVisible="{Binding !!ResourcePacks.Count}">
+              <ListBox.ItemTemplate>
+                <DataTemplate DataType="vm:PackFileItem">
+                  <Grid ColumnDefinitions="*,80,Auto">
+                    <c:MiddleEllipsisTextBlock FullText="{Binding Name}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="{Binding Size}" Classes="hint" VerticalAlignment="Center" />
+                    <Button Grid.Column="2" Classes="ghost" Content="⋯" ToolTip.Tip="{l:T common.more_actions}" AutomationProperties.Name="{l:T common.more_actions}">
+                      <Button.Flyout>
+                        <MenuFlyout>
+                          <MenuItem Classes="danger" Header="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
+                        </MenuFlyout>
+                      </Button.Flyout>
+                    </Button>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </TabItem>
+
+        <TabItem Header="{l:T instance.shaderpacks.title}" FontSize="14">
+          <Grid RowDefinitions="Auto,*">
+            <StackPanel Spacing="6" Margin="0,0,0,6">
+              <Border Classes="callout info" IsVisible="{Binding IsSharedDir}">
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Classes="ghost" Content="{l:T instance.shared.enable}" Command="{Binding GoToIsolationSettingCommand}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                  <TextBlock Text="{l:T instance.shared.notice}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </DockPanel>
+              </Border>
+              <WrapPanel ItemSpacing="6" LineSpacing="6">
+                <Button Classes="primary" Content="{l:T instance.browse_online}" Command="{Binding BrowseOnlineCommand}" CommandParameter="{x:Static core:ContentType.Shader}" />
+                <Button Content="{l:T common.add_files}" Click="AddShaderPacks_Click" />
+                <Button Content="{l:T common.open_folder}" Command="{Binding OpenShaderPacksFolderCommand}" />
+              </WrapPanel>
+            </StackPanel>
+            <StackPanel Grid.Row="1" Spacing="8" IsVisible="{Binding !ShaderPacks.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460">
+              <TextBlock Classes="hint" Text="{l:T instance.shaderpacks.empty}" TextWrapping="Wrap" TextAlignment="Center" />
+              <Button Classes="primary" HorizontalAlignment="Center" Content="{l:T instance.browse_online}" Command="{Binding BrowseOnlineCommand}" CommandParameter="{x:Static core:ContentType.Shader}" />
+            </StackPanel>
+            <ListBox Grid.Row="1" ItemsSource="{Binding ShaderPacks}" Background="Transparent" IsVisible="{Binding !!ShaderPacks.Count}">
+              <ListBox.ItemTemplate>
+                <DataTemplate DataType="vm:PackFileItem">
+                  <Grid ColumnDefinitions="*,80,Auto">
+                    <c:MiddleEllipsisTextBlock FullText="{Binding Name}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="{Binding Size}" Classes="hint" VerticalAlignment="Center" />
+                    <Button Grid.Column="2" Classes="ghost" Content="⋯" ToolTip.Tip="{l:T common.more_actions}" AutomationProperties.Name="{l:T common.more_actions}">
+                      <Button.Flyout>
+                        <MenuFlyout>
+                          <MenuItem Classes="danger" Header="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
+                        </MenuFlyout>
+                      </Button.Flyout>
+                    </Button>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </TabItem>
+
+        <TabItem Header="{l:T instance.servers.title}" FontSize="14">
+          <Grid RowDefinitions="Auto,*">
+            <Grid ColumnDefinitions="160,*,Auto,Auto" Margin="0,0,0,6">
+              <TextBox Text="{Binding NewServerName}" PlaceholderText="{l:T common.name}" />
+              <TextBox Grid.Column="1" Text="{Binding NewServerAddress}" PlaceholderText="{l:T instance.servers.address_hint}" Margin="6,0" />
+              <Button Grid.Column="2" Content="{l:T common.add}" Command="{Binding AddServerCommand}" />
+              <Button Grid.Column="3" Content="{l:T common.refresh}" Command="{Binding RefreshServersCommand}" Margin="6,0,0,0" />
+            </Grid>
+            <TextBlock Grid.Row="1" Classes="hint" Text="{l:T instance.servers.empty}" IsVisible="{Binding !Servers.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <ListBox Grid.Row="1" ItemsSource="{Binding Servers}" Background="Transparent">
+              <ListBox.ItemTemplate>
+                <DataTemplate DataType="vm:ServerItem">
+                  <Grid ColumnDefinitions="*,Auto" Margin="2">
+                    <StackPanel>
+                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Classes="caption" Text="{Binding Address}" ToolTip.Tip="{Binding Address}" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Classes="caption" Text="{Binding StatusText}" ToolTip.Tip="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                      <Button Content="{l:T common.connect}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).JoinServerNowCommand}" CommandParameter="{Binding}" />
+                      <Button Classes="ghost" Content="⋯" ToolTip.Tip="{l:T common.more_actions}" AutomationProperties.Name="{l:T common.more_actions}">
+                        <Button.Flyout>
+                          <MenuFlyout>
+                            <MenuItem Classes="danger" Header="{l:T common.remove}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).RemoveServerCommand}" CommandParameter="{Binding}" />
+                          </MenuFlyout>
+                        </Button.Flyout>
+                      </Button>
+                    </StackPanel>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </TabItem>
+
+        <TabItem Header="{l:T instance.screenshots.title}" FontSize="14">
+          <Grid RowDefinitions="Auto,*">
+            <Button Content="{l:T common.open_folder}" Command="{Binding OpenScreenshotsFolderCommand}" Margin="0,0,0,6" />
+            <ScrollViewer Grid.Row="1">
+              <ItemsControl ItemsSource="{Binding Screenshots}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="vm:ScreenshotItem">
+                    <StackPanel Width="180" Margin="0,0,10,10">
+                      <Button Padding="0" Background="Transparent" Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).OpenScreenshotCommand}" CommandParameter="{Binding}">
+                        <Image Source="{Binding Thumbnail}" Height="102" Stretch="UniformToFill" />
+                      </Button>
+                      <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0">
+                        <TextBlock Text="{Binding Name}" Classes="caption" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                        <Button Grid.Column="1" Classes="ghost" Content="⋯" ToolTip.Tip="{l:T common.more_actions}" AutomationProperties.Name="{l:T common.more_actions}" MinHeight="28">
+                          <Button.Flyout>
+                            <MenuFlyout>
+                              <MenuItem Header="{l:T common.open}" Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).OpenScreenshotCommand}" CommandParameter="{Binding}" />
+                              <MenuItem Classes="danger" Header="{l:T common.delete}" Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).DeleteScreenshotCommand}" CommandParameter="{Binding}" />
+                            </MenuFlyout>
+                          </Button.Flyout>
+                        </Button>
+                      </Grid>
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Grid>
+        </TabItem>
+
         <TabItem Header="{l:T instance.settings.title}" FontSize="14">
           <ScrollViewer>
             <Grid Classes="form" ColumnSpacing="12" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,0,14,0">
@@ -76,260 +377,8 @@
             </Grid>
           </ScrollViewer>
         </TabItem>
-
-        <TabItem Header="{l:T instance.mods.title}" FontSize="14">
-          <Grid RowDefinitions="Auto,Auto,*">
-            <!-- 汇总一行、按钮一行（按钮放不下时换行），英文、日文的长按钮不会把汇总挤没。 -->
-            <StackPanel Spacing="6" Margin="0,0,0,6">
-              <Border Classes="callout info" IsVisible="{Binding IsSharedDir}">
-                <DockPanel>
-                  <Button DockPanel.Dock="Right" Classes="ghost" Content="{l:T instance.shared.enable}" Command="{Binding GoToIsolationSettingCommand}" VerticalAlignment="Center" Margin="8,0,0,0" />
-                  <TextBlock Text="{l:T instance.shared.notice}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                </DockPanel>
-              </Border>
-              <TextBlock Classes="hint" Text="{Binding ModSummary}" TextWrapping="Wrap" />
-              <WrapPanel ItemSpacing="6" LineSpacing="6">
-                <Button Content="{l:T common.add_files}" Click="AddMods_Click" />
-                <Button Content="{l:T common.open_folder}" Command="{Binding OpenModsFolderCommand}" />
-                <Button Content="{l:T common.check_updates}" Command="{Binding CheckModUpdatesCommand}" />
-                <Button Content="{l:T common.update_all}" Command="{Binding UpdateAllModsCommand}" />
-              </WrapPanel>
-            </StackPanel>
-            <StackPanel Grid.Row="1" Spacing="4" Margin="0,0,0,6" IsVisible="{Binding CompatSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-              <TextBlock Text="{Binding CompatSummary}" FontSize="12" TextWrapping="Wrap" />
-              <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding NeedsConnector}">
-                <TextBlock Classes="hint" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"
-                           Text="{l:T instance.connector.hint}" />
-                <Button Content="{l:T instance.connector.install}" Command="{Binding InstallConnectorCommand}" />
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasConnectorPending}">
-                <TextBlock Classes="hint" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="560" Text="{Binding ConnectorPendingText}" />
-                <Button Content="{l:T instance.connector.prewarm}" Command="{Binding PrewarmConnectorCommand}"
-                        ToolTip.Tip="{l:T instance.connector.prewarm_hint}" />
-              </StackPanel>
-            </StackPanel>
-            <TextBlock Grid.Row="2" Classes="hint" Text="{l:T instance.mods.empty}" IsVisible="{Binding !Mods.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-            <ListBox Grid.Row="2" ItemsSource="{Binding Mods}" Background="Transparent">
-              <ListBox.ItemTemplate>
-                <DataTemplate DataType="vm:ModItem">
-                  <Grid ColumnDefinitions="Auto,40,*,Auto" Margin="2">
-                    <CheckBox IsChecked="{Binding Enabled}" MinWidth="0" Margin="0,0,6,0" ToolTip.Tip="{l:T common.toggle_enabled}" />
-                    <Border Grid.Column="1" Width="40" Height="40" CornerRadius="5" Background="{DynamicResource PageBg}" ClipToBounds="True">
-                      <Image Source="{Binding Icon}" />
-                    </Border>
-                    <StackPanel Grid.Column="2" Margin="10,0">
-                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                      <TextBlock Text="{Binding Meta}" Classes="caption" ToolTip.Tip="{Binding Meta}" TextTrimming="CharacterEllipsis" />
-                      <TextBlock Text="{Binding UpdateText}" IsVisible="{Binding HasUpdate}" FontSize="{StaticResource FontCaption}" Foreground="{DynamicResource AccentText}" ToolTip.Tip="{Binding UpdateText}" TextTrimming="CharacterEllipsis" />
-                      <TextBlock Text="{Binding CompatText}" IsVisible="{Binding CompatText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" FontSize="{StaticResource FontCaption}" TextWrapping="Wrap"
-                                 Classes="compat" Classes.problem="{Binding HasCompatProblem}" />
-                    </StackPanel>
-                    <!-- 按钮最多占这么宽，多了就换行（窄窗口下名字那一列还有地方）。 -->
-                    <WrapPanel Grid.Column="3" ItemSpacing="6" LineSpacing="4" VerticalAlignment="Center" MaxWidth="240">
-                      <Button Content="{l:T common.update}" IsVisible="{Binding HasUpdate}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).UpdateModCommand}" CommandParameter="{Binding}" />
-                      <Button Content="{l:T instance.mods.find_matching}" IsVisible="{Binding CanFindMatching}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).FindMatchingCommand}" CommandParameter="{Binding}"
-                              ToolTip.Tip="{l:T instance.mods.find_matching_hint}" />
-                      <Button Classes="danger" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteModCommand}" CommandParameter="{Binding}" />
-                    </WrapPanel>
-                  </Grid>
-                </DataTemplate>
-              </ListBox.ItemTemplate>
-            </ListBox>
-          </Grid>
-        </TabItem>
-
-        <TabItem Header="{l:T instance.worlds.title}" FontSize="14">
-          <DockPanel>
-            <Button DockPanel.Dock="Top" HorizontalAlignment="Left" Content="{l:T instance.worlds.import}" Click="ImportWorld_Click" Margin="0,0,0,6" />
-            <Border DockPanel.Dock="Bottom" IsVisible="{Binding HasDatapackWorld}" BorderBrush="{DynamicResource PageBg}" BorderThickness="0,1,0,0" Padding="0,8,0,0" Margin="0,6,0,0">
-              <!-- 标题、按钮、说明和列表一起滚动：DockPanel 只给它剩下的高度，小窗口、长译文时也不会超出窗口。 -->
-              <ScrollViewer MaxHeight="260">
-                  <StackPanel Spacing="6">
-                  <TextBlock Text="{Binding DatapackTitle}" FontWeight="SemiBold" ToolTip.Tip="{Binding DatapackTitle}" TextTrimming="CharacterEllipsis" />
-                  <WrapPanel ItemSpacing="6" LineSpacing="6">
-                    <Button Content="{l:T instance.datapacks.download}" Command="{Binding BrowseDatapacksCommand}" />
-                    <Button Content="{l:T common.add_files}" Click="AddDatapacks_Click" />
-                    <Button Content="{l:T common.open_folder}" Command="{Binding OpenDatapacksFolderCommand}" />
-                    <Button Content="{l:T common.collapse}" Command="{Binding CloseDatapacksCommand}" />
-                  </WrapPanel>
-                  <TextBlock Classes="hint" FontSize="12" Margin="0,4" TextWrapping="Wrap"
-                             Text="{l:T instance.datapacks.hint}" />
-                  <ItemsControl ItemsSource="{Binding Datapacks}">
-                    <ItemsControl.ItemTemplate>
-                      <DataTemplate DataType="vm:DatapackItem">
-                        <Grid ColumnDefinitions="Auto,*,Auto" Margin="2,3">
-                          <CheckBox IsChecked="{Binding Enabled}" MinWidth="0" Margin="0,0,6,0" ToolTip.Tip="{l:T common.toggle_enabled}" />
-                          <StackPanel Grid.Column="1">
-                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Text="{Binding Meta}" Classes="caption" ToolTip.Tip="{Binding Meta}" TextTrimming="CharacterEllipsis" />
-                          </StackPanel>
-                          <Button Grid.Column="2" Classes="danger" Content="{l:T common.delete}" VerticalAlignment="Center"
-                                  Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).DeleteDatapackCommand}" CommandParameter="{Binding}" />
-                        </Grid>
-                      </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                  </ItemsControl>
-                  </StackPanel>
-              </ScrollViewer>
-            </Border>
-            <Panel>
-              <TextBlock Classes="hint" Text="{l:T instance.worlds.empty}" IsVisible="{Binding !Worlds.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-              <ListBox ItemsSource="{Binding Worlds}" Background="Transparent">
-                <ListBox.ItemTemplate>
-                  <DataTemplate DataType="vm:WorldItem">
-                    <Grid ColumnDefinitions="*,Auto" Margin="2">
-                      <StackPanel>
-                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Text="{Binding Meta}" Classes="caption" ToolTip.Tip="{Binding Meta}" TextTrimming="CharacterEllipsis" />
-                      </StackPanel>
-                      <WrapPanel Grid.Column="1" ItemSpacing="6" LineSpacing="4" VerticalAlignment="Center" MaxWidth="300">
-                        <Button Content="{l:T common.play}" IsVisible="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).SupportsQuickPlay}"
-                                Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).JoinWorldCommand}" CommandParameter="{Binding}" />
-                        <Button Content="{l:T instance.datapacks.title}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).ShowDatapacksCommand}" CommandParameter="{Binding}" />
-                        <Button Content="{l:T common.backup}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).BackupWorldCommand}" CommandParameter="{Binding}" />
-                        <Button Content="{l:T common.open}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).OpenWorldCommand}" CommandParameter="{Binding}" />
-                        <c:ConfirmButton Content="{l:T common.delete}" ObjectName="{Binding Name}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeleteWorldCommand}" CommandParameter="{Binding}" />
-                      </WrapPanel>
-                    </Grid>
-                  </DataTemplate>
-                </ListBox.ItemTemplate>
-              </ListBox>
-            </Panel>
-          </DockPanel>
-        </TabItem>
-
-        <TabItem Header="{l:T instance.screenshots.title}" FontSize="14">
-          <Grid RowDefinitions="Auto,*">
-            <Button Content="{l:T common.open_folder}" Command="{Binding OpenScreenshotsFolderCommand}" Margin="0,0,0,6" />
-            <ScrollViewer Grid.Row="1">
-              <ItemsControl ItemsSource="{Binding Screenshots}">
-                <ItemsControl.ItemsPanel>
-                  <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate DataType="vm:ScreenshotItem">
-                    <StackPanel Width="180" Margin="0,0,10,10">
-                      <Button Padding="0" Background="Transparent" Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).OpenScreenshotCommand}" CommandParameter="{Binding}">
-                        <Image Source="{Binding Thumbnail}" Height="102" Stretch="UniformToFill" />
-                      </Button>
-                      <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0">
-                        <TextBlock Text="{Binding Name}" Classes="caption" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                        <Button Grid.Column="1" Classes="danger" Content="{l:T common.delete}" Padding="6,1" FontSize="{StaticResource FontCaption}" Command="{Binding $parent[ItemsControl].((vm:InstanceViewModel)DataContext).DeleteScreenshotCommand}" CommandParameter="{Binding}" />
-                      </Grid>
-                    </StackPanel>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-            </ScrollViewer>
-          </Grid>
-        </TabItem>
-
-        <TabItem Header="{l:T instance.resourcepacks.title}" FontSize="14">
-          <Grid RowDefinitions="Auto,*">
-            <StackPanel Spacing="6" Margin="0,0,0,6">
-              <Border Classes="callout info" IsVisible="{Binding IsSharedDir}">
-                <DockPanel>
-                  <Button DockPanel.Dock="Right" Classes="ghost" Content="{l:T instance.shared.enable}" Command="{Binding GoToIsolationSettingCommand}" VerticalAlignment="Center" Margin="8,0,0,0" />
-                  <TextBlock Text="{l:T instance.shared.notice}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                </DockPanel>
-              </Border>
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Button Content="{l:T common.add_files}" Click="AddResourcePacks_Click" />
-                <Button Content="{l:T common.open_folder}" Command="{Binding OpenResourcePacksFolderCommand}" />
-              </StackPanel>
-            </StackPanel>
-            <ListBox Grid.Row="1" ItemsSource="{Binding ResourcePacks}" Background="Transparent">
-              <ListBox.ItemTemplate>
-                <DataTemplate DataType="vm:PackFileItem">
-                  <Grid ColumnDefinitions="*,80,Auto">
-                    <c:MiddleEllipsisTextBlock FullText="{Binding Name}" VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="1" Text="{Binding Size}" Classes="hint" VerticalAlignment="Center" />
-                    <Button Grid.Column="2" Classes="danger" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
-                  </Grid>
-                </DataTemplate>
-              </ListBox.ItemTemplate>
-            </ListBox>
-          </Grid>
-        </TabItem>
-
-        <TabItem Header="{l:T instance.shaderpacks.title}" FontSize="14">
-          <Grid RowDefinitions="Auto,*">
-            <StackPanel Spacing="6" Margin="0,0,0,6">
-              <Border Classes="callout info" IsVisible="{Binding IsSharedDir}">
-                <DockPanel>
-                  <Button DockPanel.Dock="Right" Classes="ghost" Content="{l:T instance.shared.enable}" Command="{Binding GoToIsolationSettingCommand}" VerticalAlignment="Center" Margin="8,0,0,0" />
-                  <TextBlock Text="{l:T instance.shared.notice}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                </DockPanel>
-              </Border>
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Button Content="{l:T common.add_files}" Click="AddShaderPacks_Click" />
-                <Button Content="{l:T common.open_folder}" Command="{Binding OpenShaderPacksFolderCommand}" />
-              </StackPanel>
-            </StackPanel>
-            <ListBox Grid.Row="1" ItemsSource="{Binding ShaderPacks}" Background="Transparent">
-              <ListBox.ItemTemplate>
-                <DataTemplate DataType="vm:PackFileItem">
-                  <Grid ColumnDefinitions="*,80,Auto">
-                    <c:MiddleEllipsisTextBlock FullText="{Binding Name}" VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="1" Text="{Binding Size}" Classes="hint" VerticalAlignment="Center" />
-                    <Button Grid.Column="2" Classes="danger" Content="{l:T common.delete}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).DeletePackCommand}" CommandParameter="{Binding}" />
-                  </Grid>
-                </DataTemplate>
-              </ListBox.ItemTemplate>
-            </ListBox>
-          </Grid>
-        </TabItem>
-
-        <TabItem Header="{l:T instance.servers.title}" FontSize="14">
-          <Grid RowDefinitions="Auto,*">
-            <Grid ColumnDefinitions="160,*,Auto,Auto" Margin="0,0,0,6">
-              <TextBox Text="{Binding NewServerName}" PlaceholderText="{l:T common.name}" />
-              <TextBox Grid.Column="1" Text="{Binding NewServerAddress}" PlaceholderText="{l:T instance.servers.address_hint}" Margin="6,0" />
-              <Button Grid.Column="2" Content="{l:T common.add}" Command="{Binding AddServerCommand}" />
-              <Button Grid.Column="3" Content="{l:T common.refresh}" Command="{Binding RefreshServersCommand}" Margin="6,0,0,0" />
-            </Grid>
-            <TextBlock Grid.Row="1" Classes="hint" Text="{l:T instance.servers.empty}" IsVisible="{Binding !Servers.Count}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-            <ListBox Grid.Row="1" ItemsSource="{Binding Servers}" Background="Transparent">
-              <ListBox.ItemTemplate>
-                <DataTemplate DataType="vm:ServerItem">
-                  <Grid ColumnDefinitions="*,Auto" Margin="2">
-                    <StackPanel>
-                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" ToolTip.Tip="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                      <TextBlock Classes="caption" Text="{Binding Address}" ToolTip.Tip="{Binding Address}" TextTrimming="CharacterEllipsis" />
-                      <TextBlock Classes="caption" Text="{Binding StatusText}" ToolTip.Tip="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                      <Button Content="{l:T common.connect}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).JoinServerNowCommand}" CommandParameter="{Binding}" />
-                      <Button Content="{l:T common.remove}" Command="{Binding $parent[ListBox].((vm:InstanceViewModel)DataContext).RemoveServerCommand}" CommandParameter="{Binding}" />
-                    </StackPanel>
-                  </Grid>
-                </DataTemplate>
-              </ListBox.ItemTemplate>
-            </ListBox>
-          </Grid>
-        </TabItem>
-
-        <TabItem Header="{l:T instance.export.title}" FontSize="14">
-          <ScrollViewer>
-            <StackPanel Spacing="8" Margin="0,0,14,0">
-              <TextBlock Text="{l:T instance.export.pack_heading}" FontWeight="SemiBold" />
-              <ComboBox ItemsSource="{Binding ExportFormats}" SelectedIndex="{Binding ExportFormatIndex}" MinWidth="220" />
-              <TextBox Text="{Binding ExportName}" PlaceholderText="{l:T instance.export.name_hint}" />
-              <TextBox Text="{Binding ExportVersion}" PlaceholderText="{l:T instance.export.version_hint}" />
-              <TextBlock Text="{l:T instance.export.include}" FontWeight="SemiBold" Margin="0,6,0,0" />
-              <ItemsControl ItemsSource="{Binding ExportOptions}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate DataType="vm:ExportOption">
-                    <CheckBox Content="{Binding Name}" IsChecked="{Binding Include}" />
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-              <TextBlock Classes="hint" Text="{l:T instance.export.hint}" />
-              <Button Classes="primary" Content="{l:T instance.export.save}" Click="ExportPack_Click" />
-            </StackPanel>
-          </ScrollViewer>
-        </TabItem>
       </TabControl>
+      </ScrollViewer>
     </Border>
 
     <Border Grid.Row="3" Classes="card" Margin="0">
@@ -342,6 +391,7 @@
       <Grid ColumnDefinitions="*,Auto">
         <StackPanel Spacing="6" VerticalAlignment="Center">
           <c:StatusBar x:Name="PageStatus" Message="{Binding StatusInfo}" />
+          <Button Content="{l:T content.curseforge.open_manual}" Command="{Binding OpenManualDownloadCommand}" IsVisible="{Binding HasManualDownload}" />
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
         </StackPanel>
         <Button Grid.Column="1" Content="{l:T common.cancel}" Command="{Binding CancelWorkCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />

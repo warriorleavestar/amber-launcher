@@ -180,11 +180,20 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         var missing = ids.Count - files.Count;
 
         var folders = await curseForge.GetProjectFoldersAsync(files.Select(f => long.Parse(f.ProjectId)).Distinct().ToList(), ct);
-        var items = files.Select(f => ContentInstaller.ToItem(f, Path.Combine(workDir, folders.GetValueOrDefault(f.ProjectId, "mods")))).ToList();
+        var targets = files.Select(f => (File: f, TargetDir: Path.Combine(workDir, folders.GetValueOrDefault(f.ProjectId, "mods")))).ToList();
+        var overrides = manifest["overrides"]?.GetValue<string>() ?? "overrides";
+        var overridePrefix = root + overrides.TrimEnd('/') + "/";
+        // 包里可能已经附带受限文件：只提前释放这些目标，让同一套 SHA-1 / 大小预检决定能否复用。
+        // 普通文件仍在下载后由 overrides 覆盖；沿用独占实例目录和原有的路径检查、失败回滚。
+        var manualPaths = targets.Where(t => t.File.RequiresManualDownload)
+            .Select(t => Path.GetRelativePath(workDir, Path.Combine(t.TargetDir, ContentInstaller.SafeFileName(t.File.FileName))).Replace('\\', '/'))
+            .ToHashSet(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        if (manualPaths.Count > 0)
+            ExtractPrefix(zip, overridePrefix, pack with { OnSkip = null }, skipWhere: relative => !manualPaths.Contains(relative));
+        var items = await ContentInstaller.PrepareDownloadItemsAsync(targets, ct);
         await ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.content.modpack.downloadprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
-        var overrides = manifest["overrides"]?.GetValue<string>() ?? "overrides";
-        ExtractPrefix(zip, root + overrides.TrimEnd('/') + "/", pack);
+        ExtractPrefix(zip, overridePrefix, pack);
         if (missing > 0) throw new InvalidDataException(L.P("core.content.modpack.missingcursefiles", missing, missing));
     }
 
@@ -326,7 +335,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         if (!Directory.Exists(workDir)) return [];
         string[] skip = ["logs", "crash-reports", "natives", "saves", "screenshots", "versions", ".fabric", ".mixin.out", "downloads", ".cache", "debug", "backups", "local", InstanceSettings.FileName,
             // Amber 自己的回收目录、下载校验缓存和“安装未完成”标记不属于整合包。
-            TrashService.TrashFolder, ".amber-hashes", Amber.Core.Game.GameDirectory.IncompleteMarker];
+            TrashService.TrashFolder, ".amber-hashes", Amber.Core.Game.GameDirectory.IncompleteMarker,
+            // 烘焙记录（实验）里是本机的绝对路径和 classpath。
+            Bake.BakeService.StateFolder];
         var result = new List<string>();
         foreach (var path in Directory.EnumerateFileSystemEntries(workDir))
         {
@@ -432,6 +443,8 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
             var workDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(WorkDir));
             var inWorkDir = Path.GetRelativePath(workDir, full).Split(Path.DirectorySeparatorChar);
             if (inWorkDir.Any(s => s.Equals(Launch.InstanceSettings.FileName, StringComparison.OrdinalIgnoreCase))) return true;
+            // 烘焙记录（实验）决定启动用的主类、classpath 和 JVM 参数，只能由本机烘焙生成。
+            if (inWorkDir[0].Equals(Bake.BakeService.StateFolder, StringComparison.OrdinalIgnoreCase)) return true;
             var versionDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(VersionDir));
             if (!full.StartsWith(versionDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
             var first = Path.GetRelativePath(versionDir, full).Split(Path.DirectorySeparatorChar)[0].Normalize(System.Text.NormalizationForm.FormC);
@@ -489,7 +502,9 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         var normalized = relative.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
         var full = Path.GetFullPath(Path.Combine(rootFull, normalized));
         var prefix = rootFull.EndsWith(Path.DirectorySeparatorChar) ? rootFull : rootFull + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        // 区分大小写的文件系统上（Linux），“../INST/x” 会落到和 root 只差大小写的另一个目录：只在 Windows 上忽略大小写。
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!full.StartsWith(prefix, comparison))
             throw new InvalidDataException(L.F("core.content.modpack.unsafepath", relative));
         return full;
     }

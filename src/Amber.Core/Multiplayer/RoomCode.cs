@@ -16,30 +16,43 @@ public sealed record RoomCode(string Network, string Secret, int Port)
     public const int NetworkLength = 8;
     public const int SecretLength = 12;
 
+    /// <summary>
+    /// 邀请加入的房间：网络名（jay- + 16 位十六进制）和 256 位密钥都是房主随机生成、批准后在加密通道里发来的，直接就是 EasyTier 用的值，
+    /// 游戏、聊天、封装的密钥也从这个密钥派生。这种房间没有可以分享的码，ToString 不含任何值。
+    /// </summary>
+    public bool FromInvite { get; private init; }
+
+    /// <summary>按房主发来（或自己生成）的凭据建房间对象。</summary>
+    public static RoomCode FromCredentials(string network, string secret, int port, Transport.TunnelSettings tunnel)
+    {
+        if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
+        return new RoomCode(network, secret, port) { Tunnel = tunnel, FromInvite = true };
+    }
+
     /// <summary>EasyTier 的网络名。加前缀避免和别人在公共节点上手动起的网络撞名。</summary>
-    public string NetworkName => "amber-" + Network.ToLowerInvariant();
+    public string NetworkName => FromInvite ? Network : "amber-" + Network.ToLowerInvariant();
 
     /// <summary>
     /// 给 EasyTier 用的网络名和密钥。封装模式的房间用按模式派生的另一套（HKDF），
     /// 这样房间码末尾的模式被删掉或改掉的人连 EasyTier 网络都进不来，碰不到房主没封装的端口。通用模式和以前一样。
     /// </summary>
-    public string EasyTierNetworkName => Tunnel.Wraps
+    public string EasyTierNetworkName => FromInvite ? Network : Tunnel.Wraps
         ? "amber-" + Convert.ToHexStringLower(HKDF.DeriveKey(HashAlgorithmName.SHA256, Encoding.UTF8.GetBytes(Secret), 8, Encoding.UTF8.GetBytes(NetworkName),
             Encoding.UTF8.GetBytes($"amber-et-name-v1|{(int)Tunnel.Mode}|{(Tunnel.Disguise ? 1 : 0)}")))
         : NetworkName;
 
-    public string EasyTierSecret => Tunnel.Wraps
+    public string EasyTierSecret => FromInvite ? Secret : Tunnel.Wraps
         ? Convert.ToHexStringLower(HKDF.DeriveKey(HashAlgorithmName.SHA256, Encoding.UTF8.GetBytes(Secret), 32, Encoding.UTF8.GetBytes(NetworkName),
             Encoding.UTF8.GetBytes($"amber-et-v1|{(int)Tunnel.Mode}|{(Tunnel.Disguise ? 1 : 0)}")))
         : Secret;
 
     /// <summary>要在日志里遮掉的密钥（房间密钥和派生出来的 EasyTier 密钥）。</summary>
-    public IReadOnlyList<string> Secrets => Tunnel.Wraps ? [Secret, EasyTierSecret] : [Secret];
+    public IReadOnlyList<string> Secrets => FromInvite ? [Secret, Network] : Tunnel.Wraps ? [Secret, EasyTierSecret] : [Secret];
 
     /// <summary>联机和聊天的封装方式，房间里所有人一样。</summary>
     public Transport.TunnelSettings Tunnel { get; init; } = Transport.TunnelSettings.Default;
 
-    public override string ToString() =>
+    public override string ToString() => FromInvite ? "JAY-ROOM" :
         Tunnel.Wraps ? $"AMB-T{(int)Tunnel.Mode}{(Tunnel.Disguise ? "D" : "")}-{Network}-{Secret}-{Port}" : $"AMB-{Network}-{Secret}-{Port}";
 
     public static RoomCode Create(int port)

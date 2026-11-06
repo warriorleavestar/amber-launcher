@@ -249,10 +249,10 @@ public sealed class ChatHub : IAsyncDisposable
     internal Func<DateTimeOffset> Clock { get; init; } = () => DateTimeOffset.UtcNow;
 
     /// <summary>测试用：给接受的连接设发送缓冲区大小，模拟网络慢。</summary>
-internal int? SendBufferForTest { get; init; }
+    internal int? SendBufferForTest { get; init; }
 
-/// <summary>测试用：在指定成员的写入前等待，稳定模拟发送阻塞，不依赖系统 TCP 缓冲区。</summary>
-internal Func<string?, CancellationToken, Task>? BeforeSendForTest { get; init; }
+    /// <summary>测试用：在指定成员的写入前等待，稳定模拟发送阻塞，不依赖系统 TCP 缓冲区。</summary>
+    internal Func<string?, CancellationToken, Task>? BeforeSendForTest { get; init; }
 
     private readonly ChatCipher _cipher;
     private readonly List<TcpListener> _listeners = [];

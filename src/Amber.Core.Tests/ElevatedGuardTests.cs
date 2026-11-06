@@ -1,6 +1,10 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Security.Principal;
+using System.Text;
 using Amber.Core.Multiplayer;
 
 namespace Amber.Core.Tests;
@@ -100,16 +104,65 @@ public class ElevatedGuardTests
     public async Task ImpostorClientGetsNothing()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var guard = ElevatedGuard.Start(Core, FakeCoreArgs("impostor"), Env, elevate: false);
-        using var impostor = new NamedPipeClientStream(".", $"amber-et-{guard.PipeId}-cmd", PipeDirection.In);
+        // 先把冒充者连到已创建的管道，再启动真守护进程，避免靠 PowerShell 启动速度抢连接。
+        // 反射只用于安排夹具：管道 ACL、PID 认证和守护脚本仍直接使用生产实现。
+        var id = Guid.NewGuid().ToString("N");
+        var createPipe = typeof(ElevatedGuard).GetMethod("CreatePipe", BindingFlags.Static | BindingFlags.NonPublic)!;
+        NamedPipeServerStream Pipe(string kind, PipeDirection direction) =>
+            (NamedPipeServerStream)createPipe.Invoke(null, [$"amber-et-{id}-{kind}", direction])!;
+        using var cmd = Pipe("cmd", PipeDirection.Out);
+        using var output = Pipe("out", PipeDirection.In);
+        using var error = Pipe("err", PipeDirection.In);
+        using var ack = Pipe("ack", PipeDirection.In);
+        using var impostor = new NamedPipeClientStream(".", $"amber-et-{id}-cmd", PipeDirection.In);
         await impostor.ConnectAsync(5000);
-        var buffer = new byte[4096];
-        var read = await impostor.ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal(0, read);
-        Assert.True(await WaitAsync(() => CorePid(guard, "impostor") is not null), string.Join(" | ", guard.RecentOutput));
-        Assert.False(guard.HasExited);
-        guard.Dispose();
-        Assert.True(guard.WaitForExit(TimeSpan.FromSeconds(20)));
+
+        using var identity = WindowsIdentity.GetCurrent();
+        var script = ElevatedGuard.GuardScript
+            .Replace("__ID__", id)
+            .Replace("__AMBERPID__", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            .Replace("__SID__", identity.User!.Value)
+            .Replace("__TIMEOUT__", ElevatedGuard.GuardConnectSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            .Replace("__SETUPHASH__", Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(ElevatedGuard.SetupScript))))
+            .Replace("__CORE64__", Convert.ToBase64String(Encoding.Unicode.GetBytes(Core)));
+        var commandLine = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand "
+            + Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+        Process? process = null;
+        ElevatedGuard? guard = null;
+        try
+        {
+            process = Process.Start(new ProcessStartInfo(Core, commandLine)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+            })!;
+            guard = (ElevatedGuard)Activator.CreateInstance(typeof(ElevatedGuard), BindingFlags.Instance | BindingFlags.NonPublic,
+                null, [process, commandLine, new[] { cmd, output, error, ack }, ElevatedGuard.ConnectTimeout], null)!;
+            guard.Start(FakeCoreArgs("impostor"), Env);
+
+            var buffer = new byte[4096];
+            var read = await impostor.ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(0, read);
+            Assert.False(guard.ConnectFailed);
+            Assert.True(await WaitAsync(() => CorePid(guard, "impostor") is not null), string.Join(" | ", guard.RecentOutput));
+            Assert.False(guard.HasExited);
+            guard.Dispose();
+            Assert.True(guard.WaitForExit(TimeSpan.FromSeconds(20)));
+        }
+        finally
+        {
+            guard?.Dispose();
+            if (process is not null)
+            {
+                if (!process.WaitForExit(20_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+                process.Dispose();
+            }
+        }
     }
 
     /// <summary>管道不是 Amber 建的（服务端进程号不对）：守护脚本什么都不读就退出，不启动 easytier-core。</summary>

@@ -17,15 +17,29 @@ public sealed class LauncherService : IDisposable
     public HttpClient Http => _http;
     public AppSettings Settings { get; }
     public AccountService Accounts { get; }
-    public GameDirectory Directory { get; private set; } = null!;
-    public Downloader Downloader { get; private set; } = null!;
-    public VanillaInstaller Installer { get; private set; } = null!;
-    public JavaManager Java { get; private set; } = null!;
-    public LoaderContext Loaders { get; private set; } = null!;
+    /// <summary>
+    /// 当前的游戏目录和建在它上面的下载器、安装器。换目录、换下载源时整个换成新的一份（Reload）。
+    /// 跨 await 的操作（安装、启动、补全文件）在开始时取一份，全程用它，中途换了目录也不会一半装到旧目录、一半装到新目录。
+    /// </summary>
+    public GameContext Context { get; private set; } = null!;
+
+    public GameDirectory Directory => Context.Directory;
+    public Downloader Downloader => Context.Downloader;
+    public VanillaInstaller Installer => Context.Installer;
+    public JavaManager Java => Context.Java;
+    public LoaderContext Loaders => Context.Loaders;
     public ModrinthProvider Modrinth { get; private set; } = null!;
     public CurseForgeProvider CurseForge { get; private set; } = null!;
-    public ContentInstaller ContentInstaller { get; private set; } = null!;
-    public ModpackService Modpacks { get; private set; } = null!;
+    public ContentInstaller ContentInstaller => Context.ContentInstaller;
+    public ModpackService Modpacks => Context.Modpacks;
+
+    /// <summary>ctx 的游戏目录还是当前的游戏目录（期间只换了下载源之类的也算）。</summary>
+    public bool IsCurrentDirectory(GameContext ctx) =>
+        ReferenceEquals(ctx, Context)
+        || string.Equals(Path.GetFullPath(ctx.Directory.Root).TrimEnd(Path.DirectorySeparatorChar),
+            Path.GetFullPath(Directory.Root).TrimEnd(Path.DirectorySeparatorChar),
+            // Linux 区分大小写：/games/Pack 和 /games/pack 是两个目录。
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     /// <summary>已安装版本列表变化（安装完成、切换目录）时触发。</summary>
     public event Action? InstalledVersionsChanged;
@@ -62,30 +76,31 @@ public sealed class LauncherService : IDisposable
 
     public void Reload()
     {
-        Directory = new GameDirectory(Settings.GameDirectory);
+        var directory = new GameDirectory(Settings.GameDirectory);
         var sources = Settings.DownloadSource switch
         {
             "official" => SourceChain.OfficialFirst,
             "mirror" => SourceChain.MirrorFirst,
             _ => SourceChain.Default(),
         };
-        Downloader = new Downloader(_http, sources)
+        var downloader = new Downloader(_http, sources)
         {
             MaxConcurrency = Math.Clamp(Settings.DownloadConcurrency, 1, 128),
             Hashes = new HashCache(Path.Combine(Settings.GameDirectory, ".amber-hashes")),
         };
-        Installer = new VanillaInstaller(Downloader, Directory);
-        Java = new JavaManager(Downloader, Directory) { AutoDownload = Settings.AutoJavaDownload };
-        Loaders = new LoaderContext(Downloader, Directory, Installer, Java.ForMajorAsync);
+        var installer = new VanillaInstaller(downloader, directory);
+        var java = new JavaManager(downloader, directory) { AutoDownload = Settings.AutoJavaDownload };
+        var loaders = new LoaderContext(downloader, directory, installer, java.ForMajorAsync);
         Modrinth = new ModrinthProvider(_http);
         CurseForge = new CurseForgeProvider(_http, CurseForgeKey,
             string.IsNullOrWhiteSpace(Settings.CurseForgeApiRoot) ? CurseForgeProvider.DefaultApiRoot : Settings.CurseForgeApiRoot.Trim().TrimEnd('/'));
-        ContentInstaller = new ContentInstaller(Downloader, new Dictionary<ContentSource, IContentProvider>
+        var contentInstaller = new ContentInstaller(downloader, new Dictionary<ContentSource, IContentProvider>
         {
             [ContentSource.Modrinth] = Modrinth,
             [ContentSource.CurseForge] = CurseForge,
         });
-        Modpacks = new ModpackService(Loaders, Modrinth, CurseForge);
+        // 一次换成新的一份：读的人要么拿到全旧的，要么拿到全新的。
+        Context = new GameContext(directory, downloader, installer, java, loaders, contentInstaller, new ModpackService(loaders, Modrinth, CurseForge));
         NotifyInstalledChanged();
     }
 
@@ -147,32 +162,42 @@ public sealed class LauncherService : IDisposable
     public void NotifyInstanceStateChanged(string id) => InstanceStateChanged?.Invoke(id);
 
     /// <summary>放“安装未完成”标记并通知界面。</summary>
-    public void MarkInstallStarted(string id)
+    public void MarkInstallStarted(string id) => MarkInstallStarted(Context, id);
+
+    /// <summary>在 ctx 的游戏目录里放“安装未完成”标记；ctx 还是当前目录时才通知界面。</summary>
+    public void MarkInstallStarted(GameContext ctx, string id)
     {
-        try { Directory.MarkInstallStarted(id); }
-        finally { NotifyInstanceStateChanged(id); }
+        try { ctx.Directory.MarkInstallStarted(id); }
+        finally { if (IsCurrentDirectory(ctx)) NotifyInstanceStateChanged(id); }
     }
 
     /// <summary>去掉“安装未完成”标记并通知界面。</summary>
-    public void MarkInstallFinished(string id)
+    public void MarkInstallFinished(string id) => MarkInstallFinished(Context, id);
+
+    /// <summary>在 ctx 的游戏目录里去掉“安装未完成”标记；ctx 还是当前目录时才通知界面。</summary>
+    public void MarkInstallFinished(GameContext ctx, string id)
     {
-        try { Directory.MarkInstallFinished(id); }
-        finally { NotifyInstanceStateChanged(id); }
+        try { ctx.Directory.MarkInstallFinished(id); }
+        finally { if (IsCurrentDirectory(ctx)) NotifyInstanceStateChanged(id); }
     }
 
     /// <summary>
     /// 界面安装加载器：Forge 系先保留新目录，再放“安装未完成”标记；已有实例被拒绝时不改它的状态。
     /// 成功后由界面在全部准备完成时清除标记；失败时安装器只回滚本次拥有的目录。
     /// </summary>
-    public Task<string> InstallLoaderAsync(LoaderVersion version, string? customId = null, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default)
+    public Task<string> InstallLoaderAsync(LoaderVersion version, string? customId = null, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default) =>
+        InstallLoaderAsync(Context, version, customId, progress, ct);
+
+    /// <summary>在 ctx 的游戏目录里安装加载器：装到一半换了游戏目录，也全程用开始时的目录和安装器。</summary>
+    public Task<string> InstallLoaderAsync(GameContext ctx, LoaderVersion version, string? customId = null, IProgress<LoaderProgress>? progress = null, CancellationToken ct = default)
     {
         void Started(string id)
         {
-            try { MarkInstallStarted(id); }
+            try { MarkInstallStarted(ctx, id); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
 
-        var installer = LoaderInstallers.Create(version.Kind, Loaders);
+        var installer = LoaderInstallers.Create(version.Kind, ctx.Loaders);
         if (installer is ForgeLikeInstaller forge)
             return forge.InstallAsync(version, customId, progress, ct, Started);
 
@@ -209,17 +234,23 @@ public sealed class LauncherService : IDisposable
     }
 
     /// <summary>版本设置叠加全局设置后的结果。版本没设隔离时，先看 PCL / HMCL 给这个版本记的隔离设置，再用全局值。</summary>
-    public InstanceSettings EffectiveSettings(string id)
+    public InstanceSettings EffectiveSettings(string id) => EffectiveSettings(Context, id);
+
+    public InstanceSettings EffectiveSettings(GameContext ctx, string id)
     {
-        var own = InstanceSettings.Load(Directory, id);
-        own.Isolate ??= OtherLauncherSettings.Isolation(Directory, id);
+        var own = InstanceSettings.Load(ctx.Directory, id);
+        own.Isolate ??= OtherLauncherSettings.Isolation(ctx.Directory, id);
         return own.Over(Settings.ToGlobalInstanceSettings());
     }
 
-    public string WorkDirFor(string id) => UsesSharedDir(id) ? Directory.Root : Directory.VersionDir(id);
+    public string WorkDirFor(string id) => WorkDirFor(Context, id);
+
+    public string WorkDirFor(GameContext ctx, string id) => UsesSharedDir(ctx, id) ? ctx.Directory.Root : ctx.Directory.VersionDir(id);
 
     /// <summary>没开“按实例分开文件夹”：模组、资源包、存档都在游戏目录下，所有实例共用。</summary>
-    public bool UsesSharedDir(string id) => EffectiveSettings(id).Isolate != true;
+    public bool UsesSharedDir(string id) => UsesSharedDir(Context, id);
+
+    public bool UsesSharedDir(GameContext ctx, string id) => EffectiveSettings(ctx, id).Isolate != true;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _runningDirs = new(StringComparer.OrdinalIgnoreCase);
 
@@ -244,9 +275,40 @@ public sealed class LauncherService : IDisposable
 
     /// <summary>按这个版本的有效设置（版本设置盖在全局设置上）生成启动参数。</summary>
     public LaunchOptions BaseLaunchOptions(string id, string javaPath, GameSession session, IReadOnlyList<string> sessionJvmArgs) =>
-        EffectiveSettings(id).ToLaunchOptions(Directory, id, javaPath, session, sessionJvmArgs) with { NoTrace = Settings.NoTrace };
+        BaseLaunchOptions(Context, id, javaPath, session, sessionJvmArgs);
 
-    public GameInstance GetInstance(string id) => GameInstance.Detect(Directory, id, WorkDirFor(id));
+    public LaunchOptions BaseLaunchOptions(GameContext ctx, string id, string javaPath, GameSession session, IReadOnlyList<string> sessionJvmArgs) =>
+        EffectiveSettings(ctx, id).ToLaunchOptions(ctx.Directory, id, javaPath, session, sessionJvmArgs) with { NoTrace = Settings.NoTrace };
+
+    public GameInstance GetInstance(string id) => GetInstance(Context, id);
+
+    public GameInstance GetInstance(GameContext ctx, string id) => GameInstance.Detect(ctx.Directory, id, WorkDirFor(ctx, id));
+
+    /// <summary>实验功能“烘焙”：开了并且找到了加载器原型时返回服务，否则 null。缓存放在数据目录，所有实例共用。</summary>
+    public Amber.Core.Bake.BakeService? Bake =>
+        Settings.ExperimentalBake && Amber.Core.Bake.BakeToolkit.Find(Settings.BakeLoaderPath) is { } toolkit
+            ? new Amber.Core.Bake.BakeService(toolkit, Path.Combine(AppSettings.DataDir, "bake-cache"))
+            : null;
+
+    /// <summary>
+    /// 启动前的烘焙：实例支持时，输入没变就直接用上次的结果，变了就先烘焙模组和实例。
+    /// 返回 null 表示这次按普通方式启动（没开、不支持）；reason 是给日志看的原因。
+    /// </summary>
+    public Task<(Amber.Core.Bake.BakedLaunch? Launch, string Reason)> PrepareBakeAsync(string id, string javaPath, IProgress<Amber.Core.Bake.BakeEvent>? progress, CancellationToken ct)
+        => PrepareBakeAsync(Context, id, javaPath, progress, ct);
+
+    /// <summary>烘焙与本次启动共用固定的游戏目录；中途切换目录不会混用另一个同名实例。</summary>
+    public async Task<(Amber.Core.Bake.BakedLaunch? Launch, string Reason)> PrepareBakeAsync(GameContext ctx, string id, string javaPath, IProgress<Amber.Core.Bake.BakeEvent>? progress, CancellationToken ct)
+    {
+        if (Bake is not { } bake) return (null, Settings.ExperimentalBake ? Amber.Core.Localization.L.T("core.bake.loader_missing") : "");
+        var instance = GetInstance(ctx, id);
+        var (_, _, supported) = await bake.VersionAsync(javaPath, ct);
+        if (!Amber.Core.Bake.BakeService.Supports(instance, supported, out var reason)) return (null, reason);
+        var major = ctx.Directory.ResolveVersion(id).JavaVersion?.MajorVersion ?? 21;
+        if (bake.Current(ctx.Directory, instance, major) is { } current) return (current, Amber.Core.Localization.L.T("core.bake.reused"));
+        await bake.BakeModsAsync(javaPath, ctx.Directory, instance, progress, ct);
+        return (await bake.BakeInstanceAsync(javaPath, major, ctx.Directory, instance, progress, ct), Amber.Core.Localization.L.T("core.bake.done"));
+    }
 
     /// <summary>整合包的文件都在版本目录里，这个版本必须固定开启隔离。</summary>
     public void ForceIsolated(string id)
@@ -269,4 +331,19 @@ public sealed class LauncherService : IDisposable
     }
 }
 
-public sealed record LaunchRequest(string VersionId, string? JoinServer = null, string? JoinWorld = null);
+/// <summary>启动请求。SkipBake：这一次不烘焙（烘焙后游戏没进主界面就崩了，玩家点了“不烘焙再启动”）。</summary>
+public sealed record LaunchRequest(string VersionId, string? JoinServer = null, string? JoinWorld = null, bool SkipBake = false)
+{
+    // 只供本机烘焙重试使用；排队或等待多开确认期间切换目录后，原请求不能落到同名实例。
+    internal GameContext? ExpectedContext { get; init; }
+}
+
+/// <summary>一个游戏目录，以及建在它上面的下载器、安装器、Java、加载器和资源安装（一起创建，之后不变）。</summary>
+public sealed record GameContext(
+    GameDirectory Directory,
+    Downloader Downloader,
+    VanillaInstaller Installer,
+    JavaManager Java,
+    LoaderContext Loaders,
+    ContentInstaller ContentInstaller,
+    ModpackService Modpacks);

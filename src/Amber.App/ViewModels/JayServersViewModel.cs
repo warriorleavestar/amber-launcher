@@ -28,6 +28,7 @@ public sealed partial class JayServersViewModel : ObservableObject
     private readonly LauncherService _service;
     private readonly Func<string?> _instance;
     private readonly Action? _navigateHome;
+    private readonly Func<MemberIdentity> _loadIdentity;
     private readonly JayServerList _list = new(AppSettings.DataDir);
     private MemberIdentity? _identity;
     private TunnelClient? _tunnel;
@@ -39,8 +40,10 @@ public sealed partial class JayServersViewModel : ObservableObject
     [ObservableProperty] public partial bool IsBusy { get; set; }
     [ObservableProperty] public partial string DeviceCode { get; set; } = "";
 
-    public JayServersViewModel(LauncherService service, Func<string?> instance, Action? navigateHome)
+    /// <param name="identity">本机联机身份：和房间邀请共用同一个对象（重置身份时两边一起换）。</param>
+    public JayServersViewModel(LauncherService service, Func<string?> instance, Action? navigateHome, Func<MemberIdentity> identity)
     {
+        _loadIdentity = identity;
         _service = service;
         _instance = instance;
         _navigateHome = navigateHome;
@@ -57,7 +60,7 @@ public sealed partial class JayServersViewModel : ObservableObject
     {
         if (_identity is null)
         {
-            _identity = MemberIdentity.LoadOrCreate(AppSettings.DataDir);
+            _identity = _loadIdentity();
             DeviceCode = L.F("multiplayer.jayserver.device_code", _identity.Fingerprint);
             if (_identity.Warning is { } warning) Status = warning;
         }

@@ -30,26 +30,44 @@ public sealed class NoiseXxTests
         ("457567656e2042f6686d20766f6e2042617765726b", "7d4e2c3873eef6a213b04e72f9df60a91666072d3544c5d96c34a09e2329b5030bee796741"),
     ];
 
+    // Noise_XXpsk0：cacophony 和 snow 里都没有官方向量。这一组用 python noiseprotocol 生成（先确认它能逐字节重现上面官方的 XXpsk3 向量），
+    // 密钥、prologue、psk、payload 都和上面那组相同。
+    private const string HandshakeHashPsk0 = "0793e6b2d2fed61d803e0d9de8a4b961436e896194246a784d30d1bb1fd42e54";
+    private static readonly string[] CiphertextsPsk0 =
+    [
+        "ca35def5ae56cec33dc2036731ab14896bc4c75dbb07a61f879f8e3afa4c794444e557af4bb1c735a4948bdd9aedbb4b3db9a8aed79bc6517b05eca117a755c3",
+        "95ebc60d2b1fa672c1f46a8aa265ef51bfe38e7ccb39ec5be34069f14480884309813c929a2ee793a6909502f23492a90b088e4acc71ae6ca49464e67d97fdf404b94bc46aad47491994c66e9a8832f1701cdc1f47fc2ba565695638f005ca2e7b9a569a4c241a57879a0779d8bdbd",
+        "591674f2df5cc5e0a9b3ddea86bafb1219b36345c12aa4bd0526a9f727fe2e2a14efe7e0a7b7710d042006afd97e7cf58a3efe9041dba7cf07099b7c2345135e8d51254f6f742730eb7755",
+        "65bc9bce988c8c9becae660cd4fdd43f1c0dfaa40a2ac2322a09ae",
+        "4cc7db3b57b01e80a8f684fa6eb8d043ae32f38aa598cf8bbe474aa9ffc4dfce9b",
+        "2ebc31fbd26efafc391423fd69aa09159c5c15d9327ebae0e4afaffac55baa42fd9b742f91",
+    ];
+
     [Fact]
-    public void MatchesCacophonyVector()
+    public void MatchesCacophonyVector() => RunVector(NoisePattern.XXpsk3, HandshakeHash, [.. Messages.Select(m => m.Ciphertext)]);
+
+    [Fact]
+    public void MatchesXxPsk0Vector() => RunVector(NoisePattern.XXpsk0, HandshakeHashPsk0, CiphertextsPsk0);
+
+    private static void RunVector(NoisePattern pattern, string handshakeHash, string[] ciphertexts)
     {
         using var initStatic = X25519KeyPair.FromPrivateKey(H(InitStatic));
         using var respStatic = X25519KeyPair.FromPrivateKey(H(RespStatic));
-        using var init = new NoiseHandshake(NoisePattern.XXpsk3, true, Prologue, Psk, initStatic) { FixedEphemeral = X25519KeyPair.FromPrivateKey(H(InitEphemeral)) };
-        using var resp = new NoiseHandshake(NoisePattern.XXpsk3, false, Prologue, Psk, respStatic) { FixedEphemeral = X25519KeyPair.FromPrivateKey(H(RespEphemeral)) };
+        using var init = new NoiseHandshake(pattern, true, Prologue, Psk, initStatic) { FixedEphemeral = X25519KeyPair.FromPrivateKey(H(InitEphemeral)) };
+        using var resp = new NoiseHandshake(pattern, false, Prologue, Psk, respStatic) { FixedEphemeral = X25519KeyPair.FromPrivateKey(H(RespEphemeral)) };
 
         // 握手：-> e   <- e, ee, s, es   -> s, se, psk，每条都带 payload。
         for (var i = 0; i < 3; i++)
         {
             var (writer, reader) = i % 2 == 0 ? (init, resp) : (resp, init);
             var message = writer.WriteMessage(H(Messages[i].Payload));
-            Assert.Equal(Messages[i].Ciphertext, Convert.ToHexStringLower(message));
+            Assert.Equal(ciphertexts[i], Convert.ToHexStringLower(message));
             Assert.Equal(Messages[i].Payload, Convert.ToHexStringLower(reader.ReadMessage(message)));
         }
         Assert.True(init.IsComplete);
         Assert.True(resp.IsComplete);
-        Assert.Equal(HandshakeHash, Convert.ToHexStringLower(init.HandshakeHash));
-        Assert.Equal(HandshakeHash, Convert.ToHexStringLower(resp.HandshakeHash));
+        Assert.Equal(handshakeHash, Convert.ToHexStringLower(init.HandshakeHash));
+        Assert.Equal(handshakeHash, Convert.ToHexStringLower(resp.HandshakeHash));
         // 双方都拿到了对方的长期公钥。
         Assert.Equal(respStatic.PublicKey, init.RemoteStaticPublicKey);
         Assert.Equal(initStatic.PublicKey, resp.RemoteStaticPublicKey);
@@ -63,14 +81,49 @@ public sealed class NoiseXxTests
             {
                 var (send, recv) = i % 2 == 0 ? (iSend, rRecv) : (rSend, iRecv);
                 var c = send.EncryptWithAd([], H(Messages[i].Payload));
-                Assert.Equal(Messages[i].Ciphertext, Convert.ToHexStringLower(c));
+                Assert.Equal(ciphertexts[i], Convert.ToHexStringLower(c));
                 Assert.Equal(Messages[i].Payload, Convert.ToHexStringLower(recv.DecryptWithAd([], c)));
             }
         }
     }
 
-    private static (NoiseHandshake Init, NoiseHandshake Resp) Pair(X25519KeyPair a, X25519KeyPair b, byte[]? respPsk = null) =>
-        (new NoiseHandshake(NoisePattern.XXpsk3, true, Prologue, Psk, a), new NoiseHandshake(NoisePattern.XXpsk3, false, Prologue, respPsk ?? Psk, b));
+    private static (NoiseHandshake Init, NoiseHandshake Resp) Pair(X25519KeyPair a, X25519KeyPair b, byte[]? respPsk = null, NoisePattern pattern = NoisePattern.XXpsk3) =>
+        (new NoiseHandshake(pattern, true, Prologue, Psk, a), new NoiseHandshake(pattern, false, Prologue, respPsk ?? Psk, b));
+
+    /// <summary>XXpsk0：psk 不对时响应方读第一条消息就失败，什么都没回；响应方也拿不到发起方的长期公钥。</summary>
+    [Fact]
+    public void XxPsk0WrongPskFailsAtFirstMessage()
+    {
+        using var a = X25519KeyPair.Generate();
+        using var b = X25519KeyPair.Generate();
+        var other = (byte[])Psk.Clone();
+        other[^1] ^= 0x80;
+        var (init, resp) = Pair(a, b, other, NoisePattern.XXpsk0);
+        using (init) using (resp)
+        {
+            Assert.ThrowsAny<CryptographicException>(() => resp.ReadMessage(init.WriteMessage([])));
+            Assert.Null(resp.RemoteStaticPublicKey);
+            Assert.False(resp.IsComplete);
+        }
+    }
+
+    [Fact]
+    public void XxPsk0RandomKeysComplete()
+    {
+        using var a = X25519KeyPair.Generate();
+        using var b = X25519KeyPair.Generate();
+        var (init, resp) = Pair(a, b, pattern: NoisePattern.XXpsk0);
+        using (init) using (resp)
+        {
+            resp.ReadMessage(init.WriteMessage([]));
+            init.ReadMessage(resp.WriteMessage("{}"u8));
+            resp.ReadMessage(init.WriteMessage("hi"u8));
+            Assert.True(init.IsComplete && resp.IsComplete);
+            Assert.Equal(init.HandshakeHash, resp.HandshakeHash);
+            Assert.Equal(b.PublicKey, init.RemoteStaticPublicKey);
+            Assert.Equal(a.PublicKey, resp.RemoteStaticPublicKey);
+        }
+    }
 
     /// <summary>随机密钥也能走完，双方的握手哈希一致。</summary>
     [Fact]
@@ -119,9 +172,14 @@ public sealed class NoiseXxTests
     [InlineData(2, 60)]
     public void TamperedMessageFails(int index, int position)
     {
+        foreach (var pattern in new[] { NoisePattern.XXpsk3, NoisePattern.XXpsk0 }) TamperedMessageFailsFor(pattern, index, position);
+    }
+
+    private static void TamperedMessageFailsFor(NoisePattern pattern, int index, int position)
+    {
         using var a = X25519KeyPair.Generate();
         using var b = X25519KeyPair.Generate();
-        var (init, resp) = Pair(a, b);
+        var (init, resp) = Pair(a, b, pattern: pattern);
         using (init) using (resp)
         {
             for (var i = 0; i <= index; i++)
@@ -208,6 +266,7 @@ public sealed class NoiseXxTests
     {
         using var a = X25519KeyPair.Generate();
         Assert.Throws<ArgumentException>(() => new NoiseHandshake(NoisePattern.XXpsk3, true, Prologue, Psk));
+        Assert.Throws<ArgumentException>(() => new NoiseHandshake(NoisePattern.XXpsk0, true, Prologue, Psk));
         Assert.Throws<ArgumentException>(() => new NoiseHandshake(NoisePattern.NNpsk0, true, Prologue, Psk, a));
     }
 
