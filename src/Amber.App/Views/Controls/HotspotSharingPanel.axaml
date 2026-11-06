@@ -1,0 +1,26 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:l="using:Amber.App.Localization"
+             xmlns:vm="using:Amber.App.ViewModels"
+             x:Class="Amber.App.Views.Controls.HotspotSharingPanel"
+             x:DataType="vm:HotspotSharingViewModel">
+  <Border Classes="card" Margin="0">
+    <StackPanel Spacing="8">
+      <TextBlock Classes="h2" Text="{l:T multiplayer.hotspot.title}" Margin="0" TextWrapping="Wrap" />
+      <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" MaxWidth="720" HorizontalAlignment="Left"
+                 Text="{l:T multiplayer.hotspot.description}" />
+      <TextBlock FontSize="12" TextWrapping="Wrap" MaxWidth="720" HorizontalAlignment="Left"
+                 Text="{l:T multiplayer.hotspot.steps}" />
+      <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="{Binding PrerequisiteText}" />
+      <WrapPanel ItemSpacing="8" LineSpacing="6">
+        <Button Content="{l:T multiplayer.hotspot.settings}" Command="{Binding OpenSettingsCommand}" />
+        <Button Classes="primary" Content="{l:T multiplayer.hotspot.start}" Command="{Binding StartCommand}" IsVisible="{Binding !IsSharing}" />
+        <Button Content="{l:T multiplayer.hotspot.stop}" Command="{Binding StopCommand}" IsVisible="{Binding IsSharing}" />
+      </WrapPanel>
+      <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsBusy}" Height="4" />
+      <TextBlock Text="{Binding StatusText}" IsVisible="{Binding HasStatus}" TextWrapping="Wrap" MaxWidth="720" HorizontalAlignment="Left" />
+      <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" MaxWidth="720" HorizontalAlignment="Left"
+                 Text="{l:T multiplayer.hotspot.recovery}" />
+    </StackPanel>
+  </Border>
+</UserControl>

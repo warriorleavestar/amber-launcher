@@ -329,6 +329,7 @@ public sealed partial class MultiplayerViewModel
             }
             _session = direct.EasyTier;
             OnPropertyChanged(nameof(CanUseExit));
+            SyncHotspotSharing();
             if (direct.GuestIsLegacy && !_legacyGuestWarned)
             {
                 _legacyGuestWarned = true;
@@ -339,6 +340,7 @@ public sealed partial class MultiplayerViewModel
         _timer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => _ = RefreshPeersAsync());
         _timer.Start();
         OnPropertyChanged(nameof(CanUseExit));
+        SyncHotspotSharing();
     }
 
     private bool _legacyGuestWarned;
