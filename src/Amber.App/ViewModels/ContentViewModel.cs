@@ -329,6 +329,7 @@ public sealed partial class ContentViewModel : PageViewModel, ISnapshotDemo
     private Task SearchFromStart()
     {
         Page = 0;
+        ManualDownloadUrl = null;
         Detail = null;
         return SearchAsync();
     }

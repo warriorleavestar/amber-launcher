@@ -201,6 +201,38 @@ public sealed class CurseForgeDistributionTests
     }
 
     [Theory]
+    [InlineData("search")]
+    [InlineData("source")]
+    [InlineData("type")]
+    public void NewSearchClearsManualLinkLeftByLocalImport(string trigger)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "amber-cf-search-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            UiTestThread.Run(() =>
+            {
+                using var service = new LauncherService(new AppSettings { GameDirectory = root, PlayerName = "" });
+                using var handler = new ApiHandler();
+                using var http = new HttpClient(handler);
+                var provider = new CurseForgeProvider(http, () => "test-key");
+                var vm = new ContentViewModel(service, _ => provider);
+                Assert.Null(vm.SelectedFile);
+                vm.ManualDownloadUrl = "https://www.curseforge.com/projects/123";
+
+                if (trigger == "source") vm.SourceIndex = 1;
+                else if (trigger == "type") vm.TypeIndex = (int)ContentType.ResourcePack;
+                else vm.SearchCommand.ExecuteAsync(null).GetAwaiter().GetResult();
+
+                Assert.False(vm.HasManualDownload);
+                Assert.Null(vm.ManualDownloadUrl);
+                Assert.Equal(0, handler.DownloadRequests);
+            });
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void InstanceUpdateShowsManualDownloadAction(bool updateAll)
@@ -277,6 +309,7 @@ public sealed class CurseForgeDistributionTests
                 });
                 data = projects;
             }
+            else if (path == "/v1/mods/search") data = new JsonArray();
             else if (path == "/v1/mods/123/files/456") data = file;
             else if (path is "/v1/mods/123/files" or "/v1/mods/files") data = new JsonArray(file);
             else if (path == "/v1/fingerprints") data = new JsonObject { ["exactMatches"] = new JsonArray(new JsonObject { ["file"] = file }) };
