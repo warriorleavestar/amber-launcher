@@ -22,17 +22,21 @@ public sealed class MemberIdentity : IDisposable
     private readonly string _directory;
     private readonly Lock _gate = new();
     private X25519KeyPair _key;
-    /// <summary>重置前的旧密钥：正在进行的握手可能还拿着它，留到 Dispose 才清零。</summary>
+    // 重置后换下来的旧密钥：可能还有握手在用，等这个对象 Dispose 时再清零。
     private readonly List<X25519KeyPair> _retired = [];
 
-    private MemberIdentity(string directory, X25519KeyPair key, string? warning)
+    private MemberIdentity(string directory, X25519KeyPair key, string? warning, bool persisted = true)
     {
         _directory = directory;
         _key = key;
         Warning = warning;
+        IsPersisted = persisted;
     }
 
-    /// <summary>当前的密钥对。<see cref="Reset"/> 之后换成新的；旧的在这个对象 Dispose 前一直可用（正在进行的握手不会突然失效）。</summary>
+    /// <summary>false：这次读身份文件时遇到读写错误（比如被杀毒软件暂时锁住），用的是只在内存里的临时身份，没有覆盖原文件。</summary>
+    public bool IsPersisted { get; private set; }
+
+    /// <summary>当前的密钥对。<see cref="Reset"/> 之后换成新的，旧的被清零，别长期持有。</summary>
     public X25519KeyPair KeyPair { get { lock (_gate) return _key; } }
 
     public byte[] PublicKey => (byte[])KeyPair.PublicKey.Clone();
@@ -45,31 +49,18 @@ public sealed class MemberIdentity : IDisposable
 
     private string KeyPath => Path.Combine(_directory, FileName);
 
-    /// <summary>这次运行用的是只在内存里的临时身份（身份文件读不了，比如被杀毒软件锁住）：不保存，下次启动再读文件。</summary>
-    public bool IsTemporary { get; private set; }
-
     /// <summary>
-    /// 读取身份；没有就新建并保存。文件坏了或解不开（内容不对、换了系统用户）：原文件留一份 .broken，换一把新的，Warning 说明原因。
-    /// 文件读不了（被占用、没权限）时绝不覆盖它：这次用一把不保存的临时身份，Warning 说明。
+    /// 读取身份；没有就新建并保存。文件内容坏了或解不开（密码学或格式错误）：原文件留一份 .broken，换一把新的，Warning 说明原因。
+    /// 读写出错（文件被占用、权限一时不对）：不动原文件，这次用内存里的临时身份，Warning 说明，下次启动再读。
     /// </summary>
     public static MemberIdentity LoadOrCreate(string directory)
     {
         var path = Path.Combine(directory, FileName);
         if (File.Exists(path))
         {
-            byte[] stored;
             try
             {
-                if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                stored = File.ReadAllBytes(path);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                return new MemberIdentity(directory, X25519KeyPair.Generate(), L.F("core.mp.identity.unreadable", e.Message)) { IsTemporary = true };
-            }
-            try
-            {
-                var raw = Unprotect(directory, stored);
+                var raw = Unprotect(directory, File.ReadAllBytes(path));
                 try
                 {
                     return new MemberIdentity(directory, X25519KeyPair.FromPrivateKey(raw), null);
@@ -78,6 +69,10 @@ public sealed class MemberIdentity : IDisposable
                 {
                     CryptographicOperations.ZeroMemory(raw);
                 }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return new MemberIdentity(directory, X25519KeyPair.Generate(), L.T("core.mp.identity.unreadable"), persisted: false);
             }
             catch (Exception e) when (e is CryptographicException or FormatException)
             {
@@ -93,19 +88,26 @@ public sealed class MemberIdentity : IDisposable
         return created;
     }
 
-    /// <summary>
-    /// 换一个新身份（用户点“重置身份”）。之前认识你的房主会把你当成新成员。
-    /// 界面只在没有开房间、没有加入房间时允许；即使这时还有握手在用旧密钥，旧密钥也留到 Dispose 才清零。
-    /// </summary>
+    /// <summary>换一个新身份（用户点“重置身份”）。之前认识你的房主会把你当成新成员。</summary>
     public void Reset()
     {
         lock (_gate)
         {
+            var fresh = X25519KeyPair.Generate();
             var old = _key;
-            _key = X25519KeyPair.Generate();
+            _key = fresh;
+            try
+            {
+                Save();
+            }
+            catch
+            {
+                _key = old;
+                fresh.Dispose();
+                throw;
+            }
             Warning = null;
-            Save();
-            IsTemporary = false;
+            IsPersisted = true;
             _retired.Add(old);
         }
     }
@@ -117,8 +119,7 @@ public sealed class MemberIdentity : IDisposable
         try
         {
             var data = Protect(_directory, raw);
-            // 每次用新的临时文件名：上次崩溃留下的 .tmp 不会挡路，也不会写进别人已经打开的文件。
-            var temp = KeyPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            var temp = KeyPath + ".tmp";
             WritePrivate(temp, data);
             File.Move(temp, KeyPath, true);
         }
@@ -217,14 +218,18 @@ public sealed class MemberIdentity : IDisposable
     private static byte[] WrapKey(string directory, bool create)
     {
         var path = Path.Combine(directory, WrapKeyFileName);
+        // 长度不对的包裹密钥（比如第一次写入时断电留下的空文件）不可能加密过任何身份：
+        // 需要新建时挪成 .broken 再重建，否则损坏分支里重新保存还会读到它，每次启动都失败。
+        if (create && File.Exists(path) && new FileInfo(path).Length != 32)
+            File.Move(path, path + ".broken", true);
         if (!File.Exists(path))
         {
             if (!create) throw new CryptographicException(L.T("core.mp.identity.corrupt"));
             var created = RandomNumberGenerator.GetBytes(32);
             try
             {
-                // CreateNew：另一个 Jay 进程同时在建时，只有一个能建成，输的一方读对方建好的。
-                WritePrivate(path, created);
+                // CreateNew：两个 Jay 同时第一次启动时，只有一个能写成，另一个读已经写好的那把，不会互相覆盖。
+                WritePrivate(path, created, FileMode.CreateNew);
                 return created;
             }
             catch (IOException) when (File.Exists(path))
@@ -232,22 +237,23 @@ public sealed class MemberIdentity : IDisposable
                 CryptographicOperations.ZeroMemory(created);
             }
         }
-        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         var key = File.ReadAllBytes(path);
         if (key.Length != 32) throw new CryptographicException(L.T("core.mp.identity.corrupt"));
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         return key;
     }
 
-    /// <summary>新建文件（已存在就失败）；非 Windows 上一创建就是 0600（不先以默认权限创建再改）。</summary>
-    private static void WritePrivate(string path, byte[] data)
+    /// <summary>写文件；非 Windows 上一创建就是 0600（不先以默认权限创建再改）。</summary>
+    private static void WritePrivate(string path, byte[] data, FileMode mode = FileMode.Create)
     {
-        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+        var options = new FileStreamOptions { Mode = mode, Access = FileAccess.Write, Share = FileShare.None };
         if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         using (var stream = new FileStream(path, options))
         {
             stream.Write(data);
             stream.Flush(true);
         }
+        // 已经存在的文件不会按 UnixCreateMode 改权限，写完再收紧一次。
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 }

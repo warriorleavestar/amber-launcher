@@ -8,16 +8,14 @@ using System.Text;
 namespace Amber.Core.Multiplayer.Transport;
 
 /// <summary>
-/// Noise 协议框架（https://noiseprotocol.org/noise.html ，第 34 版）的一个最小实现，只用现成的标准密码原语：
-/// X25519（BouncyCastle 的 RFC 7748 实现）、ChaCha20-Poly1305、SHA-256 / HMAC-SHA256（.NET 自带）。不自己发明任何原语或构造。
-/// 支持三种握手：
+/// Noise 协议框架（https://noiseprotocol.org/noise.html ，第 34 版）的一个最小实现，只用成熟的密码原语：
+/// X25519（BouncyCastle 的 RFC 7748 实现）、ChaCha20-Poly1305、SHA-256 / HMAC-SHA256。不自己发明任何原语或构造。
+/// 支持四种握手：
 ///   Noise_NNpsk0_25519_ChaChaPoly_SHA256：-> psk, e   &lt;- e, ee
 ///   Noise_NNhfspsk0_25519+MLKEM768_ChaChaPoly_SHA256：-> psk, e, e1   &lt;- e, ee, ekem1（Noise HFS 扩展，KEM 用 ML-KEM-768，混合抗量子）
-///   Noise_XXpsk0_25519_ChaChaPoly_SHA256：-> psk, e   &lt;- e, ee, s, es   -> s, se（规范 7.5、9 节；双方交换长期身份公钥。
-///     psk 在第一条消息就混入：令牌不对第一条就失败，没有令牌的人看不到任何一方的长期公钥。敲门用这个）
-///   Noise_XXpsk3_25519_ChaChaPoly_SHA256：-> e   &lt;- e, ee, s, es   -> s, se, psk（同上，psk 在最后混入；保留给测试向量对照）
-/// psk 由调用方给：房间里的连接用房间密钥派生的值，敲门（加入前的握手）用邀请码里的一次性令牌派生的值；
-/// 没有这个 psk 的人完成不了握手。每次连接的临时密钥带来前向保密。
+///   Noise_XXpsk3_25519_ChaChaPoly_SHA256：-> e   &lt;- e, ee, s, es   -> s, se, psk（规范 7.5、9 节；双方交换长期身份公钥）
+///   Noise_XXpsk0_25519_ChaChaPoly_SHA256：-> psk, e   &lt;- e, ee, s, es   -> s, se（敲门和成员控制通道用：令牌不对第一条消息就失败）
+/// psk 只让持有它的人完成握手（NN 系列来自房间密钥或房主下发的成员密钥，XX 系列来自邀请令牌）；每次连接的临时密钥带来前向保密。
 /// </summary>
 public sealed class CipherState : IDisposable
 {
@@ -290,7 +288,7 @@ public sealed class X25519KeyPair : IDisposable
 
 public enum NoisePattern { NNpsk0, NNhfspsk0, XXpsk3, XXpsk0 }
 
-/// <summary>NNpsk0 / NNhfspsk0 两条消息、XXpsk0 / XXpsk3 三条消息的握手。initiator 先发。</summary>
+/// <summary>NNpsk0 / NNhfspsk0 两条消息、XXpsk3 三条消息的握手。initiator 先发。</summary>
 public sealed class NoiseHandshake : IDisposable
 {
     public static string ProtocolName(NoisePattern pattern) => pattern switch
@@ -313,9 +311,7 @@ public sealed class NoiseHandshake : IDisposable
     private byte[]? _re1;
     private int _step;
 
-    private bool IsXx => _pattern is NoisePattern.XXpsk3 or NoisePattern.XXpsk0;
-
-    // XX：自己的长期密钥（不归这个对象管，不在 Dispose 里清掉）和对方的长期公钥。
+    // XXpsk3：自己的长期密钥（不归这个对象管，不在 Dispose 里清掉）和对方的长期公钥。
     private readonly X25519KeyPair? _s;
     private byte[]? _rs;
 
@@ -324,11 +320,11 @@ public sealed class NoiseHandshake : IDisposable
     {
     }
 
-    /// <param name="localStatic">XXpsk0 / XXpsk3 必须给：本机的长期身份密钥（握手里加密发给对方）。别的模式必须为 null。</param>
+    /// <param name="localStatic">XXpsk3 必须给：本机的长期身份密钥（握手里加密发给对方）。别的模式必须为 null。</param>
     public NoiseHandshake(NoisePattern pattern, bool initiator, ReadOnlySpan<byte> prologue, byte[] psk, X25519KeyPair? localStatic)
     {
         if (psk.Length != 32) throw new ArgumentException(L.T("core.mp.noise.psklength"));
-        if ((pattern is NoisePattern.XXpsk3 or NoisePattern.XXpsk0) != (localStatic is not null)) throw new ArgumentException(L.T("core.mp.noise.staticrequired"));
+        if (IsXx(pattern) != (localStatic is not null)) throw new ArgumentException(L.T("core.mp.noise.staticrequired"));
         _pattern = pattern;
         _initiator = initiator;
         _psk = psk.ToArray();
@@ -337,10 +333,12 @@ public sealed class NoiseHandshake : IDisposable
         _ss.MixHash(prologue);
     }
 
-    /// <summary>XX：对方的长期公钥（读到对方的 s 之后才有；握手完成前不要拿来做身份判断）。</summary>
+    /// <summary>XXpsk3：对方的长期公钥（读到对方的 s 之后才有；握手完成前不要拿来做身份判断）。</summary>
     public byte[]? RemoteStaticPublicKey => _rs is null ? null : (byte[])_rs.Clone();
 
-    private int MessageCount => IsXx ? 3 : 2;
+    private int MessageCount => IsXx(_pattern) ? 3 : 2;
+
+    private static bool IsXx(NoisePattern pattern) => pattern is NoisePattern.XXpsk3 or NoisePattern.XXpsk0;
 
     /// <summary>测试用：指定临时密钥（Noise 测试向量里是固定的）。</summary>
     internal X25519KeyPair? FixedEphemeral { get; init; }
@@ -410,7 +408,7 @@ public sealed class NoiseHandshake : IDisposable
             throw new CryptographicException(L.T("core.mp.noise.hybridunsupported"));
     }
 
-    /// <summary>XX 的 s：长期公钥加密发出（这时已经有密钥）。</summary>
+    /// <summary>XXpsk3 的 s：长期公钥加密发出（这时已经有密钥）。</summary>
     private void WriteS(List<byte> message) => message.AddRange(_ss.EncryptAndHash(_s!.PublicKey));
 
     private ReadOnlySpan<byte> ReadS(ReadOnlySpan<byte> message)
@@ -424,12 +422,13 @@ public sealed class NoiseHandshake : IDisposable
         return message[length..];
     }
 
-    /// <summary>XXpsk0：-> psk, e …；XXpsk3：… -> s, se, psk。其余相同，每条消息都可以带 payload。</summary>
+    /// <summary>XXpsk3：-> e   &lt;- e, ee, s, es   -> s, se, psk。每条消息都可以带 payload。</summary>
     private byte[] WriteXxCore(ReadOnlySpan<byte> payload)
     {
         var message = new List<byte>();
         if (_initiator && _step == 0)
         {
+            // XXpsk0：psk 在第一条消息最前面混入，不知道令牌的人第一条消息就过不了，也拿不到任何一方的长期公钥。
             if (_pattern == NoisePattern.XXpsk0) _ss.MixKeyAndHash(_psk);
             WriteE(message);
         }
@@ -480,7 +479,7 @@ public sealed class NoiseHandshake : IDisposable
 
     private byte[] WriteMessageCore(ReadOnlySpan<byte> payload)
     {
-        if (IsXx) return WriteXxCore(payload);
+        if (IsXx(_pattern)) return WriteXxCore(payload);
         var message = new List<byte>();
         if (_initiator && _step == 0)
         {
@@ -517,7 +516,7 @@ public sealed class NoiseHandshake : IDisposable
 
     private byte[] ReadMessageCore(ReadOnlySpan<byte> message)
     {
-        if (IsXx) return ReadXxCore(message);
+        if (IsXx(_pattern)) return ReadXxCore(message);
         if (!_initiator && _step == 0)
         {
             _ss.MixKeyAndHash(_psk);

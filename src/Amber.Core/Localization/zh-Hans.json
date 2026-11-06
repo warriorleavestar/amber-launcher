@@ -1308,5 +1308,6 @@
   "multiplayer.trusted.title": "信任的人",
   "multiplayer.trusted.hint": "这些人用任何一张有效邀请敲门都会直接批准。列表只存公钥和名字。",
   "multiplayer.trusted.empty": "还没有信任的人",
-  "multiplayer.trusted.remove": "移除"
+  "multiplayer.trusted.remove": "移除",
+  "core.mp.identity.unreadable": "暂时读不到联机身份文件（可能被其他程序占用或权限不对），这次先用临时身份，原文件没有改动，下次启动会再读。"
 }

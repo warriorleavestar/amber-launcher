@@ -81,16 +81,73 @@ public sealed class MemberIdentityTests : IDisposable
         Assert.Equal(identity.PublicKey, again.PublicKey);
     }
 
-    /// <summary>重置时正在用的旧密钥不会被清零：拿着它的握手照样能算完（之后由 Dispose 统一清零）。</summary>
+    /// <summary>重置后旧密钥还没被清零：正在进行的握手可以用完（到 Dispose 才清）。</summary>
     [Fact]
-    public void ResetKeepsOldKeyUsable()
+    public void ResetKeepsOldKeyUsableUntilDispose()
     {
         using var identity = MemberIdentity.LoadOrCreate(_dir);
-        var held = identity.KeyPair;
-        var before = held.PublicKey.ToArray();
+        var old = identity.KeyPair;
         identity.Reset();
         using var other = Amber.Core.Multiplayer.Transport.X25519KeyPair.Generate();
-        Assert.Equal(other.Dh(before), held.Dh(other.PublicKey));
+        Assert.Equal(32, old.Dh(other.PublicKey).Length);
+        Assert.NotEqual(old.PublicKey, identity.PublicKey);
+    }
+
+    /// <summary>非 Windows：已存在的包裹密钥文件权限过宽时被收紧到 0600；已存在的那把会被沿用（不被覆盖）。</summary>
+    [Fact]
+    public void ExistingWrapKeyIsReusedAndTightened()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        byte[] first;
+        using (var identity = MemberIdentity.LoadOrCreate(_dir)) first = identity.PublicKey;
+        var wrap = Path.Combine(_dir, "identity.wrap");
+        File.SetUnixFileMode(wrap, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        using var again = MemberIdentity.LoadOrCreate(_dir);
+        Assert.Equal(first, again.PublicKey);
+        Assert.Null(again.Warning);
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(wrap));
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(Path.Combine(_dir, MemberIdentity.FileName)));
+    }
+
+    /// <summary>读写出错（这里用“身份文件是个目录”模拟）：不覆盖、不生成 .broken，这次用临时身份并提示。</summary>
+    [Fact]
+    public void IoErrorUsesTemporaryIdentityWithoutOverwriting()
+    {
+        Directory.CreateDirectory(_dir);
+        var path = Path.Combine(_dir, MemberIdentity.FileName);
+        File.WriteAllBytes(path, [1, 2, 3]);
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            if (!OperatingSystem.IsWindows()) return; // 只有 Windows 的共享锁会让别的读取失败
+            using var identity = MemberIdentity.LoadOrCreate(_dir);
+            Assert.False(identity.IsPersisted);
+            Assert.NotNull(identity.Warning);
+            Assert.False(File.Exists(path + ".broken"));
+        }
+        Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(path));
+    }
+
+    /// <summary>非 Windows：包裹密钥文件长度不对（比如断电留下的空文件）时，换新身份并重建包裹密钥，不会每次启动都失败。</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void BrokenWrapKeyRecovers(bool identityExists)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        if (identityExists) using (MemberIdentity.LoadOrCreate(_dir)) { }
+        Directory.CreateDirectory(_dir);
+        File.WriteAllBytes(Path.Combine(_dir, "identity.wrap"), []);
+        byte[] recovered;
+        using (var identity = MemberIdentity.LoadOrCreate(_dir))
+        {
+            Assert.Equal(identityExists, identity.Warning is not null);
+            Assert.True(identity.IsPersisted);
+            recovered = identity.PublicKey;
+        }
+        Assert.Equal(32, new FileInfo(Path.Combine(_dir, "identity.wrap")).Length);
+        using var again = MemberIdentity.LoadOrCreate(_dir);
+        Assert.Null(again.Warning);
+        Assert.Equal(recovered, again.PublicKey);
     }
 
     public void Dispose()

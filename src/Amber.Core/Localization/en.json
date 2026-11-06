@@ -1339,5 +1339,6 @@
   "multiplayer.trusted.title": "Trusted people",
   "multiplayer.trusted.hint": "Knocks from these people are approved automatically with any valid invite. Only their public key and name are stored.",
   "multiplayer.trusted.empty": "No trusted people yet",
-  "multiplayer.trusted.remove": "Remove"
+  "multiplayer.trusted.remove": "Remove",
+  "core.mp.identity.unreadable": "Couldn't read your multiplayer identity file right now (it may be in use or have the wrong permissions). Using a temporary identity this time; the file was not changed and will be read again next start."
 }

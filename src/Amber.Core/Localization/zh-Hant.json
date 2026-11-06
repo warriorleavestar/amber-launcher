@@ -1308,5 +1308,6 @@
   "multiplayer.trusted.title": "信任的人",
   "multiplayer.trusted.hint": "這些人用任何一張有效邀請敲門都會直接批准。清單只存公鑰和名字。",
   "multiplayer.trusted.empty": "還沒有信任的人",
-  "multiplayer.trusted.remove": "移除"
+  "multiplayer.trusted.remove": "移除",
+  "core.mp.identity.unreadable": "暫時讀不到聯機身分檔案（可能被其他程式佔用或權限不對），這次先用臨時身分，原檔案沒有改動，下次啟動會再讀。"
 }

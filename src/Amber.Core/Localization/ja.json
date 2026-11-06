@@ -1308,5 +1308,6 @@
   "multiplayer.trusted.title": "信頼している人",
   "multiplayer.trusted.hint": "この人たちのノックは、有効な招待であれば自動で承認されます。保存するのは公開鍵と名前だけです。",
   "multiplayer.trusted.empty": "信頼している人はまだいません",
-  "multiplayer.trusted.remove": "削除"
+  "multiplayer.trusted.remove": "削除",
+  "core.mp.identity.unreadable": "マルチプレイ用の ID ファイルを今は読み込めません（他のプログラムが使用中か、権限の問題の可能性があります）。今回は一時的な ID を使います。元のファイルは変更しておらず、次回起動時にもう一度読み込みます。"
 }
