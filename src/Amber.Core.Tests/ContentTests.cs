@@ -65,6 +65,15 @@ public class ContentTests : IDisposable
         Assert.Equal(Path.Combine(_root, "config", "a.txt"), ModpackService.SafeJoin(_root, "mods\\..\\config/a.txt"));
 
     [Fact]
+    public void SafeJoin_RejectsSiblingThatDiffersOnlyByCase()
+    {
+        // Windows 不区分大小写，那里“../INST”本来就是同一个目录。
+        if (OperatingSystem.IsWindows()) return;
+        var root = Path.Combine(_root, "inst");
+        Assert.Throws<InvalidDataException>(() => ModpackService.SafeJoin(root, "../INST/mods/a.jar"));
+    }
+
+    [Fact]
     public void SafeFileName_StripsDirectories()
     {
         Assert.Equal("a.jar", ContentInstaller.SafeFileName("../../a.jar"));
