@@ -1264,5 +1264,8 @@
   "content.source.use_modrinth": "Modrinth を使う",
   "content.install.pick_file": "先に上でファイルを選んでください",
   "content.install.vanilla_blocked": "{0} はバニラのインスタンスなので、MOD は読み込まれません。「ダウンロード」ページで Fabric や Forge などのローダー付きインスタンスを入れるか、「インストール先」で別のものを選んでください。",
-  "content.install.optional_heading": "任意の前提 MOD（チェックしたものも一緒に入れます）"
+  "content.install.optional_heading": "任意の前提 MOD（チェックしたものも一緒に入れます）",
+  "core.content.curseforge.manual_download": "{0} はアプリ内ダウンロードが許可されていないか、CurseForge がダウンロード URL を提供していません。こちらから手動でダウンロードしてください：{1}",
+  "content.curseforge.manual_hint": "CurseForge のページからファイルをダウンロードして、インスタンス内の適切なフォルダーに手動で配置してください。",
+  "content.curseforge.open_manual": "CurseForge でダウンロード…"
 }

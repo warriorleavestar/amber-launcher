@@ -1264,5 +1264,8 @@
   "content.source.use_modrinth": "改用 Modrinth",
   "content.install.pick_file": "請先在上方選一個版本檔案",
   "content.install.vanilla_blocked": "{0} 是原版實例，模組裝進去也不會載入。請先到「下載」頁安裝帶有 Fabric、Forge 等載入器的實例，或在「安裝至」裡換一個。",
-  "content.install.optional_heading": "選用相依項目（勾選的一起安裝）"
+  "content.install.optional_heading": "選用相依項目（勾選的一起安裝）",
+  "core.content.curseforge.manual_download": "{0} 不允許應用程式內下載，或 CurseForge 未提供下載網址。請在網頁手動下載：{1}",
+  "content.curseforge.manual_hint": "請在 CurseForge 頁面下載這個檔案，再手動放入實例對應的資料夾。",
+  "content.curseforge.open_manual": "在 CurseForge 頁面下載…"
 }

@@ -180,7 +180,7 @@ public sealed partial class ModpackService(LoaderContext ctx, ModrinthProvider m
         var missing = ids.Count - files.Count;
 
         var folders = await curseForge.GetProjectFoldersAsync(files.Select(f => long.Parse(f.ProjectId)).Distinct().ToList(), ct);
-        var items = files.Select(f => ContentInstaller.ToItem(f, Path.Combine(workDir, folders.GetValueOrDefault(f.ProjectId, "mods")))).ToList();
+        var items = await ContentInstaller.PrepareDownloadItemsAsync(files.Select(f => (f, Path.Combine(workDir, folders.GetValueOrDefault(f.ProjectId, "mods")))), ct);
         await ctx.Downloader.DownloadAllAsync(items, new Progress<DownloadProgress>(p => progress?.Report(new(L.F("core.content.modpack.downloadprogress", p.CompletedFiles, p.TotalFiles), 100.0 * p.CompletedFiles / Math.Max(1, p.TotalFiles)))), ct);
 
         var overrides = manifest["overrides"]?.GetValue<string>() ?? "overrides";

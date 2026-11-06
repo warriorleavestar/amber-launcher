@@ -74,6 +74,13 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
         Amber.Core.Localization.L.SetLanguage(Amber.Core.Localization.L.Source);
         try
         {
+            if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "curseforge")
+            {
+                await CurseForgeManualDownloadAsync();
+                Log("DONE");
+                window.Close();
+                return;
+            }
             if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "game")
             {
                 await GameLifecycleAsync();
@@ -139,6 +146,65 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             Log("FAIL 自检中断：" + e);
         }
         window.Close();
+    }
+
+    /// <summary>使用合成的受限项目验证网页下载入口；不访问 CurseForge，也不打开浏览器。</summary>
+    private async Task CurseForgeManualDownloadAsync()
+    {
+        var previous = main.CurrentPage;
+        var provider = new ManualDownloadProvider();
+        var content = new ContentViewModel(Page<HomeViewModel>().Service, _ => provider, () => true) { SourceIndex = 1 };
+        var originalContent = Page<ContentViewModel>();
+        var pageIndex = main.Pages.IndexOf(originalContent);
+        main.Pages[pageIndex] = content;
+        main.CurrentPage = content;
+        content.Selected = content.Results.FirstOrDefault();
+        await Ui.FlushAsync();
+        Check("CurseForge：受限文件显示手动下载入口", content.HasManualDownload && content.SelectedRequiresManualDownload, content.ManualDownloadUrl ?? "");
+        var button = await FindAsync<Button>(b => b.Command == content.OpenManualDownloadCommand && b.IsEffectivelyVisible);
+        Check("CurseForge：官网按钮可见且可用", button is { IsEnabled: true }, "");
+        Check("CurseForge：受限文件不显示应用内安装按钮", !window.GetVisualDescendants().OfType<Button>().Any(b => b.Command == content.InstallCommand && b.IsEffectivelyVisible), "");
+        await content.InstallCommand.ExecuteAsync(null);
+        Check("CurseForge：命令直接调用也只提示手动下载", !content.IsBusy && content.StatusInfo?.Key == "core.content.curseforge.manual_download", content.Status);
+        string? opened = null;
+        Check("CurseForge：网页入口使用文件页面", ContentViewModel.TryOpenProjectPage(content.ManualDownloadUrl, start => opened = start.FileName)
+            && opened == provider.File.ManualDownloadPage, opened ?? "");
+        window.Width = 1080;
+        window.Height = 700;
+        await ShotAsync("CurseForge手动下载");
+        await LayoutHereAsync("CurseForge手动下载");
+        var instance = Page<InstanceViewModel>();
+        main.CurrentPage = instance;
+        var oldPath = Path.Combine(reportDir, "manual-update-old.jar");
+        await File.WriteAllTextAsync(oldPath, "old");
+        var mod = new ModItem(new LocalMod(oldPath, "manual-update-old.jar", true, "example", "示例模组", "0.9", null, null, null))
+        {
+            Update = new ModUpdate(oldPath, provider.File),
+        };
+        await instance.UpdateModCommand.ExecuteAsync(mod);
+        var updateButton = await FindAsync<Button>(b => b.Command == instance.OpenManualDownloadCommand);
+        Check("CurseForge：实例更新保留原文件并显示官网按钮", instance.HasManualDownload && updateButton is { IsEnabled: true }
+            && await File.ReadAllTextAsync(oldPath) == "old", instance.Status);
+        await ShotAsync("CurseForge更新手动下载");
+        await LayoutHereAsync("CurseForge更新手动下载");
+        main.CurrentPage = previous;
+        main.Pages[pageIndex] = originalContent;
+    }
+
+    private sealed class ManualDownloadProvider : IContentProvider
+    {
+        public ContentSource Source => ContentSource.CurseForge;
+        public ContentFile File { get; } = new(ContentSource.CurseForge, "123", "456", "示例模组 1.0", "example.jar", "", null, 0,
+            ["1.21.1"], ["fabric"], "release", default, [])
+        {
+            ManualDownloadPage = "https://www.curseforge.com/projects/123",
+        };
+        public Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken ct = default) =>
+            Task.FromResult(new SearchResult([new ContentProject(Source, "123", "示例模组", "用于自检：作者关闭第三方下载。", null, null, 0, "https://www.curseforge.com/projects/123")], 1));
+        public Task<IReadOnlyList<ContentFile>> GetFilesAsync(string projectId, string? gameVersion, string? loader, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ContentFile>>([File]);
+        public Task<ContentProject> GetProjectAsync(string projectId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<ContentFile> GetFileAsync(string projectId, string fileId, CancellationToken ct = default) => Task.FromResult(File);
     }
 
     private async Task ContentAutoLoadAsync()

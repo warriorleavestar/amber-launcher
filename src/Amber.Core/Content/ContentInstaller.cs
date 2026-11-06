@@ -85,12 +85,38 @@ public sealed class ContentInstaller(Downloader downloader, IReadOnlyDictionary<
     public async Task InstallAsync(InstallPlan plan, string targetDir, IProgress<DownloadProgress>? progress = null, CancellationToken ct = default)
     {
         Directory.CreateDirectory(targetDir);
-        var items = plan.Files.Select(f => ToItem(f, targetDir)).ToList();
+        var items = await PrepareDownloadItemsAsync(plan.Files.Select(f => (f, targetDir)), ct);
         await downloader.DownloadAllAsync(items, progress, ct);
     }
 
-    public static DownloadItem ToItem(ContentFile file, string targetDir) =>
-        new(file.Url, Path.Combine(targetDir, SafeFileName(file.FileName)), file.Sha1, file.Size > 0 ? file.Size : null);
+    /// <summary>受限文件只能复用用户手动放好的、SHA-1 和可用大小都匹配的文件；先检查整批，避免部分下载。</summary>
+    public static async Task<IReadOnlyList<DownloadItem>> PrepareDownloadItemsAsync(
+        IEnumerable<(ContentFile File, string TargetDir)> files, CancellationToken ct = default)
+    {
+        var items = new List<DownloadItem>();
+        foreach (var (file, targetDir) in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!file.RequiresManualDownload)
+            {
+                items.Add(ToItem(file, targetDir));
+                continue;
+            }
+            var path = Path.Combine(targetDir, SafeFileName(file.FileName));
+            if (file.Sha1 is { Length: 40 } sha1 && sha1.All(Uri.IsHexDigit) && File.Exists(path)
+                && (file.Size <= 0 || new FileInfo(path).Length == file.Size)
+                && string.Equals(await Downloader.Sha1Async(path, ct), sha1, StringComparison.OrdinalIgnoreCase))
+                continue;
+            throw new ManualDownloadRequiredException(file);
+        }
+        return items;
+    }
+
+    public static DownloadItem ToItem(ContentFile file, string targetDir)
+    {
+        if (file.RequiresManualDownload) throw new ManualDownloadRequiredException(file);
+        return new(file.Url, Path.Combine(targetDir, SafeFileName(file.FileName)), file.Sha1, file.Size > 0 ? file.Size : null);
+    }
 
     /// <summary>远端给的文件名不能带目录，防止写到目标文件夹之外。</summary>
     public static string SafeFileName(string name)

@@ -155,7 +155,7 @@
             <Border Classes="callout warning" IsVisible="{Binding HasLoaderNote}">
               <TextBlock Text="{Binding LoaderNote}" TextWrapping="Wrap" />
             </Border>
-            <Button Classes="primary" Content="{l:T content.install.selected}" Command="{Binding InstallCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+            <Button Classes="primary" Content="{l:T content.install.selected}" Command="{Binding InstallCommand}" IsVisible="{Binding !SelectedRequiresManualDownload}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                     ToolTip.Tip="{Binding InstallHint}" ToolTip.ShowOnDisabled="True" />
           </StackPanel>
         </Grid>
@@ -166,6 +166,10 @@
       <Grid ColumnDefinitions="*,Auto">
         <StackPanel Spacing="6" VerticalAlignment="Center">
           <c:StatusBar Message="{Binding StatusInfo}" />
+          <StackPanel Spacing="6" IsVisible="{Binding HasManualDownload}" MaxWidth="640" HorizontalAlignment="Left">
+            <TextBlock Text="{l:T content.curseforge.manual_hint}" TextWrapping="Wrap" />
+            <Button Content="{l:T content.curseforge.open_manual}" Command="{Binding OpenManualDownloadCommand}" />
+          </StackPanel>
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />
         </StackPanel>
         <Button Grid.Column="1" Content="{l:T common.cancel}" Command="{Binding CancelCommand}" IsVisible="{Binding IsBusy}" Margin="12,0,0,0" />
