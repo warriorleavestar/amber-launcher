@@ -150,6 +150,95 @@ public sealed class BakeTests : IDisposable
         Assert.Null(bake.Current(dir, instance, 21));
     }
 
+    private (BakeService Bake, GameDirectory Directory, GameInstance Instance) ReusableBake()
+    {
+        Version("1.21.1");
+        var toolkit = Toolkit();
+        foreach (var relative in new[] { "libs/a.jar", "libs/b.jar", "build/loader/amber/ul/Bake.class", "build/loader/loader.properties",
+                     "mc/mappings-amber/client_mappings.txt", "mc/mappings-amber/intermediary-1.21.1-v2.jar" })
+        {
+            var file = Path.Combine(toolkit.Root, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, "old");
+        }
+        var work = Directory.CreateDirectory(Path.Combine(_root, "work")).FullName;
+        var state = Path.Combine(work, BakeService.StateFolder, "state.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(state)!);
+        File.WriteAllText(state, "{}");
+        var instance = new GameInstance("1.21.1", "1.21.1", "fabric", "0.16", work);
+        var directory = new GameDirectory(Game);
+        var bake = new BakeService(toolkit, Path.Combine(_root, "cache"));
+        var launch = new BakedLaunch("amber.ul.Launcher", toolkit.Classpath, [], ["--state", state, "--"], state, "key");
+        BakeRecord.Write(work, new BakeRecord(bake.InputKey(directory, instance, 21), launch));
+        Assert.NotNull(bake.Current(directory, instance, 21));
+        return (bake, directory, instance);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UpdatingClasspathInTheSameToolkitInvalidatesPreviousLaunch(bool removeOldDependency)
+    {
+        var (bake, dir, instance) = ReusableBake();
+        var root = bake.Toolkit.Root;
+        File.WriteAllText(Path.Combine(root, "libs", "a-v2.jar"), "new");
+        File.WriteAllText(Path.Combine(root, "build", "loader-cp.txt"), "libs/a-v2.jar;libs/b.jar\n");
+        if (removeOldDependency) File.Delete(Path.Combine(root, "libs", "a.jar"));
+
+        // 与每次准备启动一样重新发现工具包：旧记录不能让新工具包继续使用旧依赖列表。
+        var updated = new BakeService(BakeToolkit.Find(root)!, bake.CacheRoot);
+        Assert.Null(updated.Current(dir, instance, 21));
+    }
+
+    [Theory]
+    [InlineData("libs/a.jar")]
+    [InlineData("build/loader/amber/ul/Bake.class")]
+    [InlineData("build/loader/loader.properties")]
+    [InlineData("mc/mappings-amber/client_mappings.txt")]
+    [InlineData("mc/mappings-amber/intermediary-1.21.1-v2.jar")]
+    public void ChangedToolkitInputsInvalidateEvenWhenSizeAndTimestampArePreserved(string relative)
+    {
+        var (bake, dir, instance) = ReusableBake();
+        var file = Path.Combine(bake.Toolkit.Root, relative);
+        var time = File.GetLastWriteTimeUtc(file);
+        File.WriteAllText(file, "new");
+        File.SetLastWriteTimeUtc(file, time);
+
+        Assert.Null(bake.Current(dir, instance, 21));
+    }
+
+    [Fact]
+    public void MergedMappingsTakePrecedenceAndTheirChangesInvalidate()
+    {
+        var (bake, dir, instance) = ReusableBake();
+        var merged = Path.Combine(bake.Toolkit.MappingsDir, "merged.tiny");
+        File.WriteAllText(merged, "old");
+        Assert.Null(bake.Current(dir, instance, 21));
+        var record = BakeRecord.Read(instance.WorkDir)!;
+        BakeRecord.Write(instance.WorkDir, record with { Key = bake.InputKey(dir, instance, 21) });
+
+        // 有预合并映射时原型不会读取源映射，改源文件不该让缓存反复失效。
+        File.WriteAllText(Path.Combine(bake.Toolkit.MappingsDir, "client_mappings.txt"), "unused change");
+        Assert.NotNull(bake.Current(dir, instance, 21));
+        File.WriteAllText(merged, "new");
+        Assert.Null(bake.Current(dir, instance, 21));
+    }
+
+    [Fact]
+    public void GeneratedFilesAndUnusedMappingsDoNotInvalidatePreviousBake()
+    {
+        var (bake, dir, instance) = ReusableBake();
+        Directory.CreateDirectory(bake.CacheRoot);
+        File.WriteAllText(Path.Combine(bake.CacheRoot, "generated.jar"), "generated");
+        File.WriteAllText(Path.Combine(bake.Toolkit.Root, "build", "build.log"), "build output");
+        File.WriteAllText(Path.Combine(bake.Toolkit.MappingsDir, "intermediary-1.20.1-v2.jar"), "unused mapping");
+        // 清单的换行和空白不改变实际 classpath。
+        File.WriteAllText(Path.Combine(bake.Toolkit.Root, "build", "loader-cp.txt"), "libs/a.jar\r\n  libs/b.jar\r\n");
+        var unchanged = new BakeService(BakeToolkit.Find(bake.Toolkit.Root)!, bake.CacheRoot);
+
+        Assert.NotNull(unchanged.Current(dir, instance, 21));
+    }
+
     [Fact]
     public void GameInputsUseTheVanillaParentWithoutLoaderLibraries()
     {

@@ -157,15 +157,51 @@ public sealed class BakeService(BakeToolkit toolkit, string cacheRoot)
     }
 
     /// <summary>
-    /// 实例的烘焙输入指纹：游戏版本、游戏 jar、启用模组（文件名、大小、修改时间）、Java 主版本、加载器目录。
-    /// 任何一项变了都要重新烘焙实例（模组本身的缓存仍按内容命中，很快）。
+    /// 实例的烘焙输入指纹：游戏版本、游戏 jar 和库、启用模组、Java 主版本，以及加载器和映射的实际输入。
+    /// 游戏文件用大小和修改时间；体积较小的加载器、依赖和映射按内容判断，同目录重新构建也会失效。
+    /// 只读 classpath 和当前版本实际使用的映射，不扫描缓存或烘焙产物。
     /// </summary>
     public string InputKey(GameDirectory dir, GameInstance instance, int javaMajor)
     {
-        var (gameJar, _) = GameInputs(dir, instance);
-        var text = new StringBuilder().Append(instance.McVersion).Append('|').Append(javaMajor).Append('|').Append(toolkit.Root).Append('|').Append(Stamp(gameJar));
-        foreach (var mod in ModJars(instance)) text.Append('|').Append(Path.GetFileName(mod)).Append(':').Append(Stamp(mod));
+        var (gameJar, libraries) = GameInputs(dir, instance);
+        var text = new StringBuilder("bake-input-v2|").Append(instance.McVersion).Append('|').Append(javaMajor).Append('|').Append(toolkit.Root);
+        AppendStamp(text, gameJar);
+        foreach (var library in libraries) AppendStamp(text, library);
+        foreach (var mod in ModJars(instance)) AppendStamp(text, mod);
+        // 保留 classpath 顺序：同名类或资源按这个顺序加载。类目录里也可能有加载器读取的资源。
+        foreach (var entry in toolkit.Classpath)
+        {
+            text.Append("|classpath:").Append(entry);
+            if (Directory.Exists(entry))
+            {
+                foreach (var file in Directory.EnumerateFiles(entry, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+                    AppendContent(text, file);
+            }
+            else AppendContent(text, entry);
+        }
+        // 与原型 ensureMappings 的选择一致；其他 MC 版本的映射和生成的缓存不影响本次输入。
+        var merged = Path.Combine(toolkit.MappingsDir, "merged.tiny");
+        if (File.Exists(merged)) AppendContent(text, merged);
+        else
+        {
+            AppendContent(text, Path.Combine(toolkit.MappingsDir, $"intermediary-{instance.McVersion}-v2.jar"));
+            AppendContent(text, Path.Combine(toolkit.MappingsDir, "client_mappings.txt"));
+        }
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())));
+    }
+
+    private static void AppendStamp(StringBuilder text, string file) => text.Append('|').Append(file).Append(':').Append(Stamp(file));
+
+    private static void AppendContent(StringBuilder text, string file)
+    {
+        text.Append('|').Append(file).Append(':');
+        if (!File.Exists(file))
+        {
+            text.Append("missing");
+            return;
+        }
+        using var input = File.OpenRead(file);
+        text.Append(Convert.ToHexStringLower(SHA256.HashData(input)));
     }
 
     private static string Stamp(string file)
