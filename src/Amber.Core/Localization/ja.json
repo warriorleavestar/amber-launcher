@@ -1239,5 +1239,8 @@
   "core.auth.external.insecure_saved": "外部アカウント {0} のサーバーは http のため、パスワードとトークンが暗号化されずに送信されます。起動には使用できません。アカウントページで削除し、https のアドレスで追加し直してください。",
   "core.content.curseforge.manual_download": "{0} はアプリ内ダウンロードが許可されていないか、CurseForge がダウンロード URL を提供していません。こちらから手動でダウンロードしてください：{1}",
   "content.curseforge.manual_hint": "CurseForge のページからファイルをダウンロードして、インスタンス内の適切なフォルダーに手動で配置してください。",
-  "content.curseforge.open_manual": "CurseForge でダウンロード…"
+  "content.curseforge.open_manual": "CurseForge でダウンロード…",
+  "content.curseforge.manual_pack_archive_hint": "CurseForge のページから Mod パックのアーカイブをダウンロードし、「MODパックのファイルをインポート…」から読み込んでください。",
+  "content.curseforge.manual_pack_import_hint": "今回の Mod パックのインポートは完了していません。必要なファイルを、パックで指定された上書き用フォルダー（通常は overrides）内の対応する場所に追加してから、再度インポートしてください。必要なファイルを含むパックも使用できます。",
+  "content.curseforge.pack_import_incomplete": "今回の Mod パックのインポートは完了していません。{0} を手動でダウンロードし、パックに追加してから再度インポートしてください：{1}"
 }

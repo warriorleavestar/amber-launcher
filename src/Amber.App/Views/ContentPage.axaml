@@ -102,7 +102,7 @@
         <StackPanel Spacing="6" VerticalAlignment="Center">
           <c:StatusBar Message="{Binding StatusInfo}" />
           <StackPanel Spacing="6" IsVisible="{Binding HasManualDownload}" MaxWidth="640" HorizontalAlignment="Left">
-            <TextBlock Text="{l:T content.curseforge.manual_hint}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding ManualDownloadHint}" TextWrapping="Wrap" />
             <Button Content="{l:T content.curseforge.open_manual}" Command="{Binding OpenManualDownloadCommand}" />
           </StackPanel>
           <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsBusy}" />

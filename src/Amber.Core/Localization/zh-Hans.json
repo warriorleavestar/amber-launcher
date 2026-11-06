@@ -1239,5 +1239,8 @@
   "core.auth.external.insecure_saved": "外置账号 {0} 的服务器地址是 http，密码和令牌会明文传输，已不能用来启动。请到账号页删掉它，再用 https 地址重新添加。",
   "core.content.curseforge.manual_download": "{0} 不允许应用内下载，或 CurseForge 未提供下载地址。请在网页手动下载：{1}",
   "content.curseforge.manual_hint": "请在 CurseForge 页面下载这个文件，再手动放入实例对应的文件夹。",
-  "content.curseforge.open_manual": "在 CurseForge 页面下载…"
+  "content.curseforge.open_manual": "在 CurseForge 页面下载…",
+  "content.curseforge.manual_pack_archive_hint": "请在 CurseForge 页面下载整合包文件，然后使用“导入整合包文件…”导入。",
+  "content.curseforge.manual_pack_import_hint": "此次整合包导入未完成。请将所需文件补到整合包声明的覆盖目录（通常叫 overrides）的对应位置，再重新导入；也可以使用已包含所需文件的整合包。",
+  "content.curseforge.pack_import_incomplete": "此次整合包导入未完成：{0} 需要手动下载。请补齐整合包后重新导入：{1}"
 }

@@ -1270,5 +1270,8 @@
   "core.auth.external.insecure_saved": "The external account {0} uses an http server, which would send its password and tokens unencrypted, so it can no longer be used to launch. Remove it on the Accounts page and add it again with an https address.",
   "core.content.curseforge.manual_download": "{0} does not allow in-app downloads, or CurseForge did not provide a download URL. Download it manually from: {1}",
   "content.curseforge.manual_hint": "Download this file from CurseForge, then place it in the appropriate folder in your instance.",
-  "content.curseforge.open_manual": "Download on CurseForge…"
+  "content.curseforge.open_manual": "Download on CurseForge…",
+  "content.curseforge.manual_pack_archive_hint": "Download the modpack archive from CurseForge, then use “Import modpack file…” to import it.",
+  "content.curseforge.manual_pack_import_hint": "This modpack import did not complete. Add the required files at the matching paths inside the pack’s declared override directory (usually called overrides), then import the pack again. You can also use a pack that already includes these files.",
+  "content.curseforge.pack_import_incomplete": "This modpack import did not complete: {0} requires a manual download. Add the missing files to the pack, then import it again: {1}"
 }

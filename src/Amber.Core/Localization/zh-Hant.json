@@ -1239,5 +1239,8 @@
   "core.auth.external.insecure_saved": "外置帳號 {0} 的伺服器位址是 http，密碼和權杖會明文傳輸，已不能用來啟動。請到帳號頁刪除它，再用 https 位址重新新增。",
   "core.content.curseforge.manual_download": "{0} 不允許應用程式內下載，或 CurseForge 未提供下載網址。請在網頁手動下載：{1}",
   "content.curseforge.manual_hint": "請在 CurseForge 頁面下載這個檔案，再手動放入實例對應的資料夾。",
-  "content.curseforge.open_manual": "在 CurseForge 頁面下載…"
+  "content.curseforge.open_manual": "在 CurseForge 頁面下載…",
+  "content.curseforge.manual_pack_archive_hint": "請在 CurseForge 頁面下載整合包檔案，再使用「匯入模組包檔案…」匯入。",
+  "content.curseforge.manual_pack_import_hint": "此次整合包匯入未完成。請將所需檔案補到整合包宣告的覆寫目錄（通常叫 overrides）的對應位置，再重新匯入；也可以使用已包含所需檔案的整合包。",
+  "content.curseforge.pack_import_incomplete": "此次整合包匯入未完成：{0} 需要手動下載。請補齊整合包後重新匯入：{1}"
 }
