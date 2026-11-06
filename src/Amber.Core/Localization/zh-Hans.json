@@ -1236,5 +1236,6 @@
   "core.mp.matrix.requestexpired": "房主的测试请求太久没有回答，已作废",
   "multiplayer.matrix.request_gone": "这次测试请求已经作废（超时或房主已取消），没有开始测试",
   "content.modpack.installed_skipped": "整合包已安装为 {0}。跳过了 {1} 个可疑或属于启动器的文件：{2}",
-  "core.auth.external.insecure_saved": "外置账号 {0} 的服务器地址是 http，密码和令牌会明文传输，已不能用来启动。请到账号页删掉它，再用 https 地址重新添加。"
+  "core.auth.external.insecure_saved": "外置账号 {0} 的服务器地址是 http，密码和令牌会明文传输，已不能用来启动。请到账号页删掉它，再用 https 地址重新添加。",
+  "core.mp.noise.staticrequired": "XXpsk3 握手必须提供本机长期密钥，其他握手不能提供"
 }

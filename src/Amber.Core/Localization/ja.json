@@ -1236,5 +1236,6 @@
   "core.mp.matrix.requestexpired": "ホストのテスト要求に長時間応答がなかったため、無効になりました",
   "multiplayer.matrix.request_gone": "このテスト要求は無効になりました（タイムアウトまたはホストが取り消し）。テストは開始されていません",
   "content.modpack.installed_skipped": "Modpack を {0} としてインストールしました。不審なファイルまたはランチャー専用のファイル {1} 件をスキップしました：{2}",
-  "core.auth.external.insecure_saved": "外部アカウント {0} のサーバーは http のため、パスワードとトークンが暗号化されずに送信されます。起動には使用できません。アカウントページで削除し、https のアドレスで追加し直してください。"
+  "core.auth.external.insecure_saved": "外部アカウント {0} のサーバーは http のため、パスワードとトークンが暗号化されずに送信されます。起動には使用できません。アカウントページで削除し、https のアドレスで追加し直してください。",
+  "core.mp.noise.staticrequired": "XXpsk3 ハンドシェイクにはローカルの長期鍵が必要です。他のハンドシェイクには指定できません"
 }
