@@ -19,7 +19,7 @@ namespace Amber.App.Views;
 /// 开发用端到端自检：设置环境变量 AMBER_SELFTEST=&lt;报告目录&gt; 后，在真实窗口里驱动各页面的命令，
 /// 走完“装加载器 → 装模组 → 改设置 → 启动 → 崩溃分析 → 导出 → 导入”，把结果和截图写进报告目录，然后退出。
 /// </summary>
-internal sealed class SelfTest(MainWindow window, MainViewModel main, string reportDir)
+internal sealed partial class SelfTest(MainWindow window, MainViewModel main, string reportDir)
 {
     private const string FabricName = "E2E-Fabric";
     private const string PackName = "E2E-Pack";
@@ -77,6 +77,13 @@ internal sealed class SelfTest(MainWindow window, MainViewModel main, string rep
             if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "curseforge")
             {
                 await CurseForgeManualDownloadAsync();
+                Log("DONE");
+                window.Close();
+                return;
+            }
+            if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "multiplayer-guide")
+            {
+                await MultiplayerGuideAsync();
                 Log("DONE");
                 window.Close();
                 return;

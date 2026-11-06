@@ -26,22 +26,40 @@
           </StackPanel>
         </Border>
 
-        <!-- 还没开始：开房间 / 加入房间 -->
+        <!-- 引导：两种方式的区别、现在还缺什么 -->
+        <Border Classes="card" Margin="0" IsVisible="{Binding IsIdle}">
+          <StackPanel Spacing="6">
+            <TextBlock Classes="h2" Text="{l:T multiplayer.guide.title}" Margin="0" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.guide.hint}" />
+          </StackPanel>
+        </Border>
+
+        <!-- 开房间用的游戏：房间码和直连共用 -->
+        <Border Classes="card" Margin="0" IsVisible="{Binding IsIdle}">
+          <StackPanel Spacing="8">
+            <TextBlock Classes="h2" Text="{l:T multiplayer.game.title}" Margin="0" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.game.hint}" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.host.hint}" />
+            <Grid ColumnDefinitions="*,Auto">
+              <ComboBox ItemsSource="{Binding LanGames}" SelectedItem="{Binding SelectedLanGame}" HorizontalAlignment="Stretch" PlaceholderText="{l:T multiplayer.lan.empty}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate DataType="vm:LanGameItem"><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}" /></DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <Button Grid.Column="1" Content="{l:T common.find}" Command="{Binding ScanCommand}" Margin="6,0,0,0" ToolTip.Tip="{l:T multiplayer.lan.scan_tooltip}" />
+            </Grid>
+            <TextBox Text="{Binding ManualPort}" PlaceholderText="{l:T multiplayer.lan.port_placeholder}" />
+          </StackPanel>
+        </Border>
+
+        <!-- 方式一：房间码（经联机节点） -->
+        <TextBlock Classes="h2" Text="{l:T multiplayer.room_mode.heading}" Margin="0,4,0,0" IsVisible="{Binding IsIdle}" />
         <Grid ColumnDefinitions="*,14,*" IsVisible="{Binding IsIdle}">
           <Border Classes="card" Margin="0">
             <StackPanel Spacing="8">
               <TextBlock Classes="h2" Text="{l:T multiplayer.host.title}" Margin="0" />
-              <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
-                         Text="{l:T multiplayer.host.hint}" />
-              <Grid ColumnDefinitions="*,Auto">
-                <ComboBox ItemsSource="{Binding LanGames}" SelectedItem="{Binding SelectedLanGame}" HorizontalAlignment="Stretch" PlaceholderText="{l:T multiplayer.lan.empty}">
-                  <ComboBox.ItemTemplate>
-                    <DataTemplate DataType="vm:LanGameItem"><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}" /></DataTemplate>
-                  </ComboBox.ItemTemplate>
-                </ComboBox>
-                <Button Grid.Column="1" Content="{l:T common.find}" Command="{Binding ScanCommand}" Margin="6,0,0,0" ToolTip.Tip="{l:T multiplayer.lan.scan_tooltip}" />
-              </Grid>
-              <TextBox Text="{Binding ManualPort}" PlaceholderText="{l:T multiplayer.lan.port_placeholder}" />
+              <TextBlock FontSize="12" TextWrapping="Wrap" Text="{Binding GameStatusText}" Classes.hint="{Binding HasHostGame}" />
+              <TextBlock FontSize="12" TextWrapping="Wrap" Text="{Binding NodesStatusText}" Classes.hint="{Binding HasNodes}" />
               <Button Classes="primary" Content="{l:T multiplayer.host.create}" Command="{Binding CreateRoomCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
             </StackPanel>
           </Border>
@@ -55,10 +73,45 @@
           </Border>
         </Grid>
 
-        <!-- 直连房间：不用联机节点 -->
+        <!-- 联机节点：收起时标题里显示有几个；没有节点时默认展开。房间里也要能导出分享码给朋友，所以一直显示。 -->
+        <Expander HorizontalAlignment="Stretch" IsExpanded="{Binding NodesExpanded}">
+          <Expander.Header>
+            <TextBlock Text="{Binding NodesHeaderText}" TextWrapping="Wrap" FontWeight="SemiBold" />
+          </Expander.Header>
+          <StackPanel Spacing="6">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center"
+                         Text="{l:T multiplayer.nodes.hint}" />
+              <Button Grid.Column="1" Content="{l:T multiplayer.nodes.test_latency}" Command="{Binding TestNodesCommand}" Margin="12,0,0,0" VerticalAlignment="Top" />
+            </Grid>
+            <TextBlock Classes="hint" Text="{l:T multiplayer.nodes.empty}" IsVisible="{Binding !Nodes.Count}" />
+            <ItemsControl ItemsSource="{Binding Nodes}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:NodeItem">
+                  <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,2">
+                    <TextBlock Text="{Binding Url}" FontFamily="Consolas,monospace" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Url}" />
+                    <TextBlock Grid.Column="1" Text="{Binding LatencyText}" Classes="hint" VerticalAlignment="Center" Margin="10,0" />
+                    <Button Grid.Column="2" Content="{l:T common.delete}" Command="{Binding $parent[ItemsControl].((vm:MultiplayerViewModel)DataContext).RemoveNodeCommand}" CommandParameter="{Binding}" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBox Text="{Binding NewNodeUrl}" PlaceholderText="{l:T multiplayer.nodes.address_placeholder}" FontFamily="Consolas,monospace" />
+              <Button Grid.Column="1" Content="{l:T common.add}" Command="{Binding AddNodeCommand}" Margin="6,0,0,0" />
+            </Grid>
+            <Grid ColumnDefinitions="*,Auto,Auto">
+              <TextBox Text="{Binding ShareCodeText}" PlaceholderText="{l:T multiplayer.nodes.share_placeholder}" />
+              <Button Grid.Column="1" Content="{l:T common.import}" Command="{Binding ImportNodesCommand}" Margin="6,0,0,0" />
+              <Button Grid.Column="2" Content="{l:T multiplayer.nodes.export}" Command="{Binding ExportNodesCommand}" Margin="6,0,0,0" />
+            </Grid>
+          </StackPanel>
+        </Expander>
+
+        <!-- 方式二：直连（不用联机节点） -->
+        <TextBlock Classes="h2" Text="{l:T multiplayer.direct.heading}" Margin="0,4,0,0" IsVisible="{Binding IsIdle}" />
         <Border Classes="card" Margin="0" IsVisible="{Binding IsIdle}">
           <StackPanel Spacing="8">
-            <TextBlock Classes="h2" Text="{l:T multiplayer.direct.heading}" Margin="0" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
                        Text="{l:T multiplayer.direct.hint}" />
             <WrapPanel ItemSpacing="6" LineSpacing="4">
@@ -70,6 +123,7 @@
             <Grid ColumnDefinitions="*,14,*">
               <StackPanel Spacing="6">
                 <TextBlock Text="{l:T multiplayer.direct.host_title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock FontSize="12" TextWrapping="Wrap" Text="{Binding GameStatusText}" Classes.hint="{Binding HasHostGame}" />
                 <Button Classes="primary" Content="{l:T multiplayer.direct.create}" Command="{Binding CreateDirectRoomCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
               </StackPanel>
               <StackPanel Grid.Column="2" Spacing="6">
@@ -78,47 +132,50 @@
                 <Button Classes="primary" Content="{l:T common.join}" Command="{Binding JoinDirectCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
               </StackPanel>
             </Grid>
-            <Expander>
-              <Expander.Header>
-                <TextBlock Text="{l:T multiplayer.direct.stun_heading}" TextWrapping="Wrap" />
-              </Expander.Header>
+          </StackPanel>
+        </Border>
+
+        <!-- 高级选项：默认收起，标题里显示开了哪些 -->
+        <Expander IsVisible="{Binding IsIdle}" HorizontalAlignment="Stretch">
+          <Expander.Header>
+            <TextBlock Text="{Binding AdvancedHeaderText}" TextWrapping="Wrap" FontWeight="SemiBold" />
+          </Expander.Header>
+          <StackPanel Spacing="14">
+            <StackPanel Spacing="4">
+              <CheckBox Content="{l:T multiplayer.lan.full_mode}" IsChecked="{Binding FullLanMode}" />
+              <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
+                         Text="{l:T multiplayer.lan.full_mode_hint}" />
+              <CheckBox Content="{l:T multiplayer.exit.allow}" IsChecked="{Binding AllowExitNode}" IsEnabled="{Binding FullLanMode}" Margin="0,6,0,0" />
+              <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowExitNode}" Foreground="{DynamicResource WarningText}"
+                         Text="{l:T multiplayer.exit.warning}" />
+              <CheckBox Content="{l:T multiplayer.proxy.allow}" IsChecked="{Binding AllowGameProxy}" Margin="0,6,0,0" />
+              <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowGameProxy}" Foreground="{DynamicResource WarningText}"
+                         Text="{l:T multiplayer.proxy.allow_warning}" />
+            </StackPanel>
+
+            <!-- 数据封装（开房间时选；加入时按房间码） -->
+            <StackPanel Spacing="4">
+              <!-- 窄窗口、长译文时自动换行。 -->
+              <WrapPanel ItemSpacing="8" LineSpacing="4">
+                <TextBlock Text="{l:T multiplayer.transport.label}" VerticalAlignment="Center" FontWeight="SemiBold" />
+                <ComboBox ItemsSource="{Binding TransportChoices}" SelectedItem="{Binding SelectedTransport}" MinWidth="140">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate DataType="vm:TransportChoice"><TextBlock Text="{Binding Label}" /></DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <CheckBox Content="{l:T multiplayer.transport.disguise}" IsChecked="{Binding DisguiseAsMinecraft}" IsEnabled="{Binding CanDisguise}" />
+              </WrapPanel>
+              <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding SelectedTransport.Detail}" />
+              <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
+                         Text="{l:T multiplayer.transport.hint}" />
+            </StackPanel>
+
+            <StackPanel Spacing="4">
+              <TextBlock Text="{l:T multiplayer.direct.stun_heading}" TextWrapping="Wrap" FontWeight="SemiBold" />
               <TextBox Text="{Binding StunText}" PlaceholderText="{l:T multiplayer.direct.stun_placeholder}" />
-            </Expander>
+            </StackPanel>
           </StackPanel>
-        </Border>
-
-        <Border Classes="card" Margin="0" IsVisible="{Binding IsIdle}">
-          <StackPanel Spacing="4">
-            <CheckBox Content="{l:T multiplayer.lan.full_mode}" IsChecked="{Binding FullLanMode}" />
-            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
-                       Text="{l:T multiplayer.lan.full_mode_hint}" />
-            <CheckBox Content="{l:T multiplayer.exit.allow}" IsChecked="{Binding AllowExitNode}" IsEnabled="{Binding FullLanMode}" Margin="0,6,0,0" />
-            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowExitNode}" Foreground="{DynamicResource WarningText}"
-                       Text="{l:T multiplayer.exit.warning}" />
-            <CheckBox Content="{l:T multiplayer.proxy.allow}" IsChecked="{Binding AllowGameProxy}" Margin="0,6,0,0" />
-            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowGameProxy}" Foreground="{DynamicResource WarningText}"
-                       Text="{l:T multiplayer.proxy.allow_warning}" />
-          </StackPanel>
-        </Border>
-
-        <!-- 数据封装（开房间时选；加入时按房间码） -->
-        <Border Classes="card" Margin="0" IsVisible="{Binding IsIdle}">
-          <StackPanel Spacing="4">
-            <!-- 窄窗口、长译文时自动换行。 -->
-            <WrapPanel ItemSpacing="8" LineSpacing="4">
-              <TextBlock Text="{l:T multiplayer.transport.label}" VerticalAlignment="Center" FontWeight="SemiBold" />
-              <ComboBox ItemsSource="{Binding TransportChoices}" SelectedItem="{Binding SelectedTransport}" MinWidth="140">
-                <ComboBox.ItemTemplate>
-                  <DataTemplate DataType="vm:TransportChoice"><TextBlock Text="{Binding Label}" /></DataTemplate>
-                </ComboBox.ItemTemplate>
-              </ComboBox>
-              <CheckBox Content="{l:T multiplayer.transport.disguise}" IsChecked="{Binding DisguiseAsMinecraft}" IsEnabled="{Binding CanDisguise}" />
-            </WrapPanel>
-            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding SelectedTransport.Detail}" />
-            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
-                       Text="{l:T multiplayer.transport.hint}" />
-          </StackPanel>
-        </Border>
+        </Expander>
 
         <!-- 加入方：房主发起的测试正在进行 -->
         <Border Classes="card" Margin="0" IsVisible="{Binding GuestTestRunning}" BorderBrush="#E0703A" BorderThickness="2">
@@ -174,6 +231,10 @@
             <TextBlock Classes="h2" Text="{l:T multiplayer.direct.title}" Margin="0" />
             <TextBlock Text="{Binding CurrentPathText}" FontWeight="SemiBold" TextWrapping="Wrap" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding DirectHint}" />
+            <StackPanel IsVisible="{Binding MyDirectCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+              <TextBlock Text="{l:T multiplayer.direct.invite_label}" FontWeight="SemiBold" TextWrapping="Wrap" IsVisible="{Binding IsDirectHost}" />
+              <TextBlock Text="{l:T multiplayer.direct.reply_label}" FontWeight="SemiBold" TextWrapping="Wrap" IsVisible="{Binding !IsDirectHost}" />
+            </StackPanel>
             <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding MyDirectCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
               <TextBox Text="{Binding MyDirectCode}" IsReadOnly="True" FontFamily="Consolas,monospace" FontSize="{StaticResource FontCaption}" TextWrapping="Wrap" MaxHeight="70" />
               <Button Grid.Column="1" Content="{l:T common.copy}" Command="{Binding CopyDirectCodeCommand}" Margin="6,0,0,0" VerticalAlignment="Top" />
@@ -315,40 +376,6 @@
           </StackPanel>
         </Border>
 
-        <!-- 联机节点 -->
-        <Border Classes="card" Margin="0">
-          <StackPanel Spacing="6">
-            <Grid ColumnDefinitions="*,Auto">
-              <TextBlock Text="{l:T multiplayer.nodes.title}" FontWeight="SemiBold" VerticalAlignment="Center" />
-              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
-                <Button Content="{l:T multiplayer.nodes.test_latency}" Command="{Binding TestNodesCommand}" />
-              </StackPanel>
-            </Grid>
-            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
-                       Text="{l:T multiplayer.nodes.hint}" />
-            <TextBlock Classes="hint" Text="{l:T multiplayer.nodes.empty}" IsVisible="{Binding !Nodes.Count}" />
-            <ItemsControl ItemsSource="{Binding Nodes}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate DataType="vm:NodeItem">
-                  <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,2">
-                    <TextBlock Text="{Binding Url}" FontFamily="Consolas,monospace" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Url}" />
-                    <TextBlock Grid.Column="1" Text="{Binding LatencyText}" Classes="hint" VerticalAlignment="Center" Margin="10,0" />
-                    <Button Grid.Column="2" Content="{l:T common.delete}" Command="{Binding $parent[ItemsControl].((vm:MultiplayerViewModel)DataContext).RemoveNodeCommand}" CommandParameter="{Binding}" />
-                  </Grid>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-            <Grid ColumnDefinitions="*,Auto">
-              <TextBox Text="{Binding NewNodeUrl}" PlaceholderText="{l:T multiplayer.nodes.address_placeholder}" FontFamily="Consolas,monospace" />
-              <Button Grid.Column="1" Content="{l:T common.add}" Command="{Binding AddNodeCommand}" Margin="6,0,0,0" />
-            </Grid>
-            <Grid ColumnDefinitions="*,Auto,Auto">
-              <TextBox Text="{Binding ShareCodeText}" PlaceholderText="{l:T multiplayer.nodes.share_placeholder}" />
-              <Button Grid.Column="1" Content="{l:T common.import}" Command="{Binding ImportNodesCommand}" Margin="6,0,0,0" />
-              <Button Grid.Column="2" Content="{l:T multiplayer.nodes.export}" Command="{Binding ExportNodesCommand}" Margin="6,0,0,0" />
-            </Grid>
-          </StackPanel>
-        </Border>
       </StackPanel>
     </ScrollViewer>
 
