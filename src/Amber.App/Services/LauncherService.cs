@@ -291,4 +291,5 @@ public sealed class LauncherService : IDisposable
     }
 }
 
-public sealed record LaunchRequest(string VersionId, string? JoinServer = null, string? JoinWorld = null);
+/// <summary>启动请求。SkipBake：这一次不烘焙（烘焙后游戏没进主界面就崩了，玩家点了“不烘焙再启动”）。</summary>
+public sealed record LaunchRequest(string VersionId, string? JoinServer = null, string? JoinWorld = null, bool SkipBake = false);

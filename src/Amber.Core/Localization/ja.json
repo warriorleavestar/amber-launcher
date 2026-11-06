@@ -1244,5 +1244,8 @@
   "settings.bake.title": "ベイク（実験的）",
   "settings.bake.toggle": "起動前に Mod をベイクする",
   "settings.bake.hint": "Jay の汎用ローダーで Mod の再マッピングと依存関係の解決を事前に行い、その結果から起動します。現在は Minecraft 1.21.1 の Fabric、Quilt、バニラのみ対応。失敗時は通常どおり起動します。",
-  "settings.bake.loader_hint": "汎用ローダーのフォルダー（空欄なら環境変数 AMBER_BAKE_LOADER）"
+  "settings.bake.loader_hint": "汎用ローダーのフォルダー（空欄なら環境変数 AMBER_BAKE_LOADER）",
+  "home.bake.crashed": "ベイク後に起動したゲームがメイン画面に入る前に終了しました。ローダーのプロトタイプが一部の MOD に対応していない可能性があります。ベイクせずにもう一度起動するか、設定で「ベイク（実験的）」をオフにしてください。",
+  "home.bake.crashed_toast": "{0} はベイク後に起動できませんでした",
+  "home.bake.retry_without": "ベイクせずに起動"
 }

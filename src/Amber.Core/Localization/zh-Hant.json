@@ -1244,5 +1244,8 @@
   "settings.bake.title": "烘焙（實驗）",
   "settings.bake.toggle": "啟動前先烘焙模組",
   "settings.bake.hint": "用 Jay 的通用載入器預先重新對應模組、解析依賴，啟動時直接用處理結果。目前只支援 Minecraft 1.21.1 的 Fabric、Quilt 和原版實例。失敗時自動按一般方式啟動。",
-  "settings.bake.loader_hint": "通用載入器目錄（留空時用環境變數 AMBER_BAKE_LOADER）"
+  "settings.bake.loader_hint": "通用載入器目錄（留空時用環境變數 AMBER_BAKE_LOADER）",
+  "home.bake.crashed": "烘焙後啟動的遊戲沒進主畫面就結束了，可能是載入器原型和某個模組不相容。可以不烘焙再啟動一次，或在設定裡關閉「烘焙（實驗）」。",
+  "home.bake.crashed_toast": "{0} 烘焙後啟動失敗，沒進主畫面",
+  "home.bake.retry_without": "不烘焙再啟動"
 }

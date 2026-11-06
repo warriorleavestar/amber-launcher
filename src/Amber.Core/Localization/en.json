@@ -1275,5 +1275,8 @@
   "settings.bake.title": "Baking (experimental)",
   "settings.bake.toggle": "Bake mods before launching",
   "settings.bake.hint": "Uses Jay's universal loader to remap mods and resolve dependencies ahead of time, then launches from the result. Currently only Minecraft 1.21.1 Fabric, Quilt and vanilla instances. Falls back to a normal launch on failure.",
-  "settings.bake.loader_hint": "Universal loader folder (blank uses the AMBER_BAKE_LOADER environment variable)"
+  "settings.bake.loader_hint": "Universal loader folder (blank uses the AMBER_BAKE_LOADER environment variable)",
+  "home.bake.crashed": "The game launched from the baked setup exited before reaching the main menu. The loader prototype may not support one of your mods. Launch once more without baking, or turn off “Baking (experimental)” in Settings.",
+  "home.bake.crashed_toast": "{0} failed to start after baking",
+  "home.bake.retry_without": "Launch without baking"
 }
