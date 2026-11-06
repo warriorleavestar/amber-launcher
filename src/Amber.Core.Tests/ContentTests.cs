@@ -356,7 +356,7 @@ public class ContentTests : IDisposable
     public void ExportCandidates_SkipsGeneratedFolders()
     {
         var work = Path.Combine(_root, "inst");
-        foreach (var d in new[] { "mods", "config", "saves", "logs", "natives", "backups" }) Directory.CreateDirectory(Path.Combine(work, d));
+        foreach (var d in new[] { "mods", "config", "saves", "logs", "natives", "backups", ".amber-ul" }) Directory.CreateDirectory(Path.Combine(work, d));
         File.WriteAllText(Path.Combine(work, "options.txt"), "x");
         File.WriteAllText(Path.Combine(work, "inst.json"), "{}");
         File.WriteAllText(Path.Combine(work, "amber-instance.json"), "{}");

@@ -52,6 +52,7 @@
                 <Button Content="{l:T common.open_folder}" Command="{Binding OpenModsFolderCommand}" />
                 <Button Content="{l:T common.check_updates}" Command="{Binding CheckModUpdatesCommand}" />
                 <Button Content="{l:T common.update_all}" Command="{Binding UpdateAllModsCommand}" />
+                <Button Content="{l:T instance.bake.now}" Command="{Binding BakeNowCommand}" IsVisible="{Binding BakeEnabled}" ToolTip.Tip="{l:T instance.bake.now_hint}" />
               </WrapPanel>
             </StackPanel>
             <StackPanel Grid.Row="1" Spacing="4" Margin="0,0,0,6" IsVisible="{Binding CompatSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">

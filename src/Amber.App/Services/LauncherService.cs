@@ -278,7 +278,35 @@ public sealed class LauncherService : IDisposable
     public LaunchOptions BaseLaunchOptions(GameContext ctx, string id, string javaPath, GameSession session, IReadOnlyList<string> sessionJvmArgs) =>
         EffectiveSettings(ctx, id).ToLaunchOptions(ctx.Directory, id, javaPath, session, sessionJvmArgs) with { NoTrace = Settings.NoTrace };
 
-    public GameInstance GetInstance(string id) => GameInstance.Detect(Directory, id, WorkDirFor(id));
+    public GameInstance GetInstance(string id) => GetInstance(Context, id);
+
+    public GameInstance GetInstance(GameContext ctx, string id) => GameInstance.Detect(ctx.Directory, id, WorkDirFor(ctx, id));
+
+    /// <summary>实验功能“烘焙”：开了并且找到了加载器原型时返回服务，否则 null。缓存放在数据目录，所有实例共用。</summary>
+    public Amber.Core.Bake.BakeService? Bake =>
+        Settings.ExperimentalBake && Amber.Core.Bake.BakeToolkit.Find(Settings.BakeLoaderPath) is { } toolkit
+            ? new Amber.Core.Bake.BakeService(toolkit, Path.Combine(AppSettings.DataDir, "bake-cache"))
+            : null;
+
+    /// <summary>
+    /// 启动前的烘焙：实例支持时，输入没变就直接用上次的结果，变了就先烘焙模组和实例。
+    /// 返回 null 表示这次按普通方式启动（没开、不支持）；reason 是给日志看的原因。
+    /// </summary>
+    public Task<(Amber.Core.Bake.BakedLaunch? Launch, string Reason)> PrepareBakeAsync(string id, string javaPath, IProgress<Amber.Core.Bake.BakeEvent>? progress, CancellationToken ct)
+        => PrepareBakeAsync(Context, id, javaPath, progress, ct);
+
+    /// <summary>烘焙与本次启动共用固定的游戏目录；中途切换目录不会混用另一个同名实例。</summary>
+    public async Task<(Amber.Core.Bake.BakedLaunch? Launch, string Reason)> PrepareBakeAsync(GameContext ctx, string id, string javaPath, IProgress<Amber.Core.Bake.BakeEvent>? progress, CancellationToken ct)
+    {
+        if (Bake is not { } bake) return (null, Settings.ExperimentalBake ? Amber.Core.Localization.L.T("core.bake.loader_missing") : "");
+        var instance = GetInstance(ctx, id);
+        var (_, _, supported) = await bake.VersionAsync(javaPath, ct);
+        if (!Amber.Core.Bake.BakeService.Supports(instance, supported, out var reason)) return (null, reason);
+        var major = ctx.Directory.ResolveVersion(id).JavaVersion?.MajorVersion ?? 21;
+        if (bake.Current(ctx.Directory, instance, major) is { } current) return (current, Amber.Core.Localization.L.T("core.bake.reused"));
+        await bake.BakeModsAsync(javaPath, ctx.Directory, instance, progress, ct);
+        return (await bake.BakeInstanceAsync(javaPath, major, ctx.Directory, instance, progress, ct), Amber.Core.Localization.L.T("core.bake.done"));
+    }
 
     /// <summary>整合包的文件都在版本目录里，这个版本必须固定开启隔离。</summary>
     public void ForceIsolated(string id)
@@ -301,7 +329,12 @@ public sealed class LauncherService : IDisposable
     }
 }
 
-public sealed record LaunchRequest(string VersionId, string? JoinServer = null, string? JoinWorld = null);
+/// <summary>启动请求。SkipBake：这一次不烘焙（烘焙后游戏没进主界面就崩了，玩家点了“不烘焙再启动”）。</summary>
+public sealed record LaunchRequest(string VersionId, string? JoinServer = null, string? JoinWorld = null, bool SkipBake = false)
+{
+    // 只供本机烘焙重试使用；排队或等待多开确认期间切换目录后，原请求不能落到同名实例。
+    internal GameContext? ExpectedContext { get; init; }
+}
 
 /// <summary>一个游戏目录，以及建在它上面的下载器、安装器、Java、加载器和资源安装（一起创建，之后不变）。</summary>
 public sealed record GameContext(
