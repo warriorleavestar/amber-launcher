@@ -842,6 +842,7 @@
   "multiplayer.chat.send_failed": "发送失败：{0}",
   "multiplayer.chat.title": "房间聊天",
   "multiplayer.code.reply_misplaced": "这是直连回复码，不用贴在这里：加入方把它发给房主，由房主贴到直连房间的回复码框里。",
+  "multiplayer.code.node_misplaced": "这是联机节点分享码，不是房间码：已放到下面“联机节点”的导入框里。确认是信得过的人给的，再点“导入”。",
   "multiplayer.component.download": "下载联机组件",
   "multiplayer.component.download_cancelled": "已取消下载",
   "multiplayer.component.download_failed": "下载失败：{0}",

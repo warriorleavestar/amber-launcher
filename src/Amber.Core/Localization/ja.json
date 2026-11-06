@@ -842,6 +842,7 @@
   "multiplayer.chat.send_failed": "送信に失敗しました：{0}",
   "multiplayer.chat.title": "ルームチャット",
   "multiplayer.code.reply_misplaced": "これは直接接続の返信コードなので、ここには貼りません：参加する人がホストに送り、ホストが直接接続ルームの返信コード欄に貼り付けます。",
+  "multiplayer.code.node_misplaced": "これはノード共有コードで、ルームコードではありません。下の「ノード」のインポート欄に入れました。信頼できる相手からのものなら「インポート」を押してください。",
   "multiplayer.component.download": "マルチプレイ用コンポーネントをダウンロード",
   "multiplayer.component.download_cancelled": "ダウンロードをキャンセルしました",
   "multiplayer.component.download_failed": "ダウンロードに失敗しました：{0}",

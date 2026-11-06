@@ -842,6 +842,7 @@
   "multiplayer.chat.send_failed": "傳送失敗：{0}",
   "multiplayer.chat.title": "房間聊天",
   "multiplayer.code.reply_misplaced": "這是直連回覆碼，不用貼在這裡：加入方把它傳給房主，由房主貼到直連房間的回覆碼框裡。",
+  "multiplayer.code.node_misplaced": "這是連線節點分享碼，不是房間碼：已放到下面「連線節點」的匯入框裡。確認是信得過的人給的，再點「匯入」。",
   "multiplayer.component.download": "下載連線元件",
   "multiplayer.component.download_cancelled": "已取消下載",
   "multiplayer.component.download_failed": "下載失敗：{0}",

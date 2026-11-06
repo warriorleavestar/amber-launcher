@@ -74,25 +74,32 @@ public sealed class MultiplayerGuideTests
     });
 
     [Fact]
-    public void NodeShareCodeInRoomBoxIsImported() => UiTestThread.Run(() =>
+    public void NodeShareCodeInRoomBoxMovesToImportBoxWithoutImporting() => UiTestThread.Run(() =>
     {
         var (service, vm, _) = Create();
         using var __ = service;
-        vm.JoinCode = RelayNodes.Encode(null, ["tcp://example.com:11010"]);
+        var code = RelayNodes.Encode(null, ["tcp://example.com:11010"]);
+        vm.JoinCode = code;
         vm.JoinCommand.Execute(null);
         Assert.Equal("", vm.JoinCode);
-        Assert.Equal("tcp://example.com:11010", Assert.Single(vm.Nodes).Url);
+        Assert.Equal(code, vm.ShareCodeText);
+        Assert.Empty(vm.Nodes);
+        Assert.True(vm.NodesExpanded);
+        Assert.Equal(L.T("multiplayer.code.node_misplaced"), vm.Status);
         Assert.True(vm.IsIdle);
     });
 
     [Fact]
-    public void NodeShareCodeInDirectBoxIsImported() => UiTestThread.Run(() =>
+    public void NodeShareCodeInDirectBoxMovesToImportBoxWithoutImporting() => UiTestThread.Run(() =>
     {
         var (service, vm, _) = Create();
         using var __ = service;
         vm.DirectInviteInput = "节点：" + RelayNodes.Encode(null, ["tcp://example.org:11010"]);
         vm.JoinDirectCommand.Execute(null);
         Assert.Equal("", vm.DirectInviteInput);
+        Assert.Empty(vm.Nodes);
+        // 用户确认后自己点导入，才真正加进去。
+        vm.ImportNodesCommand.Execute(null);
         Assert.Equal("tcp://example.org:11010", Assert.Single(vm.Nodes).Url);
     });
 

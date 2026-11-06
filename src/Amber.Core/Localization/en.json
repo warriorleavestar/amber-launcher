@@ -868,6 +868,7 @@
   "multiplayer.chat.send_failed": "Could not send: {0}",
   "multiplayer.chat.title": "Room chat",
   "multiplayer.code.reply_misplaced": "That's a direct reply code and doesn't go here: the joining player sends it to the host, who pastes it into the reply code box of the direct room.",
+  "multiplayer.code.node_misplaced": "This is a node share code, not a room code. It has been put in the import box under “Relay nodes”. Click “Import” only if it came from someone you trust.",
   "multiplayer.component.download": "Download multiplayer component",
   "multiplayer.component.download_cancelled": "Download canceled",
   "multiplayer.component.download_failed": "Download failed: {0}",

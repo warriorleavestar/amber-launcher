@@ -95,9 +95,11 @@ public sealed partial class MultiplayerViewModel
                 JoinDirectCommand.Execute(null);
                 return true;
             case PastedCodeKind.NodeShare:
+                // 节点会被保存、以后每次联机都用：不在“加入”框里静默导入，放进节点导入框让用户确认。
                 clearSource();
                 ShareCodeText = text;
-                ImportNodes();
+                NodesExpanded = true;
+                SetStatus(StatusMessage.Warning("multiplayer.code.node_misplaced"));
                 return true;
             case PastedCodeKind.DirectReply:
                 SetStatus(StatusMessage.Warning("multiplayer.code.reply_misplaced"));
