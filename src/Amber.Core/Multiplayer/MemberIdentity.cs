@@ -22,6 +22,8 @@ public sealed class MemberIdentity : IDisposable
     private readonly string _directory;
     private readonly Lock _gate = new();
     private X25519KeyPair _key;
+    /// <summary>重置前的旧密钥：正在进行的握手可能还拿着它，留到 Dispose 才清零。</summary>
+    private readonly List<X25519KeyPair> _retired = [];
 
     private MemberIdentity(string directory, X25519KeyPair key, string? warning)
     {
@@ -30,7 +32,7 @@ public sealed class MemberIdentity : IDisposable
         Warning = warning;
     }
 
-    /// <summary>当前的密钥对。<see cref="Reset"/> 之后换成新的，旧的被清零，别长期持有。</summary>
+    /// <summary>当前的密钥对。<see cref="Reset"/> 之后换成新的；旧的在这个对象 Dispose 前一直可用（正在进行的握手不会突然失效）。</summary>
     public X25519KeyPair KeyPair { get { lock (_gate) return _key; } }
 
     public byte[] PublicKey => (byte[])KeyPair.PublicKey.Clone();
@@ -75,7 +77,10 @@ public sealed class MemberIdentity : IDisposable
         return created;
     }
 
-    /// <summary>换一个新身份（用户点“重置身份”）。之前认识你的房主会把你当成新成员。</summary>
+    /// <summary>
+    /// 换一个新身份（用户点“重置身份”）。之前认识你的房主会把你当成新成员。
+    /// 界面只在没有开房间、没有加入房间时允许；即使这时还有握手在用旧密钥，旧密钥也留到 Dispose 才清零。
+    /// </summary>
     public void Reset()
     {
         lock (_gate)
@@ -84,7 +89,7 @@ public sealed class MemberIdentity : IDisposable
             _key = X25519KeyPair.Generate();
             Warning = null;
             Save();
-            old.Dispose();
+            _retired.Add(old);
         }
     }
 
@@ -133,7 +138,12 @@ public sealed class MemberIdentity : IDisposable
 
     public void Dispose()
     {
-        lock (_gate) _key.Dispose();
+        lock (_gate)
+        {
+            _key.Dispose();
+            foreach (var old in _retired) old.Dispose();
+            _retired.Clear();
+        }
     }
 
     private static byte[] Protect(string directory, byte[] raw)

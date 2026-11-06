@@ -8,13 +8,14 @@ using System.Text;
 namespace Amber.Core.Multiplayer.Transport;
 
 /// <summary>
-/// Noise 协议框架（https://noiseprotocol.org/noise.html ，第 34 版）的一个最小实现，只用系统自带的密码原语：
-/// X25519（Windows CNG）、ChaCha20-Poly1305、SHA-256 / HMAC-SHA256。不自己发明任何原语或构造。
+/// Noise 协议框架（https://noiseprotocol.org/noise.html ，第 34 版）的一个最小实现，只用现成的标准密码原语：
+/// X25519（BouncyCastle 的 RFC 7748 实现）、ChaCha20-Poly1305、SHA-256 / HMAC-SHA256（.NET 自带）。不自己发明任何原语或构造。
 /// 支持三种握手：
 ///   Noise_NNpsk0_25519_ChaChaPoly_SHA256：-> psk, e   &lt;- e, ee
 ///   Noise_NNhfspsk0_25519+MLKEM768_ChaChaPoly_SHA256：-> psk, e, e1   &lt;- e, ee, ekem1（Noise HFS 扩展，KEM 用 ML-KEM-768，混合抗量子）
 ///   Noise_XXpsk3_25519_ChaChaPoly_SHA256：-> e   &lt;- e, ee, s, es   -> s, se, psk（规范 7.5、9 节；双方交换长期身份公钥）
-/// psk 由房间密钥派生，所以只有知道房间码的人能完成握手；每次连接的临时密钥带来前向保密。
+/// psk 由调用方给：房间里的连接用房间密钥派生的值，敲门（加入前的握手）用邀请码里的一次性令牌派生的值；
+/// 没有这个 psk 的人完成不了握手。每次连接的临时密钥带来前向保密。
 /// </summary>
 public sealed class CipherState : IDisposable
 {

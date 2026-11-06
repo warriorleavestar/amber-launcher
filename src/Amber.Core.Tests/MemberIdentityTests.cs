@@ -81,6 +81,18 @@ public sealed class MemberIdentityTests : IDisposable
         Assert.Equal(identity.PublicKey, again.PublicKey);
     }
 
+    /// <summary>重置时正在用的旧密钥不会被清零：拿着它的握手照样能算完（之后由 Dispose 统一清零）。</summary>
+    [Fact]
+    public void ResetKeepsOldKeyUsable()
+    {
+        using var identity = MemberIdentity.LoadOrCreate(_dir);
+        var held = identity.KeyPair;
+        var before = held.PublicKey.ToArray();
+        identity.Reset();
+        using var other = Amber.Core.Multiplayer.Transport.X25519KeyPair.Generate();
+        Assert.Equal(other.Dh(before), held.Dh(other.PublicKey));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_dir)) Directory.Delete(_dir, true);
