@@ -500,7 +500,8 @@ public sealed partial class HomeViewModel : PageViewModel
                         run.Baked = true;
                     }
                 }
-                catch (Exception e) when (e is Amber.Core.Bake.BakeException or IOException or InvalidDataException or System.ComponentModel.Win32Exception or System.Text.Json.JsonException)
+                catch (Exception e) when (e is Amber.Core.Bake.BakeException or IOException or InvalidDataException or System.ComponentModel.Win32Exception or System.Text.Json.JsonException
+                                           or InvalidOperationException or FormatException)
                 {
                     // 实验功能失败时不挡住游戏：记下原因，按普通方式启动。
                     _log.AddRaw(run.Log, "[Bake] " + L.F("home.bake.fallback", e.Message));
