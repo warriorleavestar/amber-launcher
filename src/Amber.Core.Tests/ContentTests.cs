@@ -1,6 +1,10 @@
 using System.IO.Compression;
+using System.Collections.Concurrent;
+using System.Net;
+using System.Security.Cryptography;
 using Amber.Core.Content;
 using Amber.Core.Install;
+using Amber.Core.Net;
 
 namespace Amber.Core.Tests;
 
@@ -143,7 +147,7 @@ public class ContentTests : IDisposable
     {
         public Action? BeforeGetFile { get; set; }
         public Exception? FileFailure { get; set; }
-        public ContentSource Source => ContentSource.Modrinth;
+        public ContentSource Source { get; init; } = ContentSource.Modrinth;
         public Task<SearchResult> SearchAsync(SearchQuery query, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<ContentProject> GetProjectAsync(string projectId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<ContentFile>> GetFilesAsync(string projectId, string? gameVersion, string? loader, CancellationToken ct = default) =>
@@ -196,6 +200,73 @@ public class ContentTests : IDisposable
 
         Assert.Equal(["a1", "api1"], none.Files.Select(f => f.FileId));
         Assert.Equal(["a1", "api1", "opac1"], picked.Files.Select(f => f.FileId));
+    }
+
+    [Fact]
+    public async Task CheckedRestrictedOptionalDependencyResumesAfterManualDownload()
+    {
+        // #22 的可选依赖和 #28 的分发限制组合：先完整预检，手动补齐后只下载主文件。
+        var primaryBytes = "downloaded primary mod"u8.ToArray();
+        var optionalBytes = "manually downloaded optional mod"u8.ToArray();
+        var optional = File_("OPTIONAL", "optional1") with
+        {
+            Source = ContentSource.CurseForge,
+            Url = "",
+            Sha1 = Convert.ToHexString(SHA1.HashData(optionalBytes)),
+            Size = optionalBytes.Length,
+            ManualDownloadPage = "https://www.curseforge.com/projects/123",
+        };
+        var primary = File_("PRIMARY", "primary1", deps:
+            [new(ContentSource.CurseForge, optional.ProjectId, null, DependencyKind.Optional)]) with
+        {
+            Source = ContentSource.CurseForge,
+            Url = "https://example.invalid/primary1.jar",
+            Sha1 = Convert.ToHexString(SHA1.HashData(primaryBytes)),
+            Size = primaryBytes.Length,
+        };
+        var provider = new FakeProvider(primary, optional) { Source = ContentSource.CurseForge };
+        using var handler = new PrimaryFileHandler(primary.Url, primaryBytes);
+        using var http = new HttpClient(handler);
+        var installer = new ContentInstaller(new Downloader(http, SourceChain.OfficialFirst),
+            new Dictionary<ContentSource, IContentProvider> { [ContentSource.CurseForge] = provider });
+        var instance = new GameInstance("i", "1.21.1", "fabric", "0.1", _root);
+        var picked = new HashSet<string> { optional.ProjectId };
+
+        Assert.Equal([primary.FileId], (await installer.ResolveAsync(primary, instance)).Files.Select(f => f.FileId));
+        var firstPlan = await installer.ResolveAsync(primary, instance, optionalProjects: picked);
+        Assert.Equal([primary.FileId, optional.FileId], firstPlan.Files.Select(f => f.FileId));
+        Assert.Empty(firstPlan.Problems);
+        var blocked = await Assert.ThrowsAsync<ManualDownloadRequiredException>(() => installer.InstallAsync(firstPlan, instance.ModsDir));
+        Assert.Same(optional, blocked.File);
+        Assert.Empty(handler.Requests);
+        Assert.Empty(Directory.EnumerateFiles(instance.ModsDir));
+
+        var manualPath = Path.Combine(instance.ModsDir, optional.FileName);
+        await File.WriteAllBytesAsync(manualPath, optionalBytes);
+        var resumedPlan = await installer.ResolveAsync(primary, instance, optionalProjects: picked);
+        Assert.Equal([primary.FileId, optional.FileId], resumedPlan.Files.Select(f => f.FileId));
+        Assert.Empty(resumedPlan.Problems);
+        await installer.InstallAsync(resumedPlan, instance.ModsDir);
+
+        Assert.Equal(primary.Url, Assert.Single(handler.Requests));
+        Assert.Equal(primaryBytes, await File.ReadAllBytesAsync(Path.Combine(instance.ModsDir, primary.FileName)));
+        Assert.Equal(optionalBytes, await File.ReadAllBytesAsync(manualPath));
+        Assert.Equal(2, Directory.EnumerateFiles(instance.ModsDir).Count());
+    }
+
+    private sealed class PrimaryFileHandler(string expectedUrl, byte[] payload) : HttpMessageHandler
+    {
+        public ConcurrentQueue<string> Requests { get; } = new();
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var url = request.RequestUri!.AbsoluteUri;
+            Requests.Enqueue(url);
+            Assert.Equal(expectedUrl, url);
+            Assert.Equal(HttpMethod.Get, request.Method);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(payload) });
+        }
     }
 
     [Fact]

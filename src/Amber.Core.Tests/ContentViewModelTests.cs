@@ -114,6 +114,51 @@ public sealed class ContentViewModelTests
         Assert.True(vm.HasOptionalDependencies);
     });
 
+    [Fact]
+    public void ChangingFileUpdatesManualDownloadAndOptionalDependenciesTogether() => Run((vm, modrinth, _) =>
+    {
+        modrinth.FileById = TestFile("OPAC", "opac1");
+        var restricted = TestFile("A", "a1", new ContentDependency(ContentSource.Modrinth, null, "opac1", DependencyKind.Optional)) with
+        {
+            Source = ContentSource.CurseForge,
+            Url = "",
+            ManualDownloadPage = "https://www.curseforge.com/projects/123",
+        };
+
+        vm.SelectedFile = new FileItem(restricted);
+        Assert.Equal(restricted.ManualDownloadPage, vm.ManualDownloadUrl);
+        Assert.True(vm.SelectedRequiresManualDownload);
+        Assert.Equal("opac1", Assert.Single(vm.OptionalDependencies).FileId);
+
+        vm.SelectedFile = new FileItem(TestFile("B", "b1"));
+        Assert.False(vm.HasManualDownload);
+        Assert.False(vm.SelectedRequiresManualDownload);
+        Assert.Empty(vm.OptionalDependencies);
+        Assert.True(vm.InstallCommand.CanExecute(null));
+
+        vm.SelectedFile = null;
+        Assert.False(vm.HasManualDownload);
+        Assert.False(vm.InstallCommand.CanExecute(null));
+    });
+
+    [Fact]
+    public void RestrictedDependencyHintStillAllowsRetryAfterManualDownload() => Run((vm, _, _) =>
+    {
+        vm.SelectedFile = new FileItem(TestFile("A", "a1"));
+        vm.ManualDownloadUrl = "https://www.curseforge.com/projects/123";
+
+        Assert.True(vm.HasManualDownload);
+        Assert.True(vm.InstallCommand.CanExecute(null));
+        vm.IsBusy = true;
+        Assert.False(vm.InstallCommand.CanExecute(null));
+        vm.IsBusy = false;
+        Assert.True(vm.InstallCommand.CanExecute(null));
+
+        vm.SelectedFile = null;
+        Assert.False(vm.HasManualDownload);
+        Assert.False(vm.InstallCommand.CanExecute(null));
+    });
+
     private static ContentFile TestFile(string project, string id, params ContentDependency[] dependencies) =>
         new(ContentSource.Modrinth, project, id, "name-" + id, id + ".jar", "https://x/" + id, null, 1,
             ["1.21.1"], ["fabric"], "release", default, dependencies);
