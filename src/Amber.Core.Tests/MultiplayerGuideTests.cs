@@ -116,6 +116,32 @@ public sealed class MultiplayerGuideTests
     });
 
     [Fact]
+    public void DirectInviteInRoomBoxMovesToDirectBox() => UiTestThread.Run(() =>
+    {
+        var (service, vm, _) = Create();
+        using var __ = service;
+        const string code = "AMBDIRECT1-eyJhIjoxfQ";
+        vm.JoinCode = code;
+        vm.JoinCommand.Execute(null);
+        Assert.Equal("", vm.JoinCode);
+        Assert.Equal(code, vm.DirectInviteInput);
+        Assert.True(vm.IsIdle);
+    });
+
+    [Fact]
+    public void RoomCodeInDirectBoxMovesToRoomBox() => UiTestThread.Run(() =>
+    {
+        var (service, vm, _) = Create();
+        using var __ = service;
+        const string code = "AMB-K7Q2M9XD-4HZP8RW2N6TC-25565";
+        vm.DirectInviteInput = code;
+        vm.JoinDirectCommand.Execute(null);
+        Assert.Equal("", vm.DirectInviteInput);
+        Assert.Equal(code, vm.JoinCode);
+        Assert.True(vm.IsIdle);
+    });
+
+    [Fact]
     public void RoomCodeInRoomBoxIsNotRerouted() => UiTestThread.Run(() =>
     {
         var (service, vm, _) = Create();
