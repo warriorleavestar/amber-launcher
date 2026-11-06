@@ -1278,5 +1278,7 @@
   "settings.bake.loader_hint": "Universal loader folder (blank uses the AMBER_BAKE_LOADER environment variable)",
   "home.bake.crashed": "The game launched from the baked setup exited before reaching the main menu. The loader prototype may not support one of your mods. Launch once more without baking, or turn off “Baking (experimental)” in Settings.",
   "home.bake.crashed_toast": "{0} failed to start after baking",
-  "home.bake.retry_without": "Launch without baking"
+  "home.bake.retry_without": "Launch without baking",
+  "home.bake.failed_title": "Baked launch failed",
+  "home.bake.retry_once": "Skips baking once; settings stay unchanged"
 }

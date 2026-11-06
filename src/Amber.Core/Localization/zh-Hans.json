@@ -1247,5 +1247,7 @@
   "settings.bake.loader_hint": "通用加载器目录（留空时用环境变量 AMBER_BAKE_LOADER）",
   "home.bake.crashed": "烘焙后启动的游戏没进主界面就退出了，可能是加载器原型和某个模组不兼容。可以不烘焙再启动一次，或者在设置里关闭“烘焙（实验）”。",
   "home.bake.crashed_toast": "{0} 烘焙后启动失败，没进主界面",
-  "home.bake.retry_without": "不烘焙再启动"
+  "home.bake.retry_without": "不烘焙再启动",
+  "home.bake.failed_title": "烘焙启动异常",
+  "home.bake.retry_once": "仅本次跳过烘焙，不更改设置"
 }

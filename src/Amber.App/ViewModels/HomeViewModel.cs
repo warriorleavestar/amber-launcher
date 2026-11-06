@@ -564,7 +564,7 @@ public sealed partial class HomeViewModel : PageViewModel
                     // 烘焙成功了但游戏没进主界面就退出：多半是加载器原型不兼容某个模组（比如 Sodium 的 Mixin），给一个不烘焙再启动的入口。
                     _log.AddRaw(run.Log, "[Bake] " + L.T("home.bake.crashed"));
                     var retry = request with { SkipBake = true };
-                    Toasts.WithAction(L.F("home.bake.crashed_toast", id), L.T("home.bake.retry_without"), () => _service.RequestLaunch(retry));
+                    Toasts.BakeFailed(L.F("home.bake.crashed_toast", id), () => _service.RequestLaunch(retry));
                 }
                 // 玩家在别的页面：弹个 Toast，带“查看”。
                 if (!IsCurrent) Toasts.WithAction(L.F("home.crash.toast", id), L.T("home.crash.show"), () => NavigateHere?.Invoke());

@@ -1247,5 +1247,7 @@
   "settings.bake.loader_hint": "通用載入器目錄（留空時用環境變數 AMBER_BAKE_LOADER）",
   "home.bake.crashed": "烘焙後啟動的遊戲沒進主畫面就結束了，可能是載入器原型和某個模組不相容。可以不烘焙再啟動一次，或在設定裡關閉「烘焙（實驗）」。",
   "home.bake.crashed_toast": "{0} 烘焙後啟動失敗，沒進主畫面",
-  "home.bake.retry_without": "不烘焙再啟動"
+  "home.bake.retry_without": "不烘焙再啟動",
+  "home.bake.failed_title": "烘焙啟動異常",
+  "home.bake.retry_once": "僅本次跳過烘焙，不更改設定"
 }

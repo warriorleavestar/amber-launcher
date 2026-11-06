@@ -175,6 +175,9 @@
     </Border>
 
     <!-- 内容区 -->
-    <ContentControl Grid.Column="1" Content="{Binding CurrentPage}" Margin="24,20,24,20" />
+    <Grid Grid.Column="1" Margin="24,20,24,20" RowDefinitions="Auto,*">
+      <c:BakeNoticeHost x:Name="BakeWarnings" />
+      <ContentControl Grid.Row="1" Content="{Binding CurrentPage}" />
+    </Grid>
   </Grid>
 </Window>
