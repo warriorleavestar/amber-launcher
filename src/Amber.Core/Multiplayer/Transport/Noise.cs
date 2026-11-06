@@ -8,13 +8,14 @@ using System.Text;
 namespace Amber.Core.Multiplayer.Transport;
 
 /// <summary>
-/// Noise 协议框架（https://noiseprotocol.org/noise.html ，第 34 版）的一个最小实现，只用系统自带的密码原语：
-/// X25519（Windows CNG）、ChaCha20-Poly1305、SHA-256 / HMAC-SHA256。不自己发明任何原语或构造。
-/// 支持三种握手：
+/// Noise 协议框架（https://noiseprotocol.org/noise.html ，第 34 版）的一个最小实现，只用成熟的密码原语：
+/// X25519（BouncyCastle 的 RFC 7748 实现）、ChaCha20-Poly1305、SHA-256 / HMAC-SHA256。不自己发明任何原语或构造。
+/// 支持四种握手：
 ///   Noise_NNpsk0_25519_ChaChaPoly_SHA256：-> psk, e   &lt;- e, ee
 ///   Noise_NNhfspsk0_25519+MLKEM768_ChaChaPoly_SHA256：-> psk, e, e1   &lt;- e, ee, ekem1（Noise HFS 扩展，KEM 用 ML-KEM-768，混合抗量子）
 ///   Noise_XXpsk3_25519_ChaChaPoly_SHA256：-> e   &lt;- e, ee, s, es   -> s, se, psk（规范 7.5、9 节；双方交换长期身份公钥）
-/// psk 由房间密钥派生，所以只有知道房间码的人能完成握手；每次连接的临时密钥带来前向保密。
+///   Noise_XXpsk0_25519_ChaChaPoly_SHA256：-> psk, e   &lt;- e, ee, s, es   -> s, se（敲门和成员控制通道用：令牌不对第一条消息就失败）
+/// psk 只让持有它的人完成握手（NN 系列来自房间密钥或房主下发的成员密钥，XX 系列来自邀请令牌）；每次连接的临时密钥带来前向保密。
 /// </summary>
 public sealed class CipherState : IDisposable
 {
@@ -285,7 +286,7 @@ public sealed class X25519KeyPair : IDisposable
     }
 }
 
-public enum NoisePattern { NNpsk0, NNhfspsk0, XXpsk3 }
+public enum NoisePattern { NNpsk0, NNhfspsk0, XXpsk3, XXpsk0 }
 
 /// <summary>NNpsk0 / NNhfspsk0 两条消息、XXpsk3 三条消息的握手。initiator 先发。</summary>
 public sealed class NoiseHandshake : IDisposable
@@ -294,6 +295,7 @@ public sealed class NoiseHandshake : IDisposable
     {
         NoisePattern.NNpsk0 => "Noise_NNpsk0_25519_ChaChaPoly_SHA256",
         NoisePattern.XXpsk3 => "Noise_XXpsk3_25519_ChaChaPoly_SHA256",
+        NoisePattern.XXpsk0 => "Noise_XXpsk0_25519_ChaChaPoly_SHA256",
         _ => "Noise_NNhfspsk0_25519+MLKEM768_ChaChaPoly_SHA256",
     };
 
@@ -322,7 +324,7 @@ public sealed class NoiseHandshake : IDisposable
     public NoiseHandshake(NoisePattern pattern, bool initiator, ReadOnlySpan<byte> prologue, byte[] psk, X25519KeyPair? localStatic)
     {
         if (psk.Length != 32) throw new ArgumentException(L.T("core.mp.noise.psklength"));
-        if ((pattern == NoisePattern.XXpsk3) != (localStatic is not null)) throw new ArgumentException(L.T("core.mp.noise.staticrequired"));
+        if (IsXx(pattern) != (localStatic is not null)) throw new ArgumentException(L.T("core.mp.noise.staticrequired"));
         _pattern = pattern;
         _initiator = initiator;
         _psk = psk.ToArray();
@@ -334,7 +336,9 @@ public sealed class NoiseHandshake : IDisposable
     /// <summary>XXpsk3：对方的长期公钥（读到对方的 s 之后才有；握手完成前不要拿来做身份判断）。</summary>
     public byte[]? RemoteStaticPublicKey => _rs is null ? null : (byte[])_rs.Clone();
 
-    private int MessageCount => _pattern == NoisePattern.XXpsk3 ? 3 : 2;
+    private int MessageCount => IsXx(_pattern) ? 3 : 2;
+
+    private static bool IsXx(NoisePattern pattern) => pattern is NoisePattern.XXpsk3 or NoisePattern.XXpsk0;
 
     /// <summary>测试用：指定临时密钥（Noise 测试向量里是固定的）。</summary>
     internal X25519KeyPair? FixedEphemeral { get; init; }
@@ -424,6 +428,8 @@ public sealed class NoiseHandshake : IDisposable
         var message = new List<byte>();
         if (_initiator && _step == 0)
         {
+            // XXpsk0：psk 在第一条消息最前面混入，不知道令牌的人第一条消息就过不了，也拿不到任何一方的长期公钥。
+            if (_pattern == NoisePattern.XXpsk0) _ss.MixKeyAndHash(_psk);
             WriteE(message);
         }
         else if (!_initiator && _step == 1)
@@ -437,7 +443,7 @@ public sealed class NoiseHandshake : IDisposable
         {
             WriteS(message);
             _ss.MixKey(_s!.Dh(_re!));
-            _ss.MixKeyAndHash(_psk);
+            if (_pattern == NoisePattern.XXpsk3) _ss.MixKeyAndHash(_psk);
         }
         else throw new InvalidOperationException(L.T("core.mp.noise.unexpectedwrite"));
         message.AddRange(_ss.EncryptAndHash(payload));
@@ -449,6 +455,7 @@ public sealed class NoiseHandshake : IDisposable
     {
         if (!_initiator && _step == 0)
         {
+            if (_pattern == NoisePattern.XXpsk0) _ss.MixKeyAndHash(_psk);
             message = ReadE(message);
         }
         else if (_initiator && _step == 1)
@@ -462,7 +469,7 @@ public sealed class NoiseHandshake : IDisposable
         {
             message = ReadS(message);
             _ss.MixKey(_e!.Dh(_rs!));
-            _ss.MixKeyAndHash(_psk);
+            if (_pattern == NoisePattern.XXpsk3) _ss.MixKeyAndHash(_psk);
         }
         else throw new InvalidOperationException(L.T("core.mp.noise.unexpectedread"));
         var payload = _ss.DecryptAndHash(message);
@@ -472,7 +479,7 @@ public sealed class NoiseHandshake : IDisposable
 
     private byte[] WriteMessageCore(ReadOnlySpan<byte> payload)
     {
-        if (_pattern == NoisePattern.XXpsk3) return WriteXxCore(payload);
+        if (IsXx(_pattern)) return WriteXxCore(payload);
         var message = new List<byte>();
         if (_initiator && _step == 0)
         {
@@ -509,7 +516,7 @@ public sealed class NoiseHandshake : IDisposable
 
     private byte[] ReadMessageCore(ReadOnlySpan<byte> message)
     {
-        if (_pattern == NoisePattern.XXpsk3) return ReadXxCore(message);
+        if (IsXx(_pattern)) return ReadXxCore(message);
         if (!_initiator && _step == 0)
         {
             _ss.MixKeyAndHash(_psk);

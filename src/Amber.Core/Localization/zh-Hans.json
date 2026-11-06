@@ -1239,5 +1239,6 @@
   "core.auth.external.insecure_saved": "外置账号 {0} 的服务器地址是 http，密码和令牌会明文传输，已不能用来启动。请到账号页删掉它，再用 https 地址重新添加。",
   "core.mp.noise.staticrequired": "XXpsk3 握手必须提供本机长期密钥，其他握手不能提供",
   "core.mp.identity.corrupt": "联机身份文件损坏或解不开（可能换了系统用户），已换成新的身份。之前认识你的房主会把你当成新成员。",
-  "core.mp.identity.otherplatform": "联机身份文件是在别的系统上加密的，这里解不开"
+  "core.mp.identity.otherplatform": "联机身份文件是在别的系统上加密的，这里解不开",
+  "core.mp.identity.unreadable": "暂时读不到联机身份文件（可能被其他程序占用或权限不对），这次先用临时身份，原文件没有改动，下次启动会再读。"
 }

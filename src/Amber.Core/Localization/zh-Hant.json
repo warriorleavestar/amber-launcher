@@ -1239,5 +1239,6 @@
   "core.auth.external.insecure_saved": "外置帳號 {0} 的伺服器位址是 http，密碼和權杖會明文傳輸，已不能用來啟動。請到帳號頁刪除它，再用 https 位址重新新增。",
   "core.mp.noise.staticrequired": "XXpsk3 握手必須提供本機長期金鑰，其他握手不能提供",
   "core.mp.identity.corrupt": "連線身分檔案損壞或無法解開（可能換了系統使用者），已換成新的身分。之前認得你的房主會把你當成新成員。",
-  "core.mp.identity.otherplatform": "連線身分檔案是在別的系統上加密的，這裡無法解開"
+  "core.mp.identity.otherplatform": "連線身分檔案是在別的系統上加密的，這裡無法解開",
+  "core.mp.identity.unreadable": "暫時讀不到聯機身分檔案（可能被其他程式佔用或權限不對），這次先用臨時身分，原檔案沒有改動，下次啟動會再讀。"
 }

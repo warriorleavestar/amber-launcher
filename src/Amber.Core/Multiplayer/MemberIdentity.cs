@@ -22,13 +22,19 @@ public sealed class MemberIdentity : IDisposable
     private readonly string _directory;
     private readonly Lock _gate = new();
     private X25519KeyPair _key;
+    // 重置后换下来的旧密钥：可能还有握手在用，等这个对象 Dispose 时再清零。
+    private readonly List<X25519KeyPair> _retired = [];
 
-    private MemberIdentity(string directory, X25519KeyPair key, string? warning)
+    private MemberIdentity(string directory, X25519KeyPair key, string? warning, bool persisted = true)
     {
         _directory = directory;
         _key = key;
         Warning = warning;
+        IsPersisted = persisted;
     }
+
+    /// <summary>false：这次读身份文件时遇到读写错误（比如被杀毒软件暂时锁住），用的是只在内存里的临时身份，没有覆盖原文件。</summary>
+    public bool IsPersisted { get; private set; }
 
     /// <summary>当前的密钥对。<see cref="Reset"/> 之后换成新的，旧的被清零，别长期持有。</summary>
     public X25519KeyPair KeyPair { get { lock (_gate) return _key; } }
@@ -43,7 +49,10 @@ public sealed class MemberIdentity : IDisposable
 
     private string KeyPath => Path.Combine(_directory, FileName);
 
-    /// <summary>读取身份；没有就新建并保存。文件坏了或解不开：原文件留一份 .broken，换一把新的，Warning 说明原因。</summary>
+    /// <summary>
+    /// 读取身份；没有就新建并保存。文件内容坏了或解不开（密码学或格式错误）：原文件留一份 .broken，换一把新的，Warning 说明原因。
+    /// 读写出错（文件被占用、权限一时不对）：不动原文件，这次用内存里的临时身份，Warning 说明，下次启动再读。
+    /// </summary>
     public static MemberIdentity LoadOrCreate(string directory)
     {
         var path = Path.Combine(directory, FileName);
@@ -61,7 +70,11 @@ public sealed class MemberIdentity : IDisposable
                     CryptographicOperations.ZeroMemory(raw);
                 }
             }
-            catch (Exception e) when (e is CryptographicException or FormatException or IOException or UnauthorizedAccessException)
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return new MemberIdentity(directory, X25519KeyPair.Generate(), L.T("core.mp.identity.unreadable"), persisted: false);
+            }
+            catch (Exception e) when (e is CryptographicException or FormatException)
             {
                 try { File.Copy(path, path + ".broken", true); }
                 catch (Exception copy) when (copy is IOException or UnauthorizedAccessException) { }
@@ -80,11 +93,22 @@ public sealed class MemberIdentity : IDisposable
     {
         lock (_gate)
         {
+            var fresh = X25519KeyPair.Generate();
             var old = _key;
-            _key = X25519KeyPair.Generate();
+            _key = fresh;
+            try
+            {
+                Save();
+            }
+            catch
+            {
+                _key = old;
+                fresh.Dispose();
+                throw;
+            }
             Warning = null;
-            Save();
-            old.Dispose();
+            IsPersisted = true;
+            _retired.Add(old);
         }
     }
 
@@ -133,7 +157,12 @@ public sealed class MemberIdentity : IDisposable
 
     public void Dispose()
     {
-        lock (_gate) _key.Dispose();
+        lock (_gate)
+        {
+            _key.Dispose();
+            foreach (var old in _retired) old.Dispose();
+            _retired.Clear();
+        }
     }
 
     private static byte[] Protect(string directory, byte[] raw)
@@ -189,25 +218,38 @@ public sealed class MemberIdentity : IDisposable
     private static byte[] WrapKey(string directory, bool create)
     {
         var path = Path.Combine(directory, WrapKeyFileName);
-        if (File.Exists(path))
+        if (!File.Exists(path))
         {
-            var key = File.ReadAllBytes(path);
-            if (key.Length != 32) throw new CryptographicException(L.T("core.mp.identity.corrupt"));
-            return key;
+            if (!create) throw new CryptographicException(L.T("core.mp.identity.corrupt"));
+            var created = RandomNumberGenerator.GetBytes(32);
+            try
+            {
+                // CreateNew：两个 Jay 同时第一次启动时，只有一个能写成，另一个读已经写好的那把，不会互相覆盖。
+                WritePrivate(path, created, FileMode.CreateNew);
+                return created;
+            }
+            catch (IOException) when (File.Exists(path))
+            {
+                CryptographicOperations.ZeroMemory(created);
+            }
         }
-        if (!create) throw new CryptographicException(L.T("core.mp.identity.corrupt"));
-        var created = RandomNumberGenerator.GetBytes(32);
-        WritePrivate(path, created);
-        return created;
+        var key = File.ReadAllBytes(path);
+        if (key.Length != 32) throw new CryptographicException(L.T("core.mp.identity.corrupt"));
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        return key;
     }
 
     /// <summary>写文件；非 Windows 上一创建就是 0600（不先以默认权限创建再改）。</summary>
-    private static void WritePrivate(string path, byte[] data)
+    private static void WritePrivate(string path, byte[] data, FileMode mode = FileMode.Create)
     {
-        var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, Share = FileShare.None };
+        var options = new FileStreamOptions { Mode = mode, Access = FileAccess.Write, Share = FileShare.None };
         if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        using var stream = new FileStream(path, options);
-        stream.Write(data);
-        stream.Flush(true);
+        using (var stream = new FileStream(path, options))
+        {
+            stream.Write(data);
+            stream.Flush(true);
+        }
+        // 已经存在的文件不会按 UnixCreateMode 改权限，写完再收紧一次。
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 }

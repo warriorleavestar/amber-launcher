@@ -1270,5 +1270,6 @@
   "core.auth.external.insecure_saved": "The external account {0} uses an http server, which would send its password and tokens unencrypted, so it can no longer be used to launch. Remove it on the Accounts page and add it again with an https address.",
   "core.mp.noise.staticrequired": "The XXpsk3 handshake needs a local static key; other handshakes must not have one",
   "core.mp.identity.corrupt": "Your multiplayer identity file was damaged or couldn't be decrypted (maybe a different system user), so a new identity was created. Hosts who knew you will see you as a new member.",
-  "core.mp.identity.otherplatform": "The multiplayer identity file was encrypted on another system and can't be decrypted here"
+  "core.mp.identity.otherplatform": "The multiplayer identity file was encrypted on another system and can't be decrypted here",
+  "core.mp.identity.unreadable": "Couldn't read your multiplayer identity file right now (it may be in use or have the wrong permissions). Using a temporary identity this time; the file was not changed and will be read again next start."
 }
