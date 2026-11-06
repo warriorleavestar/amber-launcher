@@ -187,6 +187,21 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         await Ui.FlushAsync();
         Check("CurseForge：重新搜索清除导入遗留的官网入口", !content.HasManualDownload
             && !window.GetVisualDescendants().OfType<Button>().Any(b => b.Command == content.OpenManualDownloadCommand && b.IsEffectivelyVisible), "");
+        content.TypeIndex = (int)ContentType.Modpack;
+        content.Selected = content.Results.FirstOrDefault();
+        await Ui.FlushAsync();
+        Check("CurseForge：整合包归档显示下载后导入的指引", window.GetVisualDescendants().OfType<TextBlock>()
+            .Any(t => t.IsEffectivelyVisible && t.Text == L.T("content.curseforge.manual_pack_archive_hint")), content.ManualDownloadHint);
+        L.SetLanguage("en");
+        await Ui.FlushAsync();
+        Check("CurseForge：手动下载指引随界面语言更新", window.GetVisualDescendants().OfType<TextBlock>()
+            .Any(t => t.IsEffectivelyVisible && t.Text == L.T("content.curseforge.manual_pack_archive_hint")), content.ManualDownloadHint);
+        L.SetLanguage("zh-Hans");
+        content.TypeIndex = (int)ContentType.Mod;
+        content.Selected = content.Results.FirstOrDefault();
+        await Ui.FlushAsync();
+        Check("CurseForge：切回模组恢复实例文件夹指引", window.GetVisualDescendants().OfType<TextBlock>()
+            .Any(t => t.IsEffectivelyVisible && t.Text == L.T("content.curseforge.manual_hint")), content.ManualDownloadHint);
         var instance = Page<InstanceViewModel>();
         main.CurrentPage = instance;
         var oldPath = Path.Combine(reportDir, "manual-update-old.jar");
