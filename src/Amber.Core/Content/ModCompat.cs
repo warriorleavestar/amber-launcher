@@ -78,10 +78,14 @@ public static partial class ModCompat
         var loaders = new HashSet<string>(StringComparer.Ordinal);
         var ids = new List<string>();
         var per = new Dictionary<string, LoaderRequirement>(StringComparer.Ordinal);
+        var fabricJars = new List<string>();
 
         if (ReadJson(zip, "fabric.mod.json", budget) is JsonObject fabric)
         {
             loaders.Add("fabric");
+            // Fabric 的内嵌 jar 列在 jars 里（一般在 META-INF/jars/）。Fabric API 的各个子模块（fabric-api-base 等）都在这里，
+            // 不读的话依赖子模块的模组会被误报缺前置。
+            foreach (var j in fabric["jars"] as JsonArray ?? []) if (Str(j?["file"]) is { } file) fabricJars.Add(file);
             AddId(ids, fabric["id"]);
             foreach (var p in fabric["provides"] as JsonArray ?? []) AddId(ids, p);
             string? mc = null;
@@ -130,9 +134,11 @@ public static partial class ModCompat
         if (nested)
         {
             // 有 metadata.json 就按它列的；老一点的（比如 1.20.1 的 Connector）没有，就看 META-INF/jarjar/ 下所有 jar。
+            // Fabric 的 jars 字段列的内嵌 jar 也一起看。
             IEnumerable<string> paths = ReadJson(zip, "META-INF/jarjar/metadata.json", budget)?["jars"] is JsonArray listed
                 ? listed.Select(j => Str(j?["path"])).OfType<string>()
                 : zip.Entries.Where(e => e.FullName.StartsWith("META-INF/jarjar/", StringComparison.Ordinal) && e.FullName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase)).Select(e => e.FullName);
+            paths = paths.Concat(fabricJars);
             var hadOwn = loaders.Count > 0;
             var count = 0;
             foreach (var inner in paths.Distinct(StringComparer.Ordinal))
