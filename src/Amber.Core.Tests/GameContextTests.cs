@@ -3,6 +3,8 @@ using Amber.App.ViewModels;
 using Amber.Core.Bake;
 using Amber.Core.Game;
 using Amber.Core.Launch;
+using Avalonia.Threading;
+using System.Diagnostics;
 
 namespace Amber.Core.Tests;
 
@@ -172,6 +174,47 @@ public sealed class GameContextTests : IDisposable
         service.Settings.GameDirectory = _b;
         service.SaveAndReload();
         Assert.False(HomeViewModel.BakeRetryDirectoryMatches(service, retry));
+    }
+
+    [Fact]
+    public void QueuedBakeRetryIsRejectedAfterDirectoryChangesBeforeDispatch()
+    {
+        Instance(_a, "same-id");
+        Instance(_b, "same-id");
+        UiTestThread.Run(() =>
+        {
+            using var service = Service();
+            var home = new HomeViewModel(service, new LogViewModel());
+            var ctx = service.Context;
+            using var placeholder = new Process();
+            // 有一局占位：有效请求只能进入多开确认，整个测试都不会补文件或启动 Java。
+            var running = home.AddRunForTest("existing-run", placeholder);
+            try
+            {
+                Assert.True(HomeViewModel.TryRequestBakeRetry(service, ctx, new LaunchRequest("same-id")));
+                Assert.Null(home.PendingLaunch);
+                service.Settings.GameDirectory = _b;
+                service.SaveAndReload();
+                Dispatcher.UIThread.RunJobs();
+                Assert.Null(home.PendingLaunch);
+                Assert.Equal(_b, service.Directory.Root);
+
+                // 正向对照：同一订阅和消息队列确实会处理请求，回到原目录后可进入确认。
+                service.Settings.GameDirectory = _a;
+                service.SaveAndReload();
+                Assert.True(HomeViewModel.TryRequestBakeRetry(service, ctx, new LaunchRequest("same-id")));
+                Dispatcher.UIThread.RunJobs();
+                Assert.NotNull(home.PendingLaunch);
+                Assert.Same(ctx, home.PendingLaunch.ExpectedContext);
+                Assert.True(home.PendingLaunch.SkipBake);
+            }
+            finally
+            {
+                home.DismissPendingLaunchCommand.Execute(null);
+                home.RemoveRunForTest(running);
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
     }
 
     private static void WriteBakeInstance(string root, string id, int javaMajor, string artifact, bool isolate)
