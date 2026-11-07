@@ -2,7 +2,9 @@
 
 写给要把 Jay 适配到 macOS、Linux（以及以后别的平台）的合作者。文档按 main `89565b5`（2026-11-07）整理，覆盖 v0.7.0 正式版，以及之后合进 main、还没发布的功能（远程控制、Jay 服务器第二到四期、被踢提示修复）。
 
-每个功能都写了三件事：它做什么、怎么实现、在各平台上的现状。最后一节是按优先级排好的移植清单。
+**目标：Mac 和 Linux 版尽量做到和 Windows 版功能完全一致**，包括现在只有 Windows 有的完整局域网、全部流量出口、远程控制和 Native AOT 包。做不到完全一样的地方（受系统限制），要在界面上说清楚，并给出最接近的替代。
+
+每个功能都写了三件事：它做什么、怎么实现、在各平台上的现状。第 5 节是逐项补齐的路线和验收标准。
 
 ## 0. 怎么读
 
@@ -371,31 +373,82 @@ CI 的单元测试只在 `windows-latest` 上跑。有一些测试本身按 `Ope
 
 代码签名：三个平台都没有正式签名。macOS 上远程控制、完整局域网这类要系统权限的功能，正式签名 + 公证会省很多事（权限按签名身份记，ad-hoc 签名每次重新打包都会变）。
 
-## 5. 移植清单（按优先级）
+## 5. 补齐到和 Windows 一致：逐项路线
 
-**先做（小、风险低、影响安全或体验）**
+目标是 Mac、Linux 上每个功能都和 Windows 一样能用。下面按“先易后难”排成四批，每一项写了要改哪里、怎么做、做完怎么算数（验收）。一批做完再发一个版本，新做的功能先标【实验】，在真机上验证过再去掉。
 
-1. Jay 服务器访问密钥在 Mac/Linux 上不再明文存（`Gate/JayServers.cs` 的 `Protect`），至少改成 AES-GCM + 本机密钥。
-2. 完整局域网和出口的勾选框在 Mac/Linux 上禁用并说明（`MultiplayerPage.axaml`），全条件测试排除这些步骤。
-3. Linux 上正常关闭游戏（`GameLauncher.RequestExit`）。
-4. 老版本（1.6 以前）家目录重定向（`AsciiPaths.LegacyHome`），避免写进用户真实的游戏目录。项目规则要求测试不能碰真实 `.minecraft`，这一条也关系到用户数据。
-5. EasyTier 进程在 Jay 崩溃后不残留（`EasyTier.cs` 的 `Launch`）。
-6. “仅游戏”出口的非默认路由拦截（`ExitPolicy.NonDefaultRoutes`）和 SRV 查询（`JoinTarget.cs`）。
+系统确实做不到的地方，按这个原则处理：界面上不藏起来，而是显示“这台电脑上不可用”并说明原因和替代办法（比如 Wayland 上远程控制要走系统授权框）。
 
-**再做（中等）**
+### 第一批：小改动，影响安全和数据（建议先做）
 
-7. 账号令牌、联机身份、Jay 服务器密钥统一改用钥匙串 / libsecret 存包裹密钥。
-8. 远程控制：macOS（ScreenCaptureKit + CGEvent）、Linux X11（XShm + XTest）。
-9. 可用内存检测（`/proc/meminfo`、`host_statistics64`）。
-10. Java 扫描补 SDKMAN、Homebrew、`java_home`；Mojang 运行时清单的 `link` 条目。
-11. CI 在 macOS、Linux 上跑单元测试；视情况出 Mac/Linux 的 AOT 包。
+| # | 功能 | 改哪里 | 怎么做 | 验收 |
+|---|---|---|---|---|
+| 1 | Jay 服务器访问密钥加密 | `Gate/JayServers.cs` `Protect`/`Unprotect` | 先改成和 `Auth/Accounts.cs` 一样的 AES-GCM + 本机密钥（新前缀，比如 `aesgcm:`），旧的 `plain:` 能读，下次保存自动迁移；第二批再接钥匙串 | Mac/Linux 上 `jay-servers.json` 里看不到明文密钥；旧文件升级后还能进服；补单元测试 |
+| 2 | 老版本（1.6 以前）家目录 | `Launch/AsciiPaths.cs` `LegacyHome`、`GameLauncher.cs` 第 310 行附近 | 在数据目录下建 `legacyhome/<哈希>/`，里面放指向实例的符号链接（Linux：`.minecraft`；macOS：`Library/Application Support/minecraft`），启动时加 `-Duser.home=<该目录>`；符号链接用 `Directory.CreateSymbolicLink` | 在测试目录里启动 1.5.2 + 老 Forge，用户真实的 minecraft 目录没有新文件 |
+| 3 | 正常关闭游戏（Linux） | `GameLauncher.RequestExit` | X11：找到游戏进程的窗口（`_NET_WM_PID`）发 `WM_DELETE_WINDOW`；Wayland 或找不到窗口时发 SIGTERM，并在界面上提示“可能来不及存档” | X11 下点“关闭游戏”，世界正常保存（看 `latest.log` 的 Saving 行） |
+| 4 | EasyTier 不残留 | `Multiplayer/EasyTier.cs` `Launch` | 每次启动把 PID + 进程启动时间写进 `easytier/run/*.pid`；Jay 启动和开房间前清理“PID 还在、启动时间对得上”的旧进程。Linux 额外可以用 `prctl(PR_SET_PDEATHSIG, SIGTERM)`（需要一个小包装进程，因为 .NET 的 `Process.Start` 不能在 fork 后插代码） | `kill -9` 掉 Jay 后重新打开，没有 easytier-core 残留 |
+| 5 | 不支持的选项先说明 | `Views/MultiplayerPage.axaml`、`MultiplayerViewModel.cs`、`TestMatrix.cs` | 在 Core 里加 `PlatformFeatures`（完整局域网、全部流量出口、远程控制、极端加密各一个布尔），界面按它禁用并显示原因；全条件测试排除不支持的步骤。之后每补齐一项就把对应开关改成 true | Mac/Linux 上勾不了完整局域网，旁边有说明；全条件测试不再出现必然失败的步骤 |
+| 6 | “仅游戏”出口拦截非默认路由 | `Transport/ExitPolicy.cs` `NonDefaultRoutes` | Linux 读 `/proc/net/route` 和 `/proc/net/ipv6_route`；macOS 用 `sysctl` `NET_RT_DUMP`（或者先解析 `netstat -rn -f inet` / `inet6`）。太宽的路由（IPv4 短于 /8、IPv6 短于 /16）照 Windows 的规则不拦 | 有 VPN 内网路由时，经出口连那个网段被拒绝；补单元测试（解析部分用样例文本） |
+| 7 | 进服时查 SRV | `Transport/JoinTarget.cs` | 自己实现一个最小 DNS 客户端：读系统 DNS（Linux `/etc/resolv.conf`，macOS `scutil --dns` 或 `/etc/resolv.conf`），UDP 53 发 SRV 查询，解析应答；或者 P/Invoke libresolv 的 `res_query` | 输入不带端口的服务器域名，经出口时按 SRV 的主机和端口连 |
+| 8 | 回收目录隐藏 | `Content/TrashService.cs` `HideOnWindows` | Mac/Linux 上回收目录名用 `.` 开头；macOS 另外可以设 `UF_HIDDEN`（`chflags hidden`） | Finder / 文件管理器默认看不到回收目录 |
+| 9 | 可用内存 | `Launch/InstanceSettings.cs` `FreePhysicalMb` | Linux 读 `/proc/meminfo` 的 `MemAvailable`；macOS 用 `host_statistics64`（free + inactive + purgeable 页 × 页大小） | 自动内存给出的数值和系统监视器看到的可用内存一致 |
 
-**最后（大）**
+### 第二批：凭据、Java、打包
 
-12. 完整局域网模式：特权守护（pkexec / 特权助手）+ Unix 域套接字。
-13. 全部流量出口：pf / nftables 防泄漏、路由和 DNS 接管。
-14. Linux Wayland 远程控制（portal + PipeWire）。
-15. 极端加密在 macOS 上的 ML-KEM（BouncyCastle 实现 + 互通测试）。
+| # | 功能 | 改哪里 | 怎么做 | 验收 |
+|---|---|---|---|---|
+| 10 | 凭据进系统钥匙串 | `Auth/Accounts.cs`、`Multiplayer/MemberIdentity.cs`、`Gate/JayServers.cs` | 抽一个 `ISecretStore`（存取一把 32 字节包裹密钥）：Windows 继续 DPAPI；macOS 用 Security.framework（`SecItemAdd` / `SecItemCopyMatching`，P/Invoke）；Linux 用 Secret Service（D-Bus，有 libsecret 时 P/Invoke `secret_password_store_sync`），都拿不到时退回现在的 0600 密钥文件并在设置页提示。三处数据格式不变，只换包裹密钥的来源 | Mac/Linux 上数据目录里不再有明文密钥文件（有钥匙串时）；删掉钥匙串条目后提示重新登录而不是崩溃；旧数据自动迁移 |
+| 11 | Java 扫描补全 | `Java/JavaFinder.cs` | macOS：`/usr/libexec/java_home -V` 的结果、Homebrew（`/opt/homebrew/opt/openjdk*`、`/usr/local/opt/openjdk*`）；Linux：`/usr/lib64/jvm`、`/opt`、`~/.sdkman/candidates/java`、Flatpak/Snap 的 JDK | 常见安装方式装的 Java 都能被找到 |
+| 12 | Mojang 运行时的符号链接 | `Java/JavaRuntimeInstaller.cs` | 处理清单里 `type: link` 的条目：校验 `target` 在运行时目录内，用 `File.CreateSymbolicLink` 建 | Mac 上新下载的运行时和官方启动器下载的文件结构一致 |
+| 13 | Linux ARM64 自动下载 Java | `Java/JavaRuntimeInstaller.cs` | Mojang 没有 Linux ARM64 运行时。可以加一个备用来源：Adoptium API（`api.adoptium.net`，有 SHA-256）。这是新的联网地址，属于“用户发起的下载”，要写进 README 隐私一节；默认先问用户 | Linux ARM64 上能一键装好对应版本的 Java |
+| 14 | Mac/Linux 的 Native AOT 包 | `.github/workflows/build.yml` | 照 win-x64 的 AOT 步骤给 osx-arm64、osx-x64、linux-x64、linux-arm64 各加一步；先在真机上跑全套自检（特别是 `MacGameProcess.cs` 的 `DllImport`、Skia、剪贴板） | 发布页多出 `Jay-<RID>-aot` 包，功能和单文件版一致 |
+| 15 | macOS `.app` 进 CI | `scripts/publish-macos.sh`、`build.yml` | 在 macOS runner 上跑这个脚本，发布 `Jay-osx-*.zip`（.app）。正式签名和公证要 Apple 开发者账号（年费），由 Yuma 决定；没有时保持 ad-hoc 签名 | 下载后双击 `Jay.app` 能打开 |
+| 16 | Linux 桌面集成（可选） | 新增 | 提供 `.desktop` 文件和图标，或者出 AppImage | 能从应用菜单启动 |
+| 17 | 测试跑在三个平台 | `build.yml` 的 `validate` | 加 macOS、Linux runner 跑 `dotnet test`；没有 IPv6 的 runner 上那些直连测试要按环境跳过（检测环境，不是按平台一刀切） | 三个平台单元测试都绿 |
+| 18 | 自检脚本 | `tools/` | 加 `run-selftest.sh`（设 `AMBER_SELFTEST` 运行 `Jay`） | Mac/Linux 上一条命令跑完界面自检 |
+
+### 第三批：远程控制（和 Windows 一样：全屏、全控、双向、每次都要同意）
+
+实现细节见 3.10。拆成这几步，每步都能单独验收：
+
+| # | 内容 | 验收 |
+|---|---|---|
+| 19 | macOS 截屏 `IScreenSource`（ScreenCaptureKit，多显示器拼成虚拟桌面） | 从 Windows 看 Mac 的画面，多显示器位置正确 |
+| 20 | macOS 注入 `IInputSink`（CGEvent，像素换算成点，扫描码换虚拟键码） | 从 Windows 控制 Mac：鼠标位置准确（Retina 屏也对），中英文输入法下按键正确 |
+| 21 | macOS 权限引导（屏幕录制、辅助功能），只在 `Jay.app` 里启用 | 没权限时界面说明怎么开，开了以后不用重启 Jay 也能用（或明确提示要重启） |
+| 22 | macOS 红框（置顶、鼠标穿透的透明窗口）和全局停止热键（`CGEventTap` 或 `RegisterEventHotKey`） | 被控时四周有红框；按 Ctrl+Shift+F12（Mac 上可以另定，比如 ⌃⇧F12）立即停止 |
+| 23 | Linux X11 截屏（XShm）+ 注入（XTest）+ 红框 + 热键（`XGrabKey`） | 同上，在 X11 桌面上 |
+| 24 | Linux Wayland：xdg-desktop-portal 的 ScreenCast（PipeWire 取帧）+ RemoteDesktop（注入）；红框由系统自己的共享提示代替 | GNOME 和 KDE 上能被看和被控，系统授权框只在开始时出现一次 |
+| 25 | 三平台互控矩阵 | Windows↔Mac、Windows↔Linux、Mac↔Linux，两个方向各测一次，邀请房间和直连房间都测 |
+
+做完后把 `RemotePlatform.Supported` 按平台放开，`SelfTest.Remote.cs` 在三个平台都跑一遍。
+
+### 第四批：完整局域网和全部流量出口（工作量最大）
+
+| # | 内容 | 怎么做 | 验收 |
+|---|---|---|---|
+| 26 | 特权守护进程 | 照 Windows 的 `ElevatedGuard` 设计：macOS 用 `osascript … with administrator privileges` 拉起守护（以后有签名可以换 `SMAppService` 特权助手），Linux 用 `pkexec`。守护和 Jay 之间用 Unix 域套接字（目录 0700、套接字 0600），连上后用 `SO_PEERCRED`（Linux）/ `LOCAL_PEERPID`（macOS）核对对方 PID；参数和密钥只经套接字传，不落盘；Jay 断开时守护结束 easytier-core 并恢复所有改动后退出 | 输一次密码就能开完整局域网；Jay 被强制结束后，虚拟网卡、路由、DNS 都恢复原样 |
+| 27 | 虚拟网卡 | EasyTier 在 macOS 上用 utun、在 Linux 上用 tun，去掉 `--no-tun` 即可，网卡名参数按平台调整（`EasyTierArgs.DeviceName` 现在是 Windows 风格的名字） | 每人拿到 10.233.144.x，能互相 ping 通、MC 用虚拟 IP 直连 |
+| 28 | 局域网广播转发 | EasyTier 的 `--enable-udp-broadcast-relay` 只支持 Windows。Mac/Linux 上由守护进程自己做：在物理网卡上收本机发出的 UDP 广播和组播（MC 的 224.0.2.60:4445 必须支持，其他按端口白名单），经虚拟网卡转发给房间成员，对方守护再在本机回环上重放；用 BPF（macOS）/ `AF_PACKET`（Linux）或者普通套接字绑定组播都可以 | 其他电脑的 MC 多人游戏列表里自动出现房主开放的局域网世界；别的靠广播找房间的游戏也能看到 |
+| 29 | 全部流量出口：路由 | macOS：`route add -net 0.0.0.0/1` 和 `128.0.0.0/1` 指向 utun，并给节点和 EasyTier 对端地址加经物理网关的主机路由；Linux：`ip route` + 策略路由（`ip rule`），同样给承载地址加例外 | 开出口后 `curl ifconfig.me` 显示出口成员的公网 IP；关掉后恢复 |
+| 30 | 全部流量出口：防泄漏 | macOS：pf 锚点（`pfctl -a jay -f -`），只放行 utun 和承载地址，其余出站拒绝，结束时清掉锚点；Linux：nftables 单独的表，规则同上。对应 Windows 的 WFP 规则（`ExitTrafficPolicyScript.cs`） | 拔掉出口成员或隧道断开时，本机不会退回直接上网（没有流量漏到物理网卡） |
+| 31 | 全部流量出口：DNS | macOS：`scutil` 设置只对本次会话生效的 DNS 字典，结束时删掉；Linux：`resolvectl dns <网卡>` + `resolvectl domain <网卡> ~.`（systemd-resolved），没有 resolved 时改 `/etc/resolv.conf` 前先备份 | DNS 查询走隧道；结束后 DNS 设置和开始前完全一样 |
+| 32 | 全条件测试 | `TestMatrix.cs`、`GuestTestConsent.cs` 按 `PlatformFeatures` 放开完整局域网和出口步骤 | 三平台混合测一遍全条件测试，全部步骤有结果 |
+
+### 其他零散项
+
+| # | 内容 | 怎么做 |
+|---|---|---|
+| 33 | 极端加密在 macOS 上可用 | `Transport/Noise.cs` 的 ML-KEM 部分在 `MLKem.IsSupported` 为 false 时改用 BouncyCastle 的 ML-KEM-768（项目已经引用 BouncyCastle）。必须和 .NET 的实现线上格式一致：补一组固定向量测试，并让 Windows（.NET 实现）和 Mac（BouncyCastle）实际握手一次 |
+| 34 | 敏感文字不进剪贴板历史 | macOS 写剪贴板时加 `org.nspasteboard.ConcealedType`；Windows 加 `ExcludeClipboardContentFromMonitorProcessing`；Linux 上 KDE 的 Klipper 认 `x-kde-passwordManagerHint`。要绕过 Avalonia 直接调系统接口 |
+| 35 | 联机节点 macOS 脚本 | `node/` 加一个 launchd plist 的安装脚本 |
+| 36 | Linux Wayland 剪贴板 | 实测 60 秒清除在 Wayland 下是否生效，不生效时查 Avalonia 的 Wayland 后端或者改用 `wl-copy`/`wl-paste` |
+
+### 做完的标准
+
+- 第 2 节总表里所有 🪟 和 🟡 都变成 ✅，或者在界面上有明确说明的系统限制。
+- 三个平台单元测试全绿，界面自检全过，联机（含远程控制）做过跨平台、跨网络的真机测试。
+- README 和发布说明里的“只支持 Windows”字样同步删掉。
 
 ## 6. 开发和测试规矩
 
