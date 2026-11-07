@@ -46,7 +46,9 @@ public sealed class GameLauncher(GameDirectory dir)
     public static bool RequestExit(Process game)
     {
         if (game.HasExited) return false;
-        return OperatingSystem.IsMacOS() ? MacGameProcess.RequestExit(game.Id) : game.CloseMainWindow();
+        if (OperatingSystem.IsMacOS()) return MacGameProcess.RequestExit(game.Id);
+        if (OperatingSystem.IsLinux()) return UnixGameProcess.RequestExit(game.Id);
+        return game.CloseMainWindow();
     }
 
     public GameDirectory GameDir => dir;
@@ -297,9 +299,14 @@ public sealed class GameLauncher(GameDirectory dir)
             StandardErrorEncoding = onOutput is not null ? System.Text.Encoding.UTF8 : null,
             CreateNoWindow = true,
         };
+        // 1.6 以前的版本（和 Jay 装的老 Forge）会按系统家目录写文件，先准备指向本实例的隔离家目录。
+        var realWorkDir = RealRoot is { } real ? AsciiPaths.Remap(workDir, dir.Root, real) : workDir;
+        var legacyHome = IsPreLaunchwrapperHome(version) ? AsciiPaths.LegacyHome(realWorkDir, onOutput) : null;
         string? noTraceDir = null;
         try
         {
+            if (legacyHome is not null && !OperatingSystem.IsWindows())
+                psi.ArgumentList.Add("-Duser.home=" + legacyHome);
             foreach (var arg in BuildArguments(options, onOutput, out noTraceDir)) psi.ArgumentList.Add(arg);
         }
         catch
@@ -307,13 +314,13 @@ public sealed class GameLauncher(GameDirectory dir)
             DeleteNoTraceDir(noTraceDir);
             throw;
         }
-        // 1.6 以前的版本（和 Amber 装的老 Forge）把 %APPDATA%\.minecraft 当家目录，改成指向这个实例。
-        var realWorkDir = RealRoot is { } real ? AsciiPaths.Remap(workDir, dir.Root, real) : workDir;
-        if (IsPreLaunchwrapperHome(version) && AsciiPaths.LegacyHome(realWorkDir, onOutput) is { } home)
+        if (legacyHome is not null && OperatingSystem.IsWindows())
         {
-            psi.Environment["APPDATA"] = home;
-            onOutput?.Invoke(L.F("core.launch.game.legacyappdata", home));
+            psi.Environment["APPDATA"] = legacyHome;
+            onOutput?.Invoke(L.F("core.launch.game.legacyappdata", legacyHome));
         }
+        else if (legacyHome is not null)
+            onOutput?.Invoke(L.F("core.launch.game.legacyhome", legacyHome));
 
         Process process;
         try

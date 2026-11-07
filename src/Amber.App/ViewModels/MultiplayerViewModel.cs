@@ -7,6 +7,7 @@ using Amber.App.Services;
 using Amber.Core.Game;
 using Amber.Core.Multiplayer;
 using Amber.Core.Net;
+using Amber.Core;
 using Avalonia.Input.Platform;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -117,6 +118,9 @@ public sealed partial class MultiplayerViewModel : PageViewModel
 
     /// <summary>完整局域网模式：建虚拟网卡，每人一个虚拟 IP，要管理员权限。默认关闭。</summary>
     [ObservableProperty] public partial bool FullLanMode { get; set; }
+
+    public bool CanUseFullLan => PlatformFeatures.FullLan;
+    public string FullLanUnavailableText => CanUseFullLan ? "" : L.T("core.mp.component.windowsonly");
 
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(MyVirtualIpText))] public partial string MyVirtualIp { get; set; } = "";
 

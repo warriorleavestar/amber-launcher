@@ -219,9 +219,11 @@
           </Expander.Header>
           <StackPanel Spacing="14">
             <StackPanel Spacing="4">
-              <CheckBox Content="{l:T multiplayer.lan.full_mode}" IsChecked="{Binding FullLanMode}" />
+              <CheckBox Content="{l:T multiplayer.lan.full_mode}" IsChecked="{Binding FullLanMode}" IsEnabled="{Binding CanUseFullLan}" />
               <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
                          Text="{l:T multiplayer.lan.full_mode_hint}" />
+              <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource WarningText}"
+                         Text="{Binding FullLanUnavailableText}" IsVisible="{Binding !CanUseFullLan}" />
               <CheckBox Content="{l:T multiplayer.exit.allow}" IsChecked="{Binding AllowExitNode}" IsEnabled="{Binding FullLanMode}" Margin="0,6,0,0" />
               <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding AllowExitNode}" Foreground="{DynamicResource WarningText}"
                          Text="{l:T multiplayer.exit.warning}" />
@@ -463,7 +465,7 @@
               <TextBlock Text="{l:T multiplayer.matrix.title}" FontWeight="SemiBold" Margin="0,6,0,0" />
               <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap"
                          Text="{l:T multiplayer.matrix.hint}" />
-              <CheckBox Content="{l:T multiplayer.matrix.include_full_lan}" IsChecked="{Binding MatrixFullLan}" />
+              <CheckBox Content="{l:T multiplayer.matrix.include_full_lan}" IsChecked="{Binding MatrixFullLan}" IsEnabled="{Binding CanUseFullLan}" />
               <StackPanel Orientation="Horizontal" Spacing="6">
                 <Button Classes="primary" Content="{l:T multiplayer.matrix.start}" Command="{Binding RunMatrixCommand}" IsEnabled="{Binding !MatrixRunning}" />
                 <Button Content="{l:T common.stop}" Command="{Binding CancelMatrixCommand}" IsVisible="{Binding MatrixRunning}" />
@@ -474,7 +476,7 @@
               <StackPanel Spacing="6">
                 <TextBlock Text="{l:T multiplayer.matrix.request_title}" FontWeight="SemiBold" />
                 <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.matrix.request_hint}" />
-                <CheckBox Content="{l:T multiplayer.matrix.allow_full_lan}" IsChecked="{Binding TestAllowFullLan}" IsVisible="{Binding TestRequestWantsFullLan}" />
+                <CheckBox Content="{l:T multiplayer.matrix.allow_full_lan}" IsChecked="{Binding TestAllowFullLan}" IsVisible="{Binding TestRequestWantsFullLan}" IsEnabled="{Binding CanUseFullLan}" />
                 <CheckBox Content="{l:T multiplayer.matrix.allow_exit}" IsChecked="{Binding TestAllowExit}" IsVisible="{Binding TestRequestWantsFullLan}" IsEnabled="{Binding TestAllowFullLan}" />
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <Button Classes="amber" Content="{l:T multiplayer.matrix.accept}" Command="{Binding AcceptTestRequestCommand}" />

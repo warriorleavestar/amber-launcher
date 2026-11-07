@@ -61,7 +61,13 @@ public sealed class MultiplayerGuideTests
 
         vm.FullLanMode = true;
         Assert.Contains(nameof(MultiplayerViewModel.AdvancedHeaderText), changed);
-        Assert.Contains(L.T("multiplayer.advanced.item.full_lan"), vm.AdvancedHeaderText);
+        if (vm.CanUseFullLan)
+            Assert.Contains(L.T("multiplayer.advanced.item.full_lan"), vm.AdvancedHeaderText);
+        else
+        {
+            Assert.False(vm.FullLanMode);
+            Assert.Equal(L.T("multiplayer.advanced.title"), vm.AdvancedHeaderText);
+        }
 
         changed.Clear();
         vm.AllowGameProxy = true;
