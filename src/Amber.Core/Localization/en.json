@@ -1581,5 +1581,6 @@
   "core.gate.log.breaker_closed": "Privacy++ breaker closed: relays recovered, accepting connections again",
   "core.gate.admin.bad_rotation": "Invalid rotation settings: the window must be 30 seconds to 1 day and the port range within 1024–65535 with at least 100 ports",
   "core.gate.log.listen_failed": "Couldn't open port {0}",
-  "core.gate.log.revoked_dropped": "Device {1} was revoked or {0} was disabled/removed: dropped its live connection"
+  "core.gate.log.revoked_dropped": "Device {1} was revoked or {0} was disabled/removed: dropped its live connection",
+  "core.net.download.every_source_failed": "Could not download {0}; every download source failed: {1}"
 }
