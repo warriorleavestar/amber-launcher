@@ -247,7 +247,7 @@ Mac/Linux 上直接抛 `PlatformNotSupportedException`（“完整局域网模�
 
 1. **全部流量经房主（完整局域网 + 出口）🪟**：依赖完整局域网模式。使用方加 `--exit-nodes` 和两条 `/1` 路由接管系统流量；提权守护在改路由前核对网卡、网关，用 Windows 筛选平台（WFP）加临时防泄漏规则（`ExitTrafficPolicyScript.cs`），按网卡 GUID 改和恢复 DNS（`ExitDnsScript.cs`）、路由（`ExitRoutingScript.cs`）。全部是 PowerShell + Win32。Mac 上对应的是 `route` + `pf`（pfctl 锚点）+ `scutil`/`networksetup` 改 DNS；Linux 上是 `ip route`/策略路由 + nftables + `resolvectl`。工作量大，建议放到最后。
 2. **“仅游戏”出口（SOCKS5）🟡**：不需要虚拟网卡和管理员。出口成员跑一个最小 SOCKS5（`Transport/Socks5.cs`），只转发到公网地址；`Transport/ExitPolicy.cs` 拒绝私有地址、本机所有网卡地址和网段、路由器公网 IP，主机名在出口侧解析后逐个判断（防 DNS 重绑定）。平台差异有两处：
-   - 出口侧：Windows 上额外读路由表（`GetIpForwardTable2`）拦掉所有非默认路由的网段（比如 VPN 推下来的内网段）。Mac/Linux 没有这一步，**别人借你上网时可能连到经静态路由或 VPN 可达的内网**。适配：Linux 读 `/proc/net/route` 和 `/proc/net/ipv6_route`（或 netlink），macOS 用 `sysctl` 的 `NET_RT_DUMP` 或解析 `netstat -rn`。
+   - 出口侧：Windows 上额外读路由表（`GetIpForwardTable2`）拦掉所有非默认路由的网段（比如 VPN 推下来的内网段）。Linux 读 `/proc/net/route` 和 `/proc/net/ipv6_route`（只有主路由表，策略路由的其他表看不到），macOS 解析 `netstat -rn -f inet` / `inet6`；三个平台用同一套规则（`ExitPolicy.Classify`）。
    - 加入侧：`JoinTarget.cs` 在服务器地址没写端口时查 `_minecraft._tcp` 的 SRV 记录，目前只用 Windows 的 `DnsQuery_W`，其他平台返回 null（直接按 25565 连）。适配：自己发一个 DNS SRV 查询（UDP 53，读系统 DNS 服务器），或者 Linux/macOS 上调 libresolv 的 `res_query`。
 
 #### 诊断和全条件测试 🟡
@@ -388,7 +388,7 @@ CI 的单元测试只在 `windows-latest` 上跑。有一些测试本身按 `Ope
 | 3 | 正常关闭游戏（Linux） | `GameLauncher.RequestExit` | X11：找到游戏进程的窗口（`_NET_WM_PID`）发 `WM_DELETE_WINDOW`；Wayland 或找不到窗口时发 SIGTERM，并在界面上提示“可能来不及存档” | X11 下点“关闭游戏”，世界正常保存（看 `latest.log` 的 Saving 行） |
 | 4 | EasyTier 不残留 | `Multiplayer/EasyTier.cs` `Launch` | 每次启动把 PID + 进程启动时间写进 `easytier/run/*.pid`；Jay 启动和开房间前清理“PID 还在、启动时间对得上”的旧进程。Linux 额外可以用 `prctl(PR_SET_PDEATHSIG, SIGTERM)`（需要一个小包装进程，因为 .NET 的 `Process.Start` 不能在 fork 后插代码） | `kill -9` 掉 Jay 后重新打开，没有 easytier-core 残留 |
 | 5 | 不支持的选项先说明 | `Views/MultiplayerPage.axaml`、`MultiplayerViewModel.cs`、`TestMatrix.cs` | 在 Core 里加 `PlatformFeatures`（完整局域网、全部流量出口、远程控制、极端加密各一个布尔），界面按它禁用并显示原因；全条件测试排除不支持的步骤。之后每补齐一项就把对应开关改成 true | Mac/Linux 上勾不了完整局域网，旁边有说明；全条件测试不再出现必然失败的步骤 |
-| 6 | “仅游戏”出口拦截非默认路由 | `Transport/ExitPolicy.cs` `NonDefaultRoutes` | Linux 读 `/proc/net/route` 和 `/proc/net/ipv6_route`；macOS 用 `sysctl` `NET_RT_DUMP`（或者先解析 `netstat -rn -f inet` / `inet6`）。太宽的路由（IPv4 短于 /8、IPv6 短于 /16）照 Windows 的规则不拦 | 有 VPN 内网路由时，经出口连那个网段被拒绝；补单元测试（解析部分用样例文本） |
+| 6 | ✅ “仅游戏”出口拦截非默认路由 | `Transport/ExitPolicy.cs` `NonDefaultRoutes` | Linux 读 `/proc/net/route` 和 `/proc/net/ipv6_route`；macOS 用 `sysctl` `NET_RT_DUMP`（或者先解析 `netstat -rn -f inet` / `inet6`）。太宽的路由（IPv4 短于 /8、IPv6 短于 /16）照 Windows 的规则不拦 | 有 VPN 内网路由时，经出口连那个网段被拒绝；补单元测试（解析部分用样例文本） |
 | 7 | 进服时查 SRV | `Transport/JoinTarget.cs` | 自己实现一个最小 DNS 客户端：读系统 DNS（Linux `/etc/resolv.conf`，macOS `scutil --dns` 或 `/etc/resolv.conf`），UDP 53 发 SRV 查询，解析应答；或者 P/Invoke libresolv 的 `res_query` | 输入不带端口的服务器域名，经出口时按 SRV 的主机和端口连 |
 | 8 | 回收目录隐藏 | `Content/TrashService.cs` `HideOnWindows` | Mac/Linux 上回收目录名用 `.` 开头；macOS 另外可以设 `UF_HIDDEN`（`chflags hidden`） | Finder / 文件管理器默认看不到回收目录 |
 | 9 | 可用内存 | `Launch/InstanceSettings.cs` `FreePhysicalMb` | Linux 读 `/proc/meminfo` 的 `MemAvailable`；macOS 用 `host_statistics64`（free + inactive + purgeable 页 × 页大小） | 自动内存给出的数值和系统监视器看到的可用内存一致 |

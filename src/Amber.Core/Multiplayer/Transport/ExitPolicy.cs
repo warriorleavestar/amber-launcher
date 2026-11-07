@@ -302,7 +302,7 @@ public sealed partial class ExitPolicy : IDisposable
         }
         catch (NetworkInformationException) { }
         // 路由表里除默认路由以外的每条路由的目标网段（包括 VPN 推下来的路由）：这些地址不走普通的上网出口。
-        if (OperatingSystem.IsWindows()) networks.AddRange(NonDefaultRoutes());
+        networks.AddRange(NonDefaultRoutes());
         return (addresses, networks);
     }
 
@@ -408,20 +408,171 @@ public sealed partial class ExitPolicy : IDisposable
         return false;
     }
 
+    /// <summary>路由表里的一条：从哪块网卡出去、目标网段、是不是直连（没有下一跳网关）。</summary>
+    internal readonly record struct RouteRow(string Interface, IPAddress Destination, int Prefix, bool OnLink);
+
     /// <summary>
-    /// 读 Windows 路由表（GetIpForwardTable2），返回所有非默认路由的目标网段。
+    /// 读本机路由表（Windows GetIpForwardTable2，Linux /proc/net/route 和 ipv6_route，macOS netstat -rn），返回所有非默认路由的目标网段。
     /// 太宽的路由（IPv4 短于 /8、IPv6 短于 /16，比如全局 VPN 常用的 0.0.0.0/1）当作默认路由，不拦，否则什么都连不了。
     /// </summary>
     internal static List<(IPAddress, int)> NonDefaultRoutes()
     {
+        List<RouteRow> rows;
+        try
+        {
+            if (OperatingSystem.IsWindows()) rows = WindowsRoutes();
+            else if (OperatingSystem.IsLinux())
+                rows = [.. ParseLinuxRoutes(ReadOrEmpty("/proc/net/route")), .. ParseLinuxIPv6Routes(ReadOrEmpty("/proc/net/ipv6_route"))];
+            else if (OperatingSystem.IsMacOS()) rows = [.. ParseBsdNetstat(RunNetstat("inet")), .. ParseBsdNetstat(RunNetstat("inet6"))];
+            else return [];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return [];
+        }
+        return Classify(rows);
+    }
+
+    /// <summary>从路由表里挑出“不走普通上网出口”的网段（三个平台共用的规则）。</summary>
+    internal static List<(IPAddress, int)> Classify(IReadOnlyList<RouteRow> rows)
+    {
         var result = new List<(IPAddress, int)>();
-        if (GetIpForwardTable2(0 /* AF_UNSPEC */, out var table) != 0 || table == IntPtr.Zero) return result;
+        // 有默认路由的网卡（正常上网走的那块）。
+        var defaultInterfaces = rows.Where(r => r.Prefix == 0).Select(r => r.Interface).ToHashSet(StringComparer.Ordinal);
+        foreach (var r in rows)
+        {
+            if (r.Prefix == 0) continue;
+            var full = r.Destination.AddressFamily == AddressFamily.InterNetwork ? 32 : 128;
+            // 直连网段（本机所在的网段）和主机路由（本机地址、广播）：一定是本地的。
+            if (r.OnLink && r.Prefix >= (full == 32 ? 8 : 16) || r.Prefix == full) result.Add((r.Destination, r.Prefix));
+        }
+        // 经别的网卡（VPN、虚拟网卡）去的、范围不太大的路由：公司内网、VPN 推下来的网段。
+        // 分流 VPN 常常装上成百上千条公网路由，那种情况不拦（不然大半个互联网都连不了）。
+        var viaOther = rows.Where(r => r.Prefix > 0 && !r.OnLink && !defaultInterfaces.Contains(r.Interface)
+                                       && r.Prefix >= (r.Destination.AddressFamily == AddressFamily.InterNetwork ? 16 : 32)).ToList();
+        if (viaOther.Count <= 64) result.AddRange(viaOther.Select(r => (r.Destination, r.Prefix)));
+        return result;
+    }
+
+    private static string ReadOrEmpty(string path) => File.Exists(path) ? File.ReadAllText(path) : "";
+
+    private static string RunNetstat(string family)
+    {
+        var info = new System.Diagnostics.ProcessStartInfo("/usr/sbin/netstat") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in new[] { "-rn", "-f", family }) info.ArgumentList.Add(a);
+        using var process = System.Diagnostics.Process.Start(info) ?? throw new InvalidOperationException("netstat");
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        _ = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(5000))
+        {
+            process.Kill();
+            return "";
+        }
+        return stdout.Result;
+    }
+
+    /// <summary>
+    /// Linux /proc/net/route：Iface Destination Gateway Flags RefCnt Use Metric Mask …，地址是小端十六进制。
+    /// 只有主路由表（策略路由的其他表不在这里）。
+    /// </summary>
+    internal static List<RouteRow> ParseLinuxRoutes(string text)
+    {
+        var rows = new List<RouteRow>();
+        foreach (var line in text.Split('\n').Skip(1))
+        {
+            var f = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (f.Length < 8) continue;
+            if (!uint.TryParse(f[1], System.Globalization.NumberStyles.HexNumber, null, out var dest)
+                || !uint.TryParse(f[2], System.Globalization.NumberStyles.HexNumber, null, out var gateway)
+                || !uint.TryParse(f[7], System.Globalization.NumberStyles.HexNumber, null, out var mask)) continue;
+            // 文件里是网络字节序按小端读出来的数：BitConverter 在小端机器上原样得到网络顺序的 4 字节。
+            var bytes = BitConverter.GetBytes(dest);
+            if (!BitConverter.IsLittleEndian) Array.Reverse(bytes);
+            var prefix = System.Numerics.BitOperations.PopCount(mask);
+            if (RouteDestination(new IPAddress(bytes), prefix) is not { } route) continue;
+            rows.Add(new RouteRow(f[0], route.Network, route.Prefix, gateway == 0));
+        }
+        return rows;
+    }
+
+    /// <summary>Linux /proc/net/ipv6_route：目标(32 位十六进制) 前缀长度 源 源前缀 下一跳 度量 引用 使用 标志 网卡。</summary>
+    internal static List<RouteRow> ParseLinuxIPv6Routes(string text)
+    {
+        var rows = new List<RouteRow>();
+        foreach (var line in text.Split('\n'))
+        {
+            var f = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (f.Length < 10 || f[0].Length != 32 || f[4].Length != 32) continue;
+            try
+            {
+                var dest = new IPAddress(Convert.FromHexString(f[0]));
+                var prefix = Convert.ToInt32(f[1], 16);
+                var onLink = f[4].All(c => c == '0');
+                if (RouteDestination(dest, prefix) is not { } route) continue;
+                rows.Add(new RouteRow(f[9], route.Network, route.Prefix, onLink));
+            }
+            catch (FormatException) { }
+        }
+        return rows;
+    }
+
+    /// <summary>
+    /// macOS netstat -rn 的输出：Destination Gateway Flags Netif …。目标可能省略末尾的 0（“192.168.1” 是 /24、“127” 是 /8），
+    /// 带“/n”时按它；H 标志是主机路由；没有 G 标志的是直连。
+    /// </summary>
+    internal static List<RouteRow> ParseBsdNetstat(string text)
+    {
+        var rows = new List<RouteRow>();
+        foreach (var line in text.Split('\n'))
+        {
+            var f = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (f.Length < 4 || f[0] == "Destination") continue;
+            var (dest, gateway, flags, netif) = (f[0], f[1], f[2], f[3]);
+            var v6 = dest.Contains(':') || dest == "default" && gateway.Contains(':');
+            IPAddress? network;
+            int prefix;
+            if (dest == "default")
+            {
+                network = v6 ? IPAddress.IPv6Any : IPAddress.Any;
+                prefix = 0;
+            }
+            else
+            {
+                var slash = dest.IndexOf('/');
+                var addr = slash < 0 ? dest : dest[..slash];
+                var percent = addr.IndexOf('%');
+                if (percent >= 0) addr = addr[..percent];
+                int? given = slash >= 0 && int.TryParse(dest[(slash + 1)..], out var p) ? p : null;
+                if (v6)
+                {
+                    if (!IPAddress.TryParse(addr, out network)) continue;
+                    prefix = given ?? 128;
+                }
+                else
+                {
+                    var parts = addr.Split('.');
+                    if (parts.Length is < 1 or > 4 || parts.Any(x => !byte.TryParse(x, out _))) continue;
+                    network = IPAddress.Parse(string.Join('.', parts.Concat(Enumerable.Repeat("0", 4 - parts.Length))));
+                    prefix = given ?? (flags.Contains('H') ? 32 : parts.Length * 8);
+                }
+            }
+            // 没有 G 标志（不经网关）就是直连：网关一栏是 link#n、MAC 地址或者本机地址（lo0 上的 127）。
+            var onLink = !flags.Contains('G');
+            if (RouteDestination(network, prefix) is not { } route) continue;
+            rows.Add(new RouteRow(netif, route.Network, route.Prefix, onLink));
+        }
+        return rows;
+    }
+
+    private static List<RouteRow> WindowsRoutes()
+    {
+        var rows = new List<RouteRow>();
+        if (GetIpForwardTable2(0 /* AF_UNSPEC */, out var table) != 0 || table == IntPtr.Zero) return rows;
         try
         {
             var count = Marshal.ReadInt32(table);
             const int rowSize = 104;
             const int firstRow = 8;
-            var rows = new List<(uint Interface, IPAddress Destination, int Prefix, bool OnLink)>();
             for (var i = 0; i < count; i++)
             {
                 var row = table + firstRow + i * rowSize;
@@ -432,28 +583,14 @@ public sealed partial class ExitPolicy : IDisposable
                 var nextHop = ReadSockaddr(row + 44);
                 var onLink = nextHop is null || nextHop.Equals(IPAddress.Any) || nextHop.Equals(IPAddress.IPv6Any);
                 if (RouteDestination(destination, prefixLength) is not { } route) continue;
-                rows.Add((index, route.Network, route.Prefix, onLink));
+                rows.Add(new RouteRow(index.ToString(System.Globalization.CultureInfo.InvariantCulture), route.Network, route.Prefix, onLink));
             }
-            // 有默认路由的网卡（正常上网走的那块）。
-            var defaultInterfaces = rows.Where(r => r.Prefix == 0).Select(r => r.Interface).ToHashSet();
-            foreach (var r in rows)
-            {
-                if (r.Prefix == 0) continue;
-                var full = r.Destination.AddressFamily == AddressFamily.InterNetwork ? 32 : 128;
-                // 直连网段（本机所在的网段）和主机路由（本机地址、广播）：一定是本地的。
-                if (r.OnLink && r.Prefix >= (full == 32 ? 8 : 16) || r.Prefix == full) result.Add((r.Destination, r.Prefix));
-            }
-            // 经别的网卡（VPN、虚拟网卡）去的、范围不太大的路由：公司内网、VPN 推下来的网段。
-            // 分流 VPN 常常装上成百上千条公网路由，那种情况不拦（不然大半个互联网都连不了）。
-            var viaOther = rows.Where(r => r.Prefix > 0 && !r.OnLink && !defaultInterfaces.Contains(r.Interface)
-                                           && r.Prefix >= (r.Destination.AddressFamily == AddressFamily.InterNetwork ? 16 : 32)).ToList();
-            if (viaOther.Count <= 64) result.AddRange(viaOther.Select(r => (r.Destination, r.Prefix)));
         }
         finally
         {
             FreeMibTable(table);
         }
-        return result;
+        return rows;
     }
 
     /// <summary>
