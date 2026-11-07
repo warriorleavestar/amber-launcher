@@ -270,7 +270,8 @@ public sealed class RekeyTests : IDisposable
         var fresh = stale with { Epoch = current + 1 };
         var (_, ok) = await hub.SendRekeyAsync(fresh, TimeSpan.FromSeconds(5));
         Assert.Single(ok);
-        Assert.Equal(1, got);
+        // 成员先回 ack 再触发 Rekeyed，房主收到 ack 时事件可能还没跑完，所以等一下。
+        Assert.True(await WaitAsync(() => Volatile.Read(ref got) == 1));
     }
 
     [Fact]
