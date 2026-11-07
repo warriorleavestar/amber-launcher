@@ -109,11 +109,63 @@ public static class MemoryPlanner
             var status = new MemoryStatusEx { Length = (uint)Marshal.SizeOf<MemoryStatusEx>() };
             if (GlobalMemoryStatusEx(ref status)) return (long)(status.AvailPhys / 1024 / 1024);
         }
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                if (ProcMemInfoMb(File.ReadAllText("/proc/meminfo"), "MemAvailable") is { } available) return available;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
+        if (OperatingSystem.IsMacOS() && MacAvailableMemoryMb() is { } macAvailable) return macAvailable;
         var info = GC.GetGCMemoryInfo();
         return (info.TotalAvailableMemoryBytes - info.MemoryLoadBytes) / 1024 / 1024;
     }
 
-    public static long TotalPhysicalMb() => GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1024 / 1024;
+    public static long TotalPhysicalMb()
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                if (ProcMemInfoMb(File.ReadAllText("/proc/meminfo"), "MemTotal") is { } total) return total;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
+        if (OperatingSystem.IsMacOS() && TrySysctl("hw.memsize", out var bytes)) return (long)(bytes / 1024 / 1024);
+        return GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1024 / 1024;
+    }
+
+    internal static long? ProcMemInfoMb(string text, string key)
+    {
+        foreach (var line in text.Split('\n'))
+        {
+            var colon = line.IndexOf(':');
+            if (colon < 0 || !line[..colon].Equals(key, StringComparison.Ordinal)) continue;
+            var value = line[(colon + 1)..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+            return long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var kb)
+                ? kb / 1024
+                : null;
+        }
+        return null;
+    }
+
+    private static long? MacAvailableMemoryMb()
+    {
+        if (!TrySysctl("hw.pagesize", out var pageSize) ||
+            !TrySysctl("vm.page_free_count", out var free) ||
+            !TrySysctl("vm.page_inactive_count", out var inactive)) return null;
+        TrySysctl("vm.page_purgeable_count", out var purgeable);
+        return checked((long)((free + inactive + purgeable) * pageSize / 1024 / 1024));
+    }
+
+    private static bool TrySysctl(string name, out ulong value)
+    {
+        value = 0;
+        if (!OperatingSystem.IsMacOS()) return false;
+        nuint length = sizeof(ulong);
+        return SysctlByName(name, out value, ref length, IntPtr.Zero, 0) == 0 && length > 0;
+    }
 
     /// <summary>
     /// 自动内存：原版 2.5 GB、加模组后按数量加。留出系统余量，不超过可用内存。
@@ -150,6 +202,9 @@ public static class MemoryPlanner
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GlobalMemoryStatusEx(ref MemoryStatusEx buffer);
+
+    [DllImport("libc", EntryPoint = "sysctlbyname")]
+    private static extern int SysctlByName(string name, out ulong oldValue, ref nuint oldLength, IntPtr newValue, nuint newLength);
 }
 
 public static class ArgumentSplitter

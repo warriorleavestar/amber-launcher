@@ -75,7 +75,7 @@
 | 回收站（可撤销删除） | ✅ 隐藏目录 | ✅ 目录不隐藏 | ✅ | `Content/TrashService.cs` |
 | 下载器 | ✅ | ✅ 打开了 Network.framework TLS | ✅ | `src/Directory.Build.targets` |
 | 联机：EasyTier 下载和运行 | ✅ | 🟡 | 🟡 | `Multiplayer/EasyTier.cs` |
-| 联机：EasyTier 进程随 Jay 退出 | ✅ 作业对象 | ✅ 看门脚本 + PID 文件清理 | ✅ 同左 | `Multiplayer/ProcessJob.cs`、`Multiplayer/EasyTierProcessGuard.cs` |
+| 联机：EasyTier 进程随 Jay 退出 | ✅ 作业对象 | ✅ 看门脚本 + 开始联机前按记录清理 | ✅ 同左 | `Multiplayer/ProcessJob.cs`、`Multiplayer/EasyTierProcessGuard.cs`、`Multiplayer/EasyTierProcessTracker.cs` |
 | 联机：邀请、敲门、成员钥匙、踢人【实验】 | ✅ | 🟡 | 🟡 | 纯托管代码 |
 | 联机：封装模式（MC 专用、高加密） | ✅ | 🟡 | 🟡 | `Multiplayer/Transport/` |
 | 联机：极端加密（ML-KEM 混合） | ✅ Win11 新版 | 🪟 .NET 在 macOS 上没有 ML-KEM | 🟡 需要 OpenSSL 3.5+ | `Multiplayer/Transport/Noise.cs` `HybridSupported` |
@@ -188,7 +188,7 @@ EasyTier（组网，P2P 或经节点中继）
 - `Multiplayer/EasyTier.cs`：固定版本 2.6.4，第一次用联机时从 EasyTier 的 GitHub 发布页下载对应平台的 zip，校验 SHA-256 和大小后解压到数据目录。七个平台都有哈希：windows x86_64 / arm64 / i686，macos x86_64 / aarch64，linux x86_64 / aarch64。Windows 另外要 `WinDivert64.sys`（完整局域网模式转发广播用）。非 Windows 解压后加执行权限。
 - 默认用 `--no-tun`（不建虚拟网卡），所以不需要管理员也不装驱动。加入方用 `--port-forward` 把本机端口转到房主的虚拟地址；房主只放行本次提供服务的 TCP 端口（`--tcp-whitelist`），UDP 全拦。
 - 房间密钥经环境变量 `ET_NETWORK_SECRET` 传，不放命令行。
-- 进程管理：Windows 上 easytier-core 放进作业对象（`ProcessJob.cs`），Jay 崩溃或被结束时系统会一起结束它。Mac/Linux 用 `EasyTierProcessGuard.cs`：easytier-core 经一个 `/bin/sh` 看门脚本启动，脚本每秒看一次 Jay 的 PID，Jay 没了（包括 `kill -9`）就结束 core；另外每次启动在 `easytier/pids/` 记一个 PID 文件（看门进程和 Jay 各自的 PID + 启动时间），Jay 启动和每次开始联机前清理“记录的 Jay 已经不在、进程还在且启动时间对得上”的，别的 Jay 窗口正在用的不碰。没用 `PR_SET_PDEATHSIG`：它跟的是父线程，.NET 线程池线程退出就会误杀。
+- 进程管理：Windows 上 easytier-core 放进作业对象（`ProcessJob.cs`），Jay 崩溃或被结束时系统会一起结束它。Mac/Linux 两层：`EasyTierProcessGuard.cs` 让 easytier-core 经一个 `/bin/sh` 看门脚本启动，脚本每秒看一次 Jay 的 PID，Jay 没了（包括 `kill -9`）就结束 core；`EasyTierProcessTracker.cs` 在工作目录里记录进程（PID、启动时间、可执行文件），下次在同一目录开始联机前清理对得上的旧进程，兜住看门进程也被单独结束的情况。没用 `PR_SET_PDEATHSIG`：它跟的是父线程，.NET 线程池线程退出就会误杀。
 - macOS 上从网络下载的程序没有隔离属性（.NET 的 HttpClient 不加 `com.apple.quarantine`），未签名的 easytier-core 可以直接运行。如果以后改用别的下载方式要注意这一点。
 
 #### 邀请、敲门和成员钥匙【实验】🟡

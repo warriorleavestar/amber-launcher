@@ -210,7 +210,7 @@ public sealed class EntryRotationTests : IAsyncLifetime
         // 客户端保存的地址簿里也有轮换种子。
         var list = new JayServerList(Path.Combine(_root, "list"));
         list.Add(membership);
-        var back = JayServerList.ToMembership(list.Load().Single());
+        var back = list.ToMembership(list.Load().Single());
         Assert.Equal(membership.Network.Rotation.RelaySeeds.Count, back.Network!.Rotation!.RelaySeeds.Count);
         await PlayAsync(back, identity);
     }

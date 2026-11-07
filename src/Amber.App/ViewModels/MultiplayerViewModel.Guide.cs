@@ -69,8 +69,26 @@ public sealed partial class MultiplayerViewModel
         }
     }
 
-    partial void OnFullLanModeChanged(bool value) => OnPropertyChanged(nameof(AdvancedHeaderText));
-    partial void OnAllowExitNodeChanged(bool value) => OnPropertyChanged(nameof(AdvancedHeaderText));
+    partial void OnFullLanModeChanged(bool value)
+    {
+        if (value && !CanUseFullLan)
+        {
+            FullLanMode = false;
+            return;
+        }
+        if (!value) AllowExitNode = false;
+        OnPropertyChanged(nameof(AdvancedHeaderText));
+    }
+
+    partial void OnAllowExitNodeChanged(bool value)
+    {
+        if (value && (!CanUseFullLan || !FullLanMode))
+        {
+            AllowExitNode = false;
+            return;
+        }
+        OnPropertyChanged(nameof(AdvancedHeaderText));
+    }
     partial void OnAllowGameProxyChanged(bool value) => OnPropertyChanged(nameof(AdvancedHeaderText));
     partial void OnSelectedTransportChanged(TransportChoice value) => OnPropertyChanged(nameof(AdvancedHeaderText));
 

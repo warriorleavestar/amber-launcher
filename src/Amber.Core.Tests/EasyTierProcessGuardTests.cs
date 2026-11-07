@@ -92,33 +92,20 @@ public sealed class EasyTierProcessGuardTests : IDisposable
     }
 
     [Fact]
-    public void SweepKillsOnlyOrphansWhoseJayIsGone()
+    public async Task TrackerCleansUpAWrappedCoreWhenTheWatcherWasLeftBehind()
     {
+        // 看门进程自己被留下（比如记录它的 Jay 已经没了但看门进程还没轮到检查）：下次开始联机前的清理按 sh 认出它，连 core 一起结束。
         if (OperatingSystem.IsWindows()) return;
-        var mine = Start("/bin/sleep", "600");
-        Assert.NotNull(EasyTierProcessGuard.Record(_dir, mine));
-        // 记录它的就是现在这个（活着的）进程：不清。
-        Assert.Equal(0, EasyTierProcessGuard.Sweep(_dir));
-        Assert.False(mine.HasExited);
-
-        // 另一个文件：Jay（owner）已经不在了 → 清掉。
-        var orphan = Start("/bin/sleep", "600");
-        var gone = Start("/bin/true");
-        gone.WaitForExit();
-        var start = orphan.StartTime.ToUniversalTime().Ticks;
-        File.WriteAllText(Path.Combine(_dir, orphan.Id + ".pid"), $"{orphan.Id} {start} {gone.Id} 1");
-        // 再来一个：PID 对上了但启动时间不对（PID 被别的程序重用）→ 不清，只删文件。
-        var reused = Start("/bin/sleep", "600");
-        File.WriteAllText(Path.Combine(_dir, reused.Id + ".pid"), $"{reused.Id} 1 {gone.Id} 1");
-
-        Assert.Equal(1, EasyTierProcessGuard.Sweep(_dir));
-        Assert.True(orphan.WaitForExit(5000));
-        Assert.False(reused.HasExited);
-        Assert.False(mine.HasExited);
-        Assert.False(File.Exists(Path.Combine(_dir, orphan.Id + ".pid")));
-        Assert.False(File.Exists(Path.Combine(_dir, reused.Id + ".pid")));
-        Assert.True(File.Exists(Path.Combine(_dir, mine.Id + ".pid")));
-        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(Path.Combine(_dir, mine.Id + ".pid")));
+        var info = new ProcessStartInfo("/bin/sleep") { UseShellExecute = false };
+        info.ArgumentList.Add("600");
+        EasyTierProcessGuard.Wrap(info);
+        var watch = Process.Start(info)!;
+        _started.Add(watch);
+        Assert.True(await Until(() => Children(watch.Id).Count > 0));
+        var core = Children(watch.Id)[0];
+        Assert.NotNull(EasyTierProcessTracker.Track(watch, _dir, EasyTierProcessGuard.TrackedExecutable(info)));
+        EasyTierProcessTracker.Cleanup(_dir, "/opt/not-easytier", EasyTierProcessGuard.WatcherExecutable);
+        Assert.True(await Until(() => watch.HasExited && !Alive(core)));
     }
 
     /// <summary>直接子进程（Linux 读 /proc，macOS 用 pgrep）。</summary>

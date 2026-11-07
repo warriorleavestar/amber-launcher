@@ -134,7 +134,7 @@ public sealed class AccountStore(string path)
         var nonce = RandomNumberGenerator.GetBytes(12);
         var cipher = new byte[bytes.Length];
         var tag = new byte[16];
-        using (var aes = new AesGcm(LocalKey(), tag.Length)) aes.Encrypt(nonce, bytes, cipher, tag, Entropy);
+        using (var aes = new AesGcm(LocalSecretKey.LoadOrCreate(path + ".key", "account"), tag.Length)) aes.Encrypt(nonce, bytes, cipher, tag, Entropy);
         return "v2:" + Convert.ToBase64String([.. nonce, .. tag, .. cipher]);
     }
 
@@ -152,7 +152,7 @@ public sealed class AccountStore(string path)
             var all = Convert.FromBase64String(stored[3..]);
             if (all.Length < 28) return null;
             var plain = new byte[all.Length - 28];
-            using (var aes = new AesGcm(LocalKey(), 16))
+            using (var aes = new AesGcm(LocalSecretKey.LoadOrCreate(path + ".key", "account"), 16))
                 aes.Decrypt(all.AsSpan(0, 12), all.AsSpan(28), all.AsSpan(12, 16), plain, Entropy);
             return Encoding.UTF8.GetString(plain);
         }
@@ -163,37 +163,6 @@ public sealed class AccountStore(string path)
         }
     }
 
-    private byte[] LocalKey()
-    {
-        var keyPath = path + ".key";
-        if (File.Exists(keyPath))
-        {
-            var key = File.ReadAllBytes(keyPath);
-            if (key.Length != 32) throw new CryptographicException("Invalid account key");
-            return key;
-        }
-        Directory.CreateDirectory(Path.GetDirectoryName(keyPath)!);
-        var created = RandomNumberGenerator.GetBytes(32);
-        // 创建时就只给当前用户读写：先建再 chmod 会留一段按 umask（通常 0644）可读的窗口。
-        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
-        if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        try
-        {
-            using var stream = new FileStream(keyPath, options);
-            stream.Write(created);
-            stream.Flush(true);
-        }
-        catch (IOException) when (File.Exists(keyPath))
-        {
-            // 另一个启动器进程刚好先建好了密钥：用它的，不能各写各的。
-            var existing = File.ReadAllBytes(keyPath);
-            if (existing.Length != 32) throw new CryptographicException("Invalid account key");
-            return existing;
-        }
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        return created;
-    }
 }
 
 public sealed class LoginRequiredException(string message) : Exception(message);

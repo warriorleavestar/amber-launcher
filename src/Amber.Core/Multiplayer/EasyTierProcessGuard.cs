@@ -5,11 +5,8 @@ namespace Amber.Core.Multiplayer;
 
 /// <summary>
 /// Mac/Linux 上保证 Jay 没了 easytier-core 也跟着结束（Windows 用作业对象 <see cref="ProcessJob"/>，这里不管）：
-/// <list type="bullet">
-/// <item>启动时套一层 /bin/sh 看门：每秒看一次 Jay 还在不在，不在了就结束 easytier-core。Jay 被 kill -9 也一样。</item>
-/// <item>每次启动记一个 PID 文件（看门进程的 PID 和启动时间、Jay 的 PID 和启动时间）。看门进程自己也被结束时，
-/// 下次打开 Jay 或开房间前按文件清理：只清“进程还在、启动时间对得上、而且记录的 Jay 已经不在了”的，别的 Jay 正在用的不碰。</item>
-/// </list>
+/// 启动时套一层 /bin/sh 看门，每秒看一次 Jay 还在不在，不在了（包括 kill -9）就结束 easytier-core。
+/// 看门进程自己也被单独结束时，由 <see cref="EasyTierProcessTracker"/> 在下次开始联机前清理。
 /// </summary>
 internal static class EasyTierProcessGuard
 {
@@ -36,82 +33,30 @@ internal static class EasyTierProcessGuard
         foreach (var a in args) info.ArgumentList.Add(a);
     }
 
-    private static readonly long OwnerStart = StartTicks(Process.GetCurrentProcess()) ?? 0;
+    /// <summary>看门脚本用的 sh 的真实路径（Linux 上 /bin/sh 多半指向 dash 或 bash，进程信息里看到的是真实路径）。</summary>
+    internal static string WatcherExecutable { get; } = ResolveShell();
 
-    private static long? StartTicks(Process p)
+    private static string ResolveShell()
     {
-        try { return p.StartTime.ToUniversalTime().Ticks; }
-        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { return null; }
-    }
-
-    private static string PidFile(string pidDir, int pid) => Path.Combine(pidDir, pid.ToString(CultureInfo.InvariantCulture) + ".pid");
-
-    /// <summary>记下刚启动的进程。返回 PID 文件路径（记不下时返回 null，不影响联机）。</summary>
-    internal static string? Record(string pidDir, Process process)
-    {
-        if (OperatingSystem.IsWindows() || StartTicks(process) is not { } start) return null;
+        if (OperatingSystem.IsWindows()) return "/bin/sh";
+        // 要和系统报告的进程路径完全一致：/bin 本身也可能是指向 /usr/bin 的链接，所以用 realpath 解析整条路径。
         try
         {
-            Directory.CreateDirectory(pidDir);
-            var path = PidFile(pidDir, process.Id);
-            var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite };
-            using var writer = new StreamWriter(new FileStream(path, options));
-            writer.Write(string.Join(' ', process.Id, start, Environment.ProcessId, OwnerStart));
-            return path;
+            var resolved = realpath("/bin/sh", IntPtr.Zero);
+            if (resolved == IntPtr.Zero) return "/bin/sh";
+            try { return System.Runtime.InteropServices.Marshal.PtrToStringUTF8(resolved) ?? "/bin/sh"; }
+            finally { free(resolved); }
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException) { return "/bin/sh"; }
     }
 
-    internal static void Forget(string? pidFile)
-    {
-        if (pidFile is null) return;
-        try { File.Delete(pidFile); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
-    }
+    [System.Runtime.InteropServices.DllImport("libc")]
+    private static extern IntPtr realpath([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPUTF8Str)] string path, IntPtr resolved);
 
-    /// <summary>清理上次没收尾的 easytier（Jay 崩溃、被强制结束、看门进程也被结束）。返回结束了几个。</summary>
-    internal static int Sweep(string pidDir)
-    {
-        if (OperatingSystem.IsWindows() || !Directory.Exists(pidDir)) return 0;
-        var killed = 0;
-        string[] files;
-        try { files = Directory.GetFiles(pidDir, "*.pid"); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return 0; }
-        foreach (var file in files)
-        {
-            try
-            {
-                var parts = File.ReadAllText(file).Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 4 || !int.TryParse(parts[0], CultureInfo.InvariantCulture, out var pid) || !long.TryParse(parts[1], CultureInfo.InvariantCulture, out var start)
-                    || !int.TryParse(parts[2], CultureInfo.InvariantCulture, out var owner) || !long.TryParse(parts[3], CultureInfo.InvariantCulture, out var ownerStart))
-                {
-                    File.Delete(file);
-                    continue;
-                }
-                // 记录它的 Jay 还活着（另一个 Jay 窗口，或者就是现在这个）：别动。
-                if (IsSame(owner, ownerStart)) continue;
-                if (IsSame(pid, start))
-                {
-                    using var p = Process.GetProcessById(pid);
-                    p.Kill(true);
-                    p.WaitForExit(3000);
-                    killed++;
-                }
-                File.Delete(file);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception or ArgumentException) { }
-        }
-        return killed;
-    }
+    [System.Runtime.InteropServices.DllImport("libc")]
+    private static extern void free(IntPtr p);
 
-    /// <summary>PID 还在，而且启动时间对得上（PID 可能被别的程序重用了）。</summary>
-    private static bool IsSame(int pid, long startTicks)
-    {
-        try
-        {
-            using var p = Process.GetProcessById(pid);
-            return !p.HasExited && StartTicks(p) is { } now && Math.Abs(now - startTicks) < TimeSpan.TicksPerSecond;
-        }
-        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
-    }
+    /// <summary>给 <see cref="EasyTierProcessTracker"/> 记录的可执行文件：套了看门脚本时是 sh，否则是 easytier-core 本身。</summary>
+    internal static string TrackedExecutable(ProcessStartInfo info) =>
+        info.FileName == "/bin/sh" ? WatcherExecutable : info.FileName;
 }

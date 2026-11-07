@@ -72,8 +72,6 @@ public sealed class LauncherService : IDisposable
         if (store.Accounts.Count == 0 && !string.IsNullOrWhiteSpace(settings.PlayerName))
             Accounts.AddOffline(settings.PlayerName);
         Reload();
-        // 上次 Jay 崩溃或被强制结束时留下的联机组件（Mac/Linux）：在后台结束掉。
-        _ = Task.Run(() => EasyTier.SweepOrphans());
     }
 
     public void Reload()
