@@ -16,6 +16,8 @@ public enum PastedCodeKind
     OldDirect,
     /// <summary>节点分享码 AMBNODE-…。</summary>
     NodeShare,
+    /// <summary>Jay 服务器邀请码 JAYS1-…：贴到“Jay 服务器”卡片。</summary>
+    JayServer,
 }
 
 /// <summary>
@@ -52,5 +54,6 @@ public static class PastedCode
         ("AMBREPLY", PastedCodeKind.OldDirect),
         ("AMBNODE-", PastedCodeKind.NodeShare),
         ("JAY2-", PastedCodeKind.Invite),
+        ("JAYS1-", PastedCodeKind.JayServer),
     ];
 }

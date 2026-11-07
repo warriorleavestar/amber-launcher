@@ -3,4 +3,5 @@
   <Project Path="Amber.Cli/Amber.Cli.csproj" />
   <Project Path="Amber.Core.Tests/Amber.Core.Tests.csproj" />
   <Project Path="Amber.Core/Amber.Core.csproj" />
+  <Project Path="Amber.Server/Amber.Server.csproj" />
 </Solution>

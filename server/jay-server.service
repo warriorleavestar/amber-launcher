@@ -1,0 +1,28 @@
+# Jay 服务器版的 systemd 服务（Linux VPS / 局域网里的 Linux 电脑）。
+# 用法见 README.md：把 jay-server 放到 /opt/jay-server/，数据放 /var/lib/jay-server/，用单独的 jay 用户运行。
+[Unit]
+Description=Jay Server (Minecraft server reachable only through Jay)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jay
+Group=jay
+Environment=JAY_SERVER_DIR=/var/lib/jay-server
+ExecStart=/opt/jay-server/jay-server run
+# 正常关闭：jay-server 收到 SIGTERM 后先让 MC 存盘再退出，给它足够时间。
+KillSignal=SIGTERM
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=10
+
+# 加固：只能写自己的数据目录。
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/jay-server
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

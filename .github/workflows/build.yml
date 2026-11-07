@@ -78,6 +78,13 @@ jobs:
           -p:PublishReadyToRun=true -p:DebugType=none
           -o ../out/${{ matrix.rid }}
 
+      - name: Publish Jay Server (single file)
+        run: >-
+          dotnet publish Amber.Server -c Release -r ${{ matrix.rid }} --self-contained
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=none
+          -o ../out/server-${{ matrix.rid }}
+
       - name: Package Windows
         if: matrix.archive == 'zip'
         shell: pwsh
@@ -85,6 +92,8 @@ jobs:
           New-Item -ItemType Directory -Force ../packages | Out-Null
           Get-ChildItem ../out/${{ matrix.rid }} -Recurse -Filter *.pdb | Remove-Item
           Compress-Archive -Path ../out/${{ matrix.rid }}/* -DestinationPath ../packages/Jay-${{ matrix.rid }}.zip
+          Copy-Item ../server/README.md ../out/server-${{ matrix.rid }}/
+          Compress-Archive -Path ../out/server-${{ matrix.rid }}/* -DestinationPath ../packages/JayServer-${{ matrix.rid }}.zip
 
       - name: Package macOS/Linux
         if: matrix.archive == 'tar'
@@ -94,6 +103,9 @@ jobs:
           find ../out/${{ matrix.rid }} -name '*.pdb' -delete
           chmod +x ../out/${{ matrix.rid }}/Jay
           tar -C ../out/${{ matrix.rid }} -czf ../packages/Jay-${{ matrix.rid }}.tar.gz .
+          chmod +x ../out/server-${{ matrix.rid }}/jay-server
+          cp ../server/README.md ../server/jay-server.service ../out/server-${{ matrix.rid }}/
+          tar -C ../out/server-${{ matrix.rid }} -czf ../packages/JayServer-${{ matrix.rid }}.tar.gz .
 
       - name: Publish Windows Native AOT
         if: matrix.rid == 'win-x64'
