@@ -467,4 +467,4 @@ dotnet build Amber.slnx -c Release
 dotnet test Amber.Core.Tests -c Release
 ```
 
-- 已知会偶发失败的测试：`TunnelTests.RekeyPaddingAndCover`（掩护流量计时）、`RekeyTests.StaleOrEqualEpochIsIgnored`。没有 IPv6 的环境里直连/测速测试会失败。
+- 没有 IPv6 的环境里直连/测速测试会失败。计时相关的测试一律“等到条件成立（有上限）”，不要用固定延时后断言。

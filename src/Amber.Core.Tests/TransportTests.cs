@@ -312,7 +312,9 @@ public class TunnelTests
             // 10 字节的数据也填充到 256 档。
             Assert.Equal(256, client.PaddedLength(3 + 10));
             Assert.Equal(1024, client.PaddedLength(3 + 300));
-            await Task.Delay(300);
+            // 掩护记录靠计时器发，CI 机器忙时可能晚到；等到发出为止（最多 10 秒），不靠固定延时。
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (client.CoverRecordsSent == 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
             Assert.True(client.CoverRecordsSent > 0, "空闲时应该发掩护记录");
             // 掩护记录在接收方被丢弃，之后的真实数据照样对得上。
             await client.WriteAsync("after cover"u8.ToArray());
