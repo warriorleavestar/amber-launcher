@@ -18,6 +18,8 @@ public enum GateStatus : byte
     Disabled = 5,
     /// <summary>服务器开了隐私+：只接受经两个节点的拆分连接（旧版 Jay 会收到这个，要更新）。</summary>
     SplitRequired = 6,
+    /// <summary>隐私++ 熔断中：能用的节点不够两个，暂停接受连接，节点恢复后自动可用。</summary>
+    CircuitOpen = 7,
 }
 
 /// <summary>服务器的隐私等级。</summary>
@@ -27,6 +29,14 @@ public enum PrivacyLevel : byte
     Basic = 0,
     /// <summary>隐私+：经两个不同节点各走一半（2-of-2 拆分），网关只接受节点转来的连接。</summary>
     Plus = 1,
+    /// <summary>隐私++：在隐私+ 之上，节点要持续发心跳；健康节点不够就熔断（全部断开、暂停接受连接），节点可以随时吊销。</summary>
+    PlusPlus = 2,
+}
+
+public static class PrivacyLevels
+{
+    /// <summary>这个等级要不要经两个节点拆分。</summary>
+    public static bool IsSplit(this PrivacyLevel level) => level is PrivacyLevel.Plus or PrivacyLevel.PlusPlus;
 }
 
 /// <summary>一个地址（网关或节点）。</summary>
@@ -97,6 +107,7 @@ public sealed class GateRejectedException(GateStatus status) : Exception(Describ
         GateStatus.NotMember => L.T("core.gate.status.notmember"),
         GateStatus.Disabled => L.T("core.gate.status.disabled"),
         GateStatus.SplitRequired => L.T("core.gate.status.splitrequired"),
+        GateStatus.CircuitOpen => L.T("core.gate.status.circuitopen"),
         _ => L.T("core.gate.status.unknown"),
     };
 }
@@ -121,6 +132,9 @@ public static class GateProtocol
     internal const byte Version2 = 2;
     internal static readonly byte[] EnrollPrologue = "jay-gate-v1|enroll"u8.ToArray();
     internal static readonly byte[] JoinPrologue = "jay-gate-v1|join"u8.ToArray();
+    internal static readonly byte[] RelayPrologue = "jay-gate-v1|relay"u8.ToArray();
+    /// <summary>节点心跳记录：[8 字节序号][8 字节 Unix 毫秒]。</summary>
+    internal const int HeartbeatLength = 16;
 
     /// <summary>游戏流量用 MC 专用档：不填充，一小时换一次钥（和房间联机的 MC 专用一致）。</summary>
     internal static TransportProfile Profile => TransportProfile.For(TransportMode.Minecraft);
@@ -234,12 +248,14 @@ public static class GateProtocol
     /// <summary>网关这边一次握手的结果。</summary>
     /// <param name="Version">1 = 旧客户端（第三条消息负载为空），2 = 带 v2 负载。</param>
     /// <param name="Request">v2 进服请求；入服和 v1 时为 null。</param>
-    public sealed record Accepted(SecureStream Stream, byte[] DevicePublicKey, bool IsEnroll, string? InviteId, int Version = 1, JoinRequest? Request = null);
+    /// <param name="RelayId">节点心跳连接：哪个节点（它的地址）。</param>
+    public sealed record Accepted(SecureStream Stream, byte[] DevicePublicKey, bool IsEnroll, string? InviteId, int Version = 1, JoinRequest? Request = null, string? RelayId = null);
 
     /// <summary>
     /// 网关：读第一条消息，按顺序试 join（访问密钥）和每个有效邀请的 psk，哪个解得开就是哪种。都不行返回 null（调用方直接断开，不回任何字节）。
     /// </summary>
-    public static async Task<Accepted?> AcceptAsync(Stream stream, X25519KeyPair serverKey, byte[] accessKey, IReadOnlyList<(string Id, byte[] Psk)> invites, CancellationToken ct)
+    public static async Task<Accepted?> AcceptAsync(Stream stream, X25519KeyPair serverKey, byte[] accessKey, IReadOnlyList<(string Id, byte[] Psk)> invites, CancellationToken ct,
+        IReadOnlyList<(string Id, byte[] Psk)>? relays = null)
     {
         byte[] first;
         try
@@ -250,9 +266,10 @@ public static class GateProtocol
         {
             return null;
         }
-        var candidates = new List<(byte[] Prologue, byte[] Psk, string? InviteId)> { (JoinPrologue, accessKey, null) };
+        var candidates = new List<(byte[] Prologue, byte[] Psk, string? Id)> { (JoinPrologue, accessKey, null) };
         candidates.AddRange(invites.Select(i => (EnrollPrologue, i.Psk, (string?)i.Id)));
-        foreach (var (prologue, psk, inviteId) in candidates)
+        if (relays is not null) candidates.AddRange(relays.Select(r => (RelayPrologue, r.Psk, (string?)r.Id)));
+        foreach (var (prologue, psk, id) in candidates)
         {
             var hs = new NoiseHandshake(NoisePattern.XXpsk0, initiator: false, prologue, psk, serverKey);
             try
@@ -277,11 +294,17 @@ public static class GateProtocol
                 {
                     return null;
                 }
-                var enroll = inviteId is not null;
-                if (!TryParsePayload(payload, enroll, out var version, out var request)) return null;
                 var device = hs.RemoteStaticPublicKey!;
+                if (ReferenceEquals(prologue, RelayPrologue))
+                {
+                    if (payload.Length != 1 || payload[0] != Version2) return null;
+                    var (rs, rr) = hs.Split();
+                    return new Accepted(new SecureStream(stream, rs, rr, Profile), device, false, null, 2, null, id);
+                }
+                var enroll = id is not null;
+                if (!TryParsePayload(payload, enroll, out var version, out var request)) return null;
                 var (send, receive) = hs.Split();
-                return new Accepted(new SecureStream(stream, send, receive, Profile), device, enroll, inviteId, version, request);
+                return new Accepted(new SecureStream(stream, send, receive, Profile), device, enroll, id, version, request);
             }
         }
         return null;
@@ -297,6 +320,57 @@ public static class GateProtocol
 
     public static Task SendJoinResultAsync(SecureStream stream, GateStatus status, CancellationToken ct, GateNetwork? network = null) =>
         WriteRecordAsync(stream, [(byte)status, .. network is null ? [] : EncodeNetwork(network)], ct);
+
+    // ---------------- 节点心跳 ----------------
+
+    /// <summary>节点心跳的 psk：从节点码里的密钥派生，网关只存这个值。</summary>
+    public static byte[] RelayPsk(ReadOnlySpan<byte> secret, ReadOnlySpan<byte> serverKeyHash) =>
+        HKDF.DeriveKey(HashAlgorithmName.SHA256, secret.ToArray(), 32, serverKeyHash.ToArray(), "jay-gate-relay-psk-v1"u8.ToArray());
+
+    /// <summary>节点：连上网关的心跳通道。先核对网关公钥（节点码里钉住的哈希），网关认了这个节点才回 Ok。</summary>
+    public static async Task<SecureStream> RelayConnectAsync(Stream stream, GateRelayCode code, X25519KeyPair relayKey, CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(HandshakeTimeout);
+        var psk = RelayPsk(code.Secret, code.ServerKeyHash);
+        SecureStream secure;
+        try
+        {
+            using var hs = new NoiseHandshake(NoisePattern.XXpsk0, initiator: true, RelayPrologue, psk, relayKey);
+            (secure, _) = await InitiateAsync(stream, hs, key => CryptographicOperations.FixedTimeEquals(ServerKeyHash(key), code.ServerKeyHash), [Version2], timeout.Token);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(psk);
+        }
+        try
+        {
+            var reply = await ReadRecordAsync(secure, timeout.Token);
+            if (reply.Length != 1) throw new CryptographicException(L.T("core.gate.protocol.malformed"));
+            if ((GateStatus)reply[0] != GateStatus.Ok) throw new GateRejectedException((GateStatus)reply[0]);
+            return secure;
+        }
+        catch
+        {
+            secure.Abort();
+            await secure.DisposeAsync();
+            throw;
+        }
+    }
+
+    internal static Task WriteHeartbeatAsync(SecureStream stream, ulong counter, CancellationToken ct)
+    {
+        var record = new byte[HeartbeatLength];
+        BinaryPrimitives.WriteUInt64BigEndian(record, counter);
+        BinaryPrimitives.WriteInt64BigEndian(record.AsSpan(8), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        return WriteRecordAsync(stream, record, ct);
+    }
+
+    internal static (ulong Counter, DateTimeOffset Time) ParseHeartbeat(byte[] record)
+    {
+        if (record.Length != HeartbeatLength) throw new CryptographicException(L.T("core.gate.protocol.malformed"));
+        return (BinaryPrimitives.ReadUInt64BigEndian(record), DateTimeOffset.FromUnixTimeMilliseconds(BinaryPrimitives.ReadInt64BigEndian(record.AsSpan(8))));
+    }
 
     // ---------------- v2 负载 ----------------
 
@@ -344,7 +418,7 @@ public static class GateProtocol
     {
         if (data.IsEmpty) return null;
         var level = (PrivacyLevel)data[0];
-        if (level is not (PrivacyLevel.Basic or PrivacyLevel.Plus)) return null;
+        if (level is not (PrivacyLevel.Basic or PrivacyLevel.Plus or PrivacyLevel.PlusPlus)) return null;
         var offset = 1;
         GateEndpoint? direct = null;
         if (offset >= data.Length) return null;

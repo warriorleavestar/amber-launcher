@@ -69,4 +69,33 @@ public sealed class JayServerCliTests
             try { Directory.Delete(root, true); } catch (IOException) { }
         }
     }
+
+    [Fact]
+    public void PlusPlusCommands()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "jay-cli-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            GateStore.Initialize(Path.Combine(root, "gate"), "203.0.113.10", 47670, 47670);
+            var output = new StringWriter();
+            int Run(params string[] args) => Program.Admin(root, Options.Parse(args), output);
+            Run("relays", "add", "198.51.100.7:47671");
+            Assert.NotNull(GateRelayCode.TryParse(output.ToString()));
+            Run("relays", "add", "198.51.100.8:47671");
+            Assert.Equal(0, Run("privacy", "plusplus"));
+            output.GetStringBuilder().Clear();
+            Run("relays", "code", "198.51.100.8:47671");
+            Assert.NotNull(GateRelayCode.TryParse(output.ToString()));
+            Assert.Equal(0, Run("status"));
+            Assert.Contains("隐私++", output.ToString());
+            Run("relays", "revoke", "198.51.100.8:47671");
+            var state = new GateStore(Path.Combine(root, "gate")).Read();
+            Assert.Equal(1, state.Epoch);
+            Assert.Single(state.Relays);
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (IOException) { }
+        }
+    }
 }

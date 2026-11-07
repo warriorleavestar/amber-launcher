@@ -45,9 +45,11 @@ jay-server invite Steve
 | `jay-server disable <用户名>` / `enable <用户名>` | 暂时停用或恢复 |
 | `jay-server remove <用户名>` | 从名单移除 |
 | `jay-server online-mode on\|off` | 正版验证（默认 off） |
-| `jay-server privacy basic\|plus` | 隐私等级（见下面的隐私+） |
+| `jay-server privacy basic\|plus\|plusplus` | 隐私等级（见下面的隐私+） |
 | `jay-server relays add\|remove\|list` | 管理节点 |
-| `jay-server relay --origin <网关:端口>` | 在节点电脑上运行节点 |
+| `jay-server relay --origin <网关:端口> [--code JAYR1-…]` | 在节点电脑上运行节点 |
+| `jay-server relays code\|revoke <节点>` | 重发节点码 / 吊销节点（隐私++） |
+| `jay-server status` | 节点心跳、熔断状态、在线人数 |
 
 `run` 的窗口里直接输入 MC 控制台命令（比如 `op Steve`、`say hi`）。以 `jay ` 开头的是上面的管理命令。输入 `stop` 会存盘后关闭。
 
@@ -85,6 +87,29 @@ jay-server privacy plus        # 切回：jay-server privacy basic
 - 再用防火墙把网关端口（47670）只放行给节点的 IP，源站就完全不对外了。节点上放行它自己的端口（比如 47671）。
 - 两路意味着流量翻倍、延迟取两条路里较慢的那条。节点最好离玩家和网关都近。
 
+## 隐私++（节点心跳、熔断、吊销）
+
+在隐私+ 之上再加三件事：
+
+- **心跳**：每个节点用自己的长期密钥和网关保持一条加密认证的心跳通道（节点码 `JAYR1-…` 只用来建立这条通道，网关第一次见到节点时记下它的身份，之后只认这一个）。伪造、重放或换了身份的心跳一律不认。
+- **熔断**：发心跳的节点少于两个（默认 15 秒没心跳算掉线）时，网关**断开所有玩家、暂停进服**，并让 MC 服务端 `save-all`（不停服）。节点恢复并持续健康 10 秒后自动解除，玩家在 MC 里重新连接就行，不用重启启动器。三个节点坏一个不会熔断。
+- **吊销**：怀疑某个节点不可信时，`relays revoke` 立刻断开所有人，大家重新握手换新密钥，之后玩家拿到的节点列表里不再有它。
+
+```bash
+# 加节点时会打印节点码，拿到节点电脑上：
+jay-server relays add 198.51.100.7:47671
+jay-server relay --origin <网关地址>:47670 --listen 47671 --code JAYR1-...     # 在节点上
+
+jay-server privacy plusplus
+jay-server status                      # 节点心跳、熔断状态、在线人数
+jay-server relays revoke 198.51.100.7:47671
+jay-server relays code 198.51.100.7:47671   # 节点重装或节点码泄露时重发（旧码作废）
+```
+
+节点的身份密钥默认在节点程序旁边的 `jay-relay-data/relay.key`（`--dir` 或环境变量 `JAY_RELAY_DIR` 可以改），别外传。
+
+为什么不是“一个节点掉线就关掉全网、让所有人的启动器重启”：那样任何人只要打掉一个节点就能反复踢掉所有人；节点真被人控制时通常也不会掉线。所以掉线用熔断（暂停 + 自动恢复）处理，“不可信”用吊销处理。也没有任何能远程关掉玩家启动器的信号。
+
 ## Linux 上作为服务运行
 
 ```bash
@@ -113,4 +138,4 @@ sudo -u jay JAY_SERVER_DIR=/var/lib/jay-server /opt/jay-server/jay-server invite
 - 能防：拿不到邀请的人、邀请码被转发后的第二次使用、把启动器拷给别人（设备密钥不在启动器文件里）、冒充服务器（邀请里钉住了服务器身份）、扫描器。
 - 不能防：玩家本人把自己的设备密钥从电脑里扒出来交给别人；这台服务器本身被入侵。
 
-设计说明见项目的设计文档（隐私++ 和轮换地址是之后的阶段）。
+设计说明见项目的设计文档（轮换入口地址是之后的阶段）。

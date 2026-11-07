@@ -1535,5 +1535,17 @@
   "core.gate.admin.too_many_relays": "中継ノードが多すぎます（最大 16 個）",
   "core.gate.admin.badrelay": "中継ノードのアドレスは host:port の形式で指定してください",
   "core.gate.log.split_required": "拒否：デバイス {0} が 2 つの中継ノードを経由していません（プライバシー+）",
-  "core.gate.log.joined_split": "参加（2 経路）：{0}"
+  "core.gate.log.joined_split": "参加（2 経路）：{0}",
+  "core.gate.status.circuitopen": "サーバーのプライバシー++ ブレーカーが作動中です。正常な中継ノードが足りないため参加を一時停止しています。自動的に復旧するので、しばらくしてから再接続してください。",
+  "core.gate.admin.plusplus_needs_codes": "プライバシー++ にはノードコードを発行した中継ノードが {0} 個以上必要です。jay-server relays add で追加し、各ノードでコードを使って起動してください。",
+  "core.gate.admin.no_such_relay": "その中継ノードはありません",
+  "core.gate.relay.code_hidden": "JAYR1-...（ノードコード）",
+  "core.gate.relay.heartbeat_up": "ハートビート通路がゲートに接続しました",
+  "core.gate.relay.heartbeat_down": "ハートビート通路が切断されました。再接続します：{0}",
+  "core.gate.log.relay_wrong_key": "拒否：中継ノード {0} の ID が変わりました（{1}）。再インストールした場合は jay-server relays code でコードを再発行してください。",
+  "core.gate.log.epoch": "中継ノードを失効（エポック {0}）：全 {1} 接続を切断し、新しい鍵で再接続させます",
+  "core.gate.log.relay_up": "中継ノード稼働：{0}",
+  "core.gate.log.relay_down": "中継ノードのハートビート停止：{0}",
+  "core.gate.log.breaker_open": "プライバシー++ ブレーカー作動：利用不可の中継ノード {0}。{1} 接続を切断し、新規接続を停止しました",
+  "core.gate.log.breaker_closed": "プライバシー++ ブレーカー解除：中継ノードが復旧し、接続を再開しました"
 }

@@ -1535,5 +1535,17 @@
   "core.gate.admin.too_many_relays": "節點太多了（最多 16 個）",
   "core.gate.admin.badrelay": "節點位址要寫成 主機:連接埠",
   "core.gate.log.split_required": "拒絕：裝置 {0} 沒經兩個節點連線（隱私+）",
-  "core.gate.log.joined_split": "進服（兩路）：{0}"
+  "core.gate.log.joined_split": "進服（兩路）：{0}",
+  "core.gate.status.circuitopen": "伺服器的隱私++ 熔斷中：能用的節點不夠，暫停進服。節點恢復後會自動可用，稍後重連就行",
+  "core.gate.admin.plusplus_needs_codes": "隱私++ 至少要 {0} 個發過節點碼的節點：先用 jay-server relays add 加節點，並在節點上用節點碼執行",
+  "core.gate.admin.no_such_relay": "沒有這個節點",
+  "core.gate.relay.code_hidden": "JAYR1-...（節點碼）",
+  "core.gate.relay.heartbeat_up": "心跳通道已連上閘道",
+  "core.gate.relay.heartbeat_down": "心跳通道斷開，稍後重連：{0}",
+  "core.gate.log.relay_wrong_key": "拒絕：節點 {0} 的身分變了（{1}）。如果是重裝了節點，用 jay-server relays code 重發節點碼",
+  "core.gate.log.epoch": "節點被吊銷（紀元 {0}）：斷開全部 {1} 條連線，大家重新握手換新金鑰",
+  "core.gate.log.relay_up": "節點上線：{0}",
+  "core.gate.log.relay_down": "節點沒有心跳了：{0}",
+  "core.gate.log.breaker_open": "隱私++ 熔斷：不可用的節點 {0}；斷開了 {1} 條連線，暫停接受新連線",
+  "core.gate.log.breaker_closed": "隱私++ 熔斷解除：節點恢復，重新接受連線"
 }

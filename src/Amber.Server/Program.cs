@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using Amber.Core.Multiplayer;
 using Amber.Core.Multiplayer.Gate;
+using Amber.Core.Multiplayer.Transport;
 using Amber.Core.Net;
 
 namespace Amber.Server;
@@ -34,12 +35,16 @@ public static class Program
           jay-server online-mode on|off                        正版验证（默认 off：离线账号，由网关核对用户名）
 
         隐私+（玩家经两个不同节点各走一半，源站地址不外传）：
-          jay-server relay --origin <网关地址:端口> [--listen 47671]
-              在节点电脑上运行（VPS 或局域网电脑都行）：只把连接原样转给网关，不存任何密钥
+          jay-server relay --origin <网关地址:端口> [--listen 47671] [--code JAYR1-...]
+              在节点电脑上运行（VPS 或局域网电脑都行）：只把连接原样转给网关，不存玩家的任何密钥
+              带上节点码时还会给网关发心跳（隐私++ 要用）
           jay-server relays add <节点地址:端口> [--source <网关看到的节点 IP>]
-              节点在局域网里、或者和网关在同一台机器上时，--source 填网关这边看到的它的 IP
+              加节点并打印它的节点码。节点在局域网里、或者和网关在同一台机器上时，--source 填网关这边看到的它的 IP
+          jay-server relays code <节点地址:端口>              重发节点码（旧码作废；节点重装后也用这个）
           jay-server relays remove <节点地址:端口> / relays list
-          jay-server privacy basic|plus                        plus 至少要两个节点；之后网关只收节点转来的拆分连接
+          jay-server relays revoke <节点地址:端口>             吊销不可信的节点：马上断开所有人，重新握手换新密钥
+          jay-server privacy basic|plus|plusplus               plus 至少要两个节点；plusplus 还要节点发心跳，不够就熔断
+          jay-server status                                    节点心跳、熔断状态、在线人数（服务运行时）
 
         通用选项：--dir <数据目录>（默认是程序旁边的 jay-server-data，也可以用环境变量 JAY_SERVER_DIR）
         """;
@@ -139,8 +144,8 @@ public static class Program
         await using var gate = new GateServer(store, config, key, log);
         gate.Start();
         var state = store.Read();
-        log(state.Privacy == PrivacyLevel.Plus
-            ? $"网关在端口 {gate.Port} 上等待玩家（隐私+：只收 {state.Relays.Count} 个节点转来的拆分连接）；服务器身份 {MemberIdentity.FingerprintOf(key.PublicKey)}"
+        log(state.Privacy.IsSplit()
+            ? $"网关在端口 {gate.Port} 上等待玩家（{(state.Privacy == PrivacyLevel.PlusPlus ? "隐私++" : "隐私+")}：只收 {state.Relays.Count} 个节点转来的拆分连接）；服务器身份 {MemberIdentity.FingerprintOf(key.PublicKey)}"
             : $"网关在端口 {gate.Port} 上等待玩家（玩家连 {config.PublicHost}:{config.PublicPort}）；服务器身份 {MemberIdentity.FingerprintOf(key.PublicKey)}");
 
         McServerHost.RunningServer? mc = null;
@@ -149,6 +154,11 @@ public static class Program
             mc = host.Start(Console.WriteLine);
             log($"MC 服务端已启动（进程 {mc.Process.Id}）");
         }
+        gate.BreakerChanged += (open, _) =>
+        {
+            // 熔断时先存盘（不停服），万一之后有人去停服务端也不会坏档。
+            if (open) mc?.Command("save-all");
+        };
 
         // 不 Dispose：退出时 ProcessExit 还可能来取消它。
         var stop = new CancellationTokenSource();
@@ -207,9 +217,20 @@ public static class Program
         var origin = GateEndpoint.TryParse(options.Get("origin")) ?? throw new ArgumentException("要用 --origin <网关地址:端口> 指定源站");
         var listen = options.GetInt("listen", 47671);
         var log = (string line) => Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Jay 节点] {line}");
-        await using var relay = new GateRelay(options.Get("bind") ?? "::", listen, origin.Host, origin.Port, log: log);
+        GateRelayCode? code = null;
+        X25519KeyPair? key = null;
+        if (options.Get("code") is { } text)
+        {
+            code = GateRelayCode.TryParse(text) ?? throw new ArgumentException("节点码不对（应该是 JAYR1- 开头的一串）");
+            var dir = options.Get("dir") ?? Environment.GetEnvironmentVariable("JAY_RELAY_DIR") ?? Path.Combine(AppContext.BaseDirectory, "jay-relay-data");
+            key = GateRelay.LoadOrCreateKey(Path.Combine(Path.GetFullPath(dir), "relay.key"));
+        }
+        using var _ = key;
+        await using var relay = new GateRelay(options.Get("bind") ?? "::", listen, origin.Host, origin.Port, log: log, code: code, key: key);
         relay.Start();
-        log($"节点在端口 {relay.Port} 上运行，转给 {origin}。在网关上执行：jay-server relays add <本机地址>:{relay.Port}");
+        log(code is null
+            ? $"节点在端口 {relay.Port} 上运行，转给 {origin}（没带节点码：不发心跳，隐私++ 下不算健康节点）"
+            : $"节点在端口 {relay.Port} 上运行，转给 {origin}，节点身份 {MemberIdentity.FingerprintOf(key!.PublicKey)}，每 5 秒发一次心跳");
         var stop = new CancellationTokenSource();
         void Stop() { try { stop.Cancel(); } catch (ObjectDisposedException) { } }
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; Stop(); };
@@ -288,37 +309,79 @@ public static class Program
             }
             case "privacy":
             {
-                var level = Arg(0, "basic 或 plus") switch { "basic" => PrivacyLevel.Basic, "plus" => PrivacyLevel.Plus, _ => throw new ArgumentException("只能是 basic 或 plus") };
+                var level = Arg(0, "basic、plus 或 plusplus") switch
+                {
+                    "basic" => PrivacyLevel.Basic,
+                    "plus" => PrivacyLevel.Plus,
+                    "plusplus" or "plus+" or "++" => PrivacyLevel.PlusPlus,
+                    _ => throw new ArgumentException("只能是 basic、plus 或 plusplus"),
+                };
                 store.SetPrivacy(level);
-                output.WriteLine(level == PrivacyLevel.Plus
-                    ? "已切到隐私+：玩家经两个节点进服，网关只收节点转来的连接（新邀请码里写的是节点地址）。别忘了用防火墙只放行节点访问网关端口。"
-                    : "已切回普通模式：玩家直连网关。");
+                output.WriteLine(level switch
+                {
+                    PrivacyLevel.Plus => "已切到隐私+：玩家经两个节点进服，网关只收节点转来的连接（新邀请码里写的是节点地址）。别忘了用防火墙只放行节点访问网关端口。",
+                    PrivacyLevel.PlusPlus => "已切到隐私++：在隐私+ 之上，节点要持续发心跳。发心跳的节点少于两个时熔断：断开所有人、暂停进服（服务端只存盘不停），节点恢复后自动可用。",
+                    _ => "已切回普通模式：玩家直连网关。",
+                });
                 return 0;
             }
             case "relays":
             {
-                switch (Arg(0, "add、remove 或 list"))
+                switch (Arg(0, "add、code、remove、revoke 或 list"))
                 {
                     case "add":
                     {
                         var address = GateEndpoint.TryParse(Arg(1, "节点地址")) ?? throw new ArgumentException("节点地址要写成 主机:端口");
                         store.AddRelay(address, options.Get("source"));
                         output.WriteLine($"已加节点 {address}。");
+                        WriteRelayCode(store, address.ToString(), output);
                         break;
                     }
+                    case "code":
+                    {
+                        var address = GateEndpoint.TryParse(Arg(1, "节点地址")) ?? throw new ArgumentException("节点地址要写成 主机:端口");
+                        WriteRelayCode(store, address.ToString(), output);
+                        output.WriteLine("旧的节点码已经作废，节点要换上新码重新运行。");
+                        break;
+                    }
+                    case "revoke":
+                        output.WriteLine(store.RevokeRelay(Arg(1, "节点地址"))
+                            ? "已吊销：运行中的网关会马上断开所有人，大家重新握手换新密钥，之后不会再经过这个节点。记得在防火墙里也去掉它。"
+                            : "没有这个节点。");
+                        break;
                     case "remove":
                         output.WriteLine(store.RemoveRelay(Arg(1, "节点地址")) ? "已删除。" : "没有这个节点。");
                         break;
                     case "list":
                     {
                         var state = store.Read();
-                        output.WriteLine($"隐私等级：{(state.Privacy == PrivacyLevel.Plus ? "隐私+" : "普通")}");
+                        output.WriteLine($"隐私等级：{PrivacyName(state.Privacy)}");
                         if (state.Relays.Count == 0) output.WriteLine("还没有节点。");
-                        foreach (var r in state.Relays) output.WriteLine($"  {r.Address}{(r.Source is null ? "" : $"  （来源 IP {r.Source}）")}");
+                        foreach (var r in state.Relays)
+                            output.WriteLine($"  {r.Address}{(r.Source is null ? "" : $"  （来源 IP {r.Source}）")}"
+                                + (r.HeartbeatPsk is null ? "  没有节点码" : r.PublicKey is null ? "  节点码已发，节点还没连上" : $"  节点身份 {MemberIdentity.FingerprintOf(Convert.FromBase64String(r.PublicKey))}"));
                         break;
                     }
                     default:
-                        throw new ArgumentException("只能是 add、remove 或 list");
+                        throw new ArgumentException("只能是 add、code、remove、revoke 或 list");
+                }
+                return 0;
+            }
+            case "status":
+            {
+                var state = store.Read();
+                output.WriteLine($"隐私等级：{PrivacyName(state.Privacy)}");
+                var health = store.ReadHealth();
+                if (health is null || DateTimeOffset.UtcNow - health.Updated > TimeSpan.FromSeconds(30))
+                {
+                    output.WriteLine("网关没在运行（或者 30 秒内没更新状态）。");
+                    return 0;
+                }
+                output.WriteLine($"在线 {health.Online} 人；{(health.BreakerOpen ? "熔断中（暂停进服）" : "正常")}；纪元 {health.Epoch}");
+                foreach (var r in health.Relays)
+                {
+                    var seen = r.LastHeartbeat is { } t ? $"{(DateTimeOffset.UtcNow - t).TotalSeconds:0} 秒前" : "从未";
+                    output.WriteLine($"  {r.Address}  心跳通道{(r.Connected ? "已连" : "未连")}  最近心跳 {seen}");
                 }
                 return 0;
             }
@@ -327,6 +390,24 @@ public static class Program
                 output.WriteLine(Usage);
                 return 1;
         }
+    }
+
+    private static string PrivacyName(PrivacyLevel level) => level switch
+    {
+        PrivacyLevel.PlusPlus => "隐私++",
+        PrivacyLevel.Plus => "隐私+",
+        _ => "普通",
+    };
+
+    private static void WriteRelayCode(GateStore store, string address, TextWriter output)
+    {
+        using var key = store.LoadServerKey();
+        var code = store.IssueRelayCode(address, key.PublicKey);
+        output.WriteLine("节点码（隐私++ 的心跳要用，别外传）：");
+        output.WriteLine();
+        output.WriteLine(code.Encode());
+        output.WriteLine();
+        output.WriteLine($"在节点电脑上运行：jay-server relay --origin <网关地址>:<网关端口> --listen {GateEndpoint.TryParse(address)?.Port} --code <上面这段>");
     }
 
     internal static TimeSpan ParseDuration(string text)

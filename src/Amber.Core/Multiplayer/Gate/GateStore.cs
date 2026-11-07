@@ -20,6 +20,12 @@ public sealed class GateState
     public PrivacyLevel Privacy { get; set; } = PrivacyLevel.Basic;
     /// <summary>节点（中继）。隐私+ 下客户端经其中两个连进来，网关只认这些节点的来源 IP。</summary>
     public List<GateRelayEntry> Relays { get; set; } = [];
+    /// <summary>隐私++：至少要有几个节点在发心跳才不熔断。</summary>
+    public int MinHealthyRelays { get; set; } = 2;
+    /// <summary>隐私++：多久收不到心跳算节点不可用（秒）。</summary>
+    public int HeartbeatTimeoutSeconds { get; set; } = 15;
+    /// <summary>纪元号：吊销节点时加一，运行中的网关看到它变了就断开全部连接（大家重新握手，换新密钥）。</summary>
+    public int Epoch { get; set; }
 
     public GateMember? Member(string name) => Members.FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
 }
@@ -46,6 +52,27 @@ public sealed class GateRelayEntry
     public string Address { get; set; } = "";
     /// <summary>网关看到的这个节点的来源 IP（节点在局域网、或者和网关在同一台机器时要填）；空的就把 Address 的主机名解析成 IP。</summary>
     public string? Source { get; set; }
+    /// <summary>心跳通道的 psk（Base64，从节点码派生）。没发过节点码的节点没有心跳，隐私++ 下算不健康。</summary>
+    public string? HeartbeatPsk { get; set; }
+    /// <summary>节点第一次连心跳通道时记下的公钥（Base64）。之后只认这一把。</summary>
+    public string? PublicKey { get; set; }
+}
+
+/// <summary>运行中的网关每 5 秒写一次的状态（health.json），给 jay-server status 看。</summary>
+public sealed class GateHealth
+{
+    public DateTimeOffset Updated { get; set; }
+    public bool BreakerOpen { get; set; }
+    public int Epoch { get; set; }
+    public int Online { get; set; }
+    public List<Relay> Relays { get; set; } = [];
+
+    public sealed class Relay
+    {
+        public string Address { get; set; } = "";
+        public DateTimeOffset? LastHeartbeat { get; set; }
+        public bool Connected { get; set; }
+    }
 }
 
 public sealed class GatePendingInvite
@@ -79,6 +106,7 @@ public sealed class GateConfig
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(GateState))]
 [JsonSerializable(typeof(GateConfig))]
+[JsonSerializable(typeof(GateHealth))]
 internal sealed partial class GateJsonContext : JsonSerializerContext;
 
 public enum RedeemOutcome { Ok, InviteGone, DeviceLimit, Disabled }
@@ -215,7 +243,7 @@ public sealed class GateStore
         CryptographicOperations.ZeroMemory(psk);
         // 隐私+：邀请码里写随机一个节点，不写源站地址。
         var state = Read();
-        if (state.Privacy == PrivacyLevel.Plus && state.Relays.Count > 0
+        if (state.Privacy.IsSplit() && state.Relays.Count > 0
             && GateEndpoint.TryParse(state.Relays[RandomNumberGenerator.GetInt32(state.Relays.Count)].Address) is { } relay)
             return new GateInvite(relay.Host, relay.Port, keyHash, token, name);
         return new GateInvite(config.PublicHost, config.PublicPort, keyHash, token, name);
@@ -291,15 +319,18 @@ public sealed class GateStore
     public GateNetwork Network(GateConfig config)
     {
         var state = Read();
-        var relays = state.Relays.Select(r => GateEndpoint.TryParse(r.Address)).OfType<GateEndpoint>().ToList();
-        var direct = state.Privacy == PrivacyLevel.Plus || !GateInvite.IsValidHost(config.PublicHost) ? null : new GateEndpoint(config.PublicHost, config.PublicPort);
+        // 隐私++ 只发有节点码（会发心跳）的节点。不按当前是否健康过滤：客户端要留着完整列表，节点恢复后才连得回来。
+        var relays = state.Relays.Where(r => state.Privacy != PrivacyLevel.PlusPlus || r.HeartbeatPsk is not null).Select(r => GateEndpoint.TryParse(r.Address)).OfType<GateEndpoint>().ToList();
+        var direct = state.Privacy.IsSplit() || !GateInvite.IsValidHost(config.PublicHost) ? null : new GateEndpoint(config.PublicHost, config.PublicPort);
         return new GateNetwork(state.Privacy, direct, relays);
     }
 
     /// <summary>切换隐私等级。隐私+ 至少要两个节点。</summary>
     public void SetPrivacy(PrivacyLevel level) => Mutate(s =>
     {
-        if (level == PrivacyLevel.Plus && s.Relays.Count < 2) throw new ArgumentException(L.T("core.gate.admin.plus_needs_relays"));
+        if (level.IsSplit() && s.Relays.Count < 2) throw new ArgumentException(L.T("core.gate.admin.plus_needs_relays"));
+        if (level == PrivacyLevel.PlusPlus && s.Relays.Count(r => r.HeartbeatPsk is not null) < s.MinHealthyRelays)
+            throw new ArgumentException(L.F("core.gate.admin.plusplus_needs_codes", s.MinHealthyRelays));
         s.Privacy = level;
         return 0;
     });
@@ -328,10 +359,73 @@ public sealed class GateStore
         var parsed = GateEndpoint.TryParse(address)?.ToString() ?? address.Trim();
         var index = s.Relays.FindIndex(r => string.Equals(r.Address, parsed, StringComparison.OrdinalIgnoreCase));
         if (index < 0) return false;
-        if (s.Privacy == PrivacyLevel.Plus && s.Relays.Count <= 2) throw new ArgumentException(L.T("core.gate.admin.plus_needs_relays"));
+        if (s.Privacy.IsSplit() && s.Relays.Count <= 2) throw new ArgumentException(L.T("core.gate.admin.plus_needs_relays"));
         s.Relays.RemoveAt(index);
         return true;
     });
+
+    /// <summary>
+    /// 吊销节点（发现它不可信时用）：从列表删掉、心跳 psk 一起作废，纪元号加一。运行中的网关会马上断开全部连接，大家重新握手换新密钥，
+    /// 之后客户端拿到的节点列表里不再有它。和 <see cref="RemoveRelay"/> 不同，剩下不到两个节点也照删（隐私+/++ 下会暂停，直到补上节点）。
+    /// </summary>
+    public bool RevokeRelay(string address) => Mutate(s =>
+    {
+        var parsed = GateEndpoint.TryParse(address)?.ToString() ?? address.Trim();
+        if (s.Relays.RemoveAll(r => string.Equals(r.Address, parsed, StringComparison.OrdinalIgnoreCase)) == 0) return false;
+        s.Epoch++;
+        return true;
+    });
+
+    /// <summary>给节点发（或重发）节点码：生成新的节点密钥，旧码和记下的节点公钥一起作废。</summary>
+    public GateRelayCode IssueRelayCode(string address, byte[] serverPublicKey)
+    {
+        var parsed = GateEndpoint.TryParse(address)?.ToString() ?? address.Trim();
+        var keyHash = GateProtocol.ServerKeyHash(serverPublicKey);
+        var secret = RandomNumberGenerator.GetBytes(GateRelayCode.SecretLength);
+        var psk = GateProtocol.RelayPsk(secret, keyHash);
+        var found = Mutate(s =>
+        {
+            var entry = s.Relays.FirstOrDefault(r => string.Equals(r.Address, parsed, StringComparison.OrdinalIgnoreCase));
+            if (entry is null) return false;
+            entry.HeartbeatPsk = Convert.ToBase64String(psk);
+            entry.PublicKey = null;
+            return true;
+        });
+        CryptographicOperations.ZeroMemory(psk);
+        if (!found) throw new ArgumentException(L.T("core.gate.admin.no_such_relay"));
+        return new GateRelayCode(keyHash, secret);
+    }
+
+    /// <summary>心跳通道能认的节点（地址, psk）。</summary>
+    public IReadOnlyList<(string Id, byte[] Psk)> RelayPsks() =>
+        Read().Relays.Where(r => r.HeartbeatPsk is not null).Select(r => (r.Address, Convert.FromBase64String(r.HeartbeatPsk!))).ToList();
+
+    /// <summary>核对（第一次就记下）节点公钥。对不上返回 false。</summary>
+    public bool CheckRelayKey(string address, byte[] publicKey)
+    {
+        var key = Convert.ToBase64String(publicKey);
+        var entry = Read().Relays.FirstOrDefault(r => r.Address == address);
+        if (entry is null) return false;
+        if (entry.PublicKey is not null) return entry.PublicKey == key;
+        return Mutate(s =>
+        {
+            var e = s.Relays.FirstOrDefault(r => r.Address == address);
+            if (e is null) return false;
+            e.PublicKey ??= key;
+            return e.PublicKey == key;
+        });
+    }
+
+    public void WriteHealth(GateHealth health) =>
+        WriteAtomic(Path.Combine(_dir, GateServer.HealthFile), JsonSerializer.SerializeToUtf8Bytes(health, GateJsonContext.Default.GateHealth));
+
+    public GateHealth? ReadHealth()
+    {
+        var path = Path.Combine(_dir, GateServer.HealthFile);
+        if (!File.Exists(path)) return null;
+        try { return JsonSerializer.Deserialize(File.ReadAllBytes(path), GateJsonContext.Default.GateHealth); }
+        catch (JsonException) { return null; }
+    }
 
     private GateState Load() =>
         JsonSerializer.Deserialize(File.ReadAllBytes(StatePath), GateJsonContext.Default.GateState) ?? new GateState();

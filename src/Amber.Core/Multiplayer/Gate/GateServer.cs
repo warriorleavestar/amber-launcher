@@ -23,6 +23,7 @@ public sealed class GateServer : IAsyncDisposable
     private readonly SemaphoreSlim _slots;
     private readonly ConcurrentDictionary<IPAddress, int> _handshaking = new();
     private Task? _loop;
+    private Task? _monitor;
 
     public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
     public int Online;
@@ -52,6 +53,8 @@ public sealed class GateServer : IAsyncDisposable
     {
         _listener.Start();
         _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
+        _epoch = _store.Read().Epoch;
+        _monitor = Task.Run(() => MonitorLoopAsync(_cts.Token));
     }
 
     private async Task AcceptLoopAsync(CancellationToken ct)
@@ -92,7 +95,7 @@ public sealed class GateServer : IAsyncDisposable
             var remote = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.MapToIPv6() ?? IPAddress.IPv6None;
             Pump.Tune(client);
             var state = _store.Read();
-            var plus = state.Privacy == PrivacyLevel.Plus;
+            var plus = state.Privacy.IsSplit();
             var fromRelay = state.Relays.Count > 0 && RelaySources(state).Contains(remote);
             // 节点转来的连接共用节点的 IP，不按 IP 限握手数（总数仍受 MaxConnections 限制）。
             if (fromRelay) remote = IPAddress.None;
@@ -114,7 +117,7 @@ public sealed class GateServer : IAsyncDisposable
                 using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
                     timeout.CancelAfter(GateProtocol.HandshakeTimeout);
-                    var accepted = await GateProtocol.AcceptAsync(stream, _serverKey, _store.AccessKey(), _store.ActiveInvites(), timeout.Token);
+                    var accepted = await GateProtocol.AcceptAsync(stream, _serverKey, _store.AccessKey(), _store.ActiveInvites(), timeout.Token, _store.RelayPsks());
                     if (accepted is null)
                     {
                         Interlocked.Increment(ref Rejected);
@@ -124,6 +127,15 @@ public sealed class GateServer : IAsyncDisposable
                     secure = accepted.Stream;
                     device = accepted.DevicePublicKey;
                     var fingerprint = MemberIdentity.FingerprintOf(device);
+                    if (accepted.RelayId is { } relayId)
+                    {
+                        Release(remote);
+                        remote = IPAddress.None;
+                        var channel = secure;
+                        secure = null;
+                        await HandleRelayAsync(relayId, channel, device, ct);
+                        return;
+                    }
                     var network = accepted.Version >= 2 ? _store.Network(_config) : null;
                     if (accepted.IsEnroll)
                     {
@@ -155,6 +167,12 @@ public sealed class GateServer : IAsyncDisposable
                         await GateProtocol.SendJoinResultAsync(secure, GateStatus.SplitRequired, timeout.Token, network);
                         await secure.CloseAsync(timeout.Token);
                         _log(L.F("core.gate.log.split_required", fingerprint));
+                        return;
+                    }
+                    if (BreakerOpen)
+                    {
+                        await GateProtocol.SendJoinResultAsync(secure, GateStatus.CircuitOpen, timeout.Token, network);
+                        await secure.CloseAsync(timeout.Token);
                         return;
                     }
                     await GateProtocol.SendJoinResultAsync(secure, GateStatus.Ok, timeout.Token, network);
@@ -200,6 +218,8 @@ public sealed class GateServer : IAsyncDisposable
                 }
                 Release(remote);
                 remote = IPAddress.None;
+                // 配对和读登录包期间刚好熔断了：不再接进服务端。
+                if (BreakerOpen) throw new IOException(GateRejectedException.Describe(GateStatus.CircuitOpen));
                 using var backend = new TcpClient();
                 await backend.ConnectAsync(_config.BackendHost, _config.BackendPort, ct);
                 Pump.Tune(backend);
@@ -211,12 +231,22 @@ public sealed class GateServer : IAsyncDisposable
                     Interlocked.Increment(ref Online);
                     _log(L.F(partner is null ? "core.gate.log.joined" : "core.gate.log.joined_split", name));
                 }
+                var sessionId = Interlocked.Increment(ref _sessionIds);
+                var live = session!;
+                _sessions[sessionId] = () =>
+                {
+                    (live as IAuthenticatedStream)?.Abort();
+                    Pump.Abort(backend);
+                    try { backend.Close(); } catch (ObjectDisposedException) { }
+                };
                 try
                 {
-                    await Pump.RunAsync(session!, backendStream, ct, () => Pump.Abort(backend));
+                    if (_epoch != _store.Read().Epoch || BreakerOpen) throw new IOException(GateRejectedException.Describe(GateStatus.CircuitOpen));
+                    await Pump.RunAsync(live, backendStream, ct, () => Pump.Abort(backend));
                 }
                 finally
                 {
+                    _sessions.TryRemove(sessionId, out _);
                     if (name is not null)
                     {
                         Interlocked.Decrement(ref Online);
@@ -240,6 +270,175 @@ public sealed class GateServer : IAsyncDisposable
                 partner?.Done.TrySetResult();
             }
         }
+    }
+
+    // ---------------- 隐私++：节点心跳和熔断 ----------------
+
+    private readonly ConcurrentDictionary<long, Action> _sessions = new();
+    private long _sessionIds;
+    private readonly ConcurrentDictionary<string, DateTime> _heartbeats = new();
+    private readonly ConcurrentDictionary<string, SecureStream> _relayChannels = new();
+    private volatile bool _breakerOpen;
+    private int _epoch;
+    private DateTime _healthySince = DateTime.MinValue;
+    private HashSet<string> _healthyLast = [];
+
+    /// <summary>隐私++ 熔断中：断开了全部游戏连接，暂停接受新连接。</summary>
+    public bool BreakerOpen => _breakerOpen;
+    public int ActiveSessions => _sessions.Count;
+    /// <summary>熔断状态变了（true = 熔断，false = 恢复）。第二个参数是原因（哪些节点不可用）。运行程序拿去执行 save-all。</summary>
+    public event Action<bool, string>? BreakerChanged;
+    /// <summary>熔断后要连续健康多久才恢复（防止节点时好时坏反复打扰玩家）。</summary>
+    public TimeSpan RecoverDelay { get; set; } = TimeSpan.FromSeconds(10);
+    /// <summary>不为 null 时覆盖 state.json 里的心跳超时（测试用）。</summary>
+    public TimeSpan? HeartbeatTimeoutOverride { get; set; }
+    public TimeSpan CheckInterval { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>运行状态写到数据目录的 health.json，给 jay-server status 看。</summary>
+    public const string HealthFile = "health.json";
+
+    /// <summary>节点的心跳通道：核对（第一次记下）节点公钥，回 Ok，然后一直收心跳。</summary>
+    private async Task HandleRelayAsync(string relayId, SecureStream channel, byte[] relayKey, CancellationToken ct)
+    {
+        await using (channel)
+        {
+            try
+            {
+                if (!_store.CheckRelayKey(relayId, relayKey))
+                {
+                    await GateProtocol.WriteRecordAsync(channel, [(byte)GateStatus.NotMember], ct);
+                    await channel.CloseAsync(ct);
+                    _log(L.F("core.gate.log.relay_wrong_key", relayId, MemberIdentity.FingerprintOf(relayKey)));
+                    return;
+                }
+                await GateProtocol.WriteRecordAsync(channel, [(byte)GateStatus.Ok], ct);
+                if (_relayChannels.TryRemove(relayId, out var old)) old.Abort();
+                _relayChannels[relayId] = channel;
+                ulong last = 0;
+                var timeout = HeartbeatTimeout(_store.Read());
+                while (!ct.IsCancellationRequested)
+                {
+                    using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    wait.CancelAfter(timeout * 2);
+                    var (counter, time) = GateProtocol.ParseHeartbeat(await GateProtocol.ReadRecordAsync(channel, wait.Token));
+                    // 通道本身防重放；序号再保证不倒退，时间差太远（节点时钟坏了）就不算数。
+                    if (counter <= last) throw new CryptographicException(L.T("core.gate.protocol.malformed"));
+                    last = counter;
+                    if ((DateTimeOffset.UtcNow - time).Duration() > TimeSpan.FromMinutes(5)) continue;
+                    _heartbeats[relayId] = DateTime.UtcNow;
+                }
+            }
+            catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException or ObjectDisposedException)
+            {
+                channel.Abort();
+            }
+            finally
+            {
+                _relayChannels.TryRemove(new KeyValuePair<string, SecureStream>(relayId, channel));
+            }
+        }
+    }
+
+    private TimeSpan HeartbeatTimeout(GateState state) => HeartbeatTimeoutOverride ?? TimeSpan.FromSeconds(Math.Max(3, state.HeartbeatTimeoutSeconds));
+
+    private async Task MonitorLoopAsync(CancellationToken ct)
+    {
+        var tick = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(CheckInterval, ct); }
+            catch (OperationCanceledException) { return; }
+            try
+            {
+                Check(_store.Read());
+                if (tick++ % 5 == 0) WriteHealth();
+            }
+            catch (Exception e) when (e is IOException or System.Text.Json.JsonException or UnauthorizedAccessException)
+            {
+                // 状态文件正被管理命令改写：下一秒再看。
+            }
+        }
+    }
+
+    /// <summary>每秒看一次：纪元号变了（吊销了节点）就全员断开；隐私++ 下健康节点不够就熔断，连续健康一段时间后恢复。</summary>
+    internal void Check(GateState state)
+    {
+        var now = DateTime.UtcNow;
+        // 被吊销或换了节点码的节点：它的心跳通道立刻断掉。
+        var known = state.Relays.Where(r => r.HeartbeatPsk is not null).Select(r => r.Address).ToHashSet();
+        foreach (var (id, channel) in _relayChannels)
+            if (!known.Contains(id) || state.Relays.First(r => r.Address == id).PublicKey is null)
+            {
+                channel.Abort();
+                _relayChannels.TryRemove(new KeyValuePair<string, SecureStream>(id, channel));
+                _heartbeats.TryRemove(id, out _);
+            }
+        if (state.Epoch != _epoch)
+        {
+            _epoch = state.Epoch;
+            var n = AbortAll();
+            _log(L.F("core.gate.log.epoch", _epoch, n));
+        }
+        var timeout = HeartbeatTimeout(state);
+        var healthy = known.Where(id => _heartbeats.TryGetValue(id, out var t) && now - t < timeout).ToHashSet();
+        foreach (var id in healthy.Except(_healthyLast)) _log(L.F("core.gate.log.relay_up", id));
+        foreach (var id in _healthyLast.Except(healthy)) _log(L.F("core.gate.log.relay_down", id));
+        _healthyLast = healthy;
+
+        var enough = healthy.Count >= Math.Max(2, state.MinHealthyRelays);
+        if (state.Privacy != PrivacyLevel.PlusPlus || enough)
+        {
+            if (_healthySince == DateTime.MinValue) _healthySince = now;
+        }
+        else _healthySince = DateTime.MinValue;
+
+        if (!_breakerOpen && state.Privacy == PrivacyLevel.PlusPlus && !enough)
+        {
+            _breakerOpen = true;
+            var down = string.Join(", ", known.Except(healthy).DefaultIfEmpty("-"));
+            var n = AbortAll();
+            _log(L.F("core.gate.log.breaker_open", down, n));
+            WriteHealth();
+            BreakerChanged?.Invoke(true, down);
+        }
+        else if (_breakerOpen && (state.Privacy != PrivacyLevel.PlusPlus || _healthySince != DateTime.MinValue && now - _healthySince >= RecoverDelay))
+        {
+            _breakerOpen = false;
+            _log(L.T("core.gate.log.breaker_closed"));
+            WriteHealth();
+            BreakerChanged?.Invoke(false, "");
+        }
+    }
+
+    /// <summary>断开全部游戏连接（不发正常结束：对面按出错处理，重新握手时是新密钥）。</summary>
+    private int AbortAll()
+    {
+        var n = 0;
+        foreach (var (id, abort) in _sessions)
+            if (_sessions.TryRemove(id, out _))
+            {
+                abort();
+                n++;
+            }
+        return n;
+    }
+
+    private void WriteHealth()
+    {
+        var now = DateTime.UtcNow;
+        var health = new GateHealth
+        {
+            Updated = DateTimeOffset.UtcNow,
+            BreakerOpen = _breakerOpen,
+            Epoch = _epoch,
+            Online = Online,
+            Relays = _store.Read().Relays.Select(r => new GateHealth.Relay
+            {
+                Address = r.Address,
+                LastHeartbeat = _heartbeats.TryGetValue(r.Address, out var t) ? new DateTimeOffset(t, TimeSpan.Zero) : null,
+                Connected = _relayChannels.ContainsKey(r.Address),
+            }).ToList(),
+        };
+        _store.WriteHealth(health);
     }
 
     /// <summary>拆分连接里等着配对的一条腿。</summary>
@@ -352,6 +551,9 @@ public sealed class GateServer : IAsyncDisposable
         _listener.Stop();
         if (_loop is not null)
             try { await _loop; } catch (OperationCanceledException) { }
+        if (_monitor is not null)
+            try { await _monitor; } catch (OperationCanceledException) { }
+        foreach (var channel in _relayChannels.Values) channel.Abort();
         _cts.Dispose();
     }
 }
