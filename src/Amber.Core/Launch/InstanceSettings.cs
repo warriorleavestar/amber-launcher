@@ -102,6 +102,10 @@ public sealed class InstanceSettings
 
 public static class MemoryPlanner
 {
+    /// <summary>
+    /// 现在可用的物理内存（MB），和系统监视器里的“可用”一致：Windows 是 AvailPhys，
+    /// Linux 是 /proc/meminfo 的 MemAvailable，macOS 是（空闲 + 非活跃 + 可清除）页 × 页大小。拿不到时退回 .NET 的估算。
+    /// </summary>
     public static long FreePhysicalMb()
     {
         if (OperatingSystem.IsWindows())
@@ -109,9 +113,64 @@ public static class MemoryPlanner
             var status = new MemoryStatusEx { Length = (uint)Marshal.SizeOf<MemoryStatusEx>() };
             if (GlobalMemoryStatusEx(ref status)) return (long)(status.AvailPhys / 1024 / 1024);
         }
+        else if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                if (ParseMemAvailableKb(File.ReadAllText("/proc/meminfo")) is { } kb) return kb / 1024;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
+        else if (OperatingSystem.IsMacOS() && MacAvailableBytes() is { } bytes)
+        {
+            return bytes / 1024 / 1024;
+        }
         var info = GC.GetGCMemoryInfo();
         return (info.TotalAvailableMemoryBytes - info.MemoryLoadBytes) / 1024 / 1024;
     }
+
+    /// <summary>从 /proc/meminfo 取 MemAvailable（kB）。老内核（3.14 以前）没有这一行时用 MemFree + Buffers + Cached 近似。</summary>
+    internal static long? ParseMemAvailableKb(string meminfo)
+    {
+        var values = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var line in meminfo.Split('\n'))
+        {
+            var colon = line.IndexOf(':');
+            if (colon <= 0) continue;
+            var rest = line[(colon + 1)..].Trim();
+            var space = rest.IndexOf(' ');
+            if (long.TryParse(space < 0 ? rest : rest[..space], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var v))
+                values[line[..colon]] = v;
+        }
+        if (values.TryGetValue("MemAvailable", out var available)) return available;
+        if (values.TryGetValue("MemFree", out var free))
+            return free + values.GetValueOrDefault("Buffers") + values.GetValueOrDefault("Cached");
+        return null;
+    }
+
+    // macOS：host_statistics64(HOST_VM_INFO64)。vm_statistics64 按 4 字节对齐，共 38 个 int；
+    // free_count 在第 0 个、inactive_count 第 2 个、purgeable_count 第 22 个（字节偏移 88）。
+    private const int HostVmInfo64 = 4;
+    private const int HostVmInfo64Count = 38;
+
+    private static long? MacAvailableBytes()
+    {
+        try
+        {
+            var data = new int[HostVmInfo64Count];
+            var count = HostVmInfo64Count;
+            if (host_statistics64(mach_host_self(), HostVmInfo64, data, ref count) != 0 || count < 24) return null;
+            var pages = (long)(uint)data[0] + (uint)data[2] + (uint)data[22];
+            return pages * Environment.SystemPageSize;
+        }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException) { return null; }
+    }
+
+    [DllImport("/usr/lib/libSystem.dylib")]
+    private static extern uint mach_host_self();
+
+    [DllImport("/usr/lib/libSystem.dylib")]
+    private static extern int host_statistics64(uint host, int flavor, [Out] int[] info, ref int count);
 
     public static long TotalPhysicalMb() => GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1024 / 1024;
 

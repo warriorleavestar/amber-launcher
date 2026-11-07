@@ -68,11 +68,11 @@
 | 非 ASCII 路径（中文路径）兜底 | ✅ 目录联接 | 不需要 | 不需要 | `Launch/AsciiPaths.cs`、`Launch/WindowsJunction.cs` |
 | 1.6 以前老版本的家目录重定向 | ✅ | 🪟 没做，会写进真实 `minecraft` 目录 | 🪟 同左 | `Launch/AsciiPaths.cs` `LegacyHome` |
 | 正常关闭游戏（让游戏存档） | ✅ `CloseMainWindow` | ✅ `NSRunningApplication.terminate` | 🪟 `CloseMainWindow` 在 Linux 上无效 | `Launch/GameLauncher.cs`、`Launch/MacGameProcess.cs` |
-| 可用内存检测（自动内存） | ✅ `GlobalMemoryStatusEx` | 🟡 用 GC 信息估算 | 🟡 同左 | `Launch/InstanceSettings.cs` |
+| 可用内存检测（自动内存） | ✅ `GlobalMemoryStatusEx` | ✅ `host_statistics64`（待真机核对） | ✅ `/proc/meminfo` MemAvailable | `Launch/InstanceSettings.cs` |
 | 启动前后命令、导出启动脚本 | ✅ cmd / .bat | ✅ /bin/sh / .sh | ✅ | `ViewModels/HomeViewModel.cs`、`Launch/Toolbox.cs` |
 | 账号令牌加密 | ✅ DPAPI | 🟡 本机密钥文件（0600） | 🟡 同左 | `Auth/Accounts.cs` |
 | 模组、整合包、资源 | ✅ | ✅ | ✅ | 大小写敏感比较 |
-| 回收站（可撤销删除） | ✅ 隐藏目录 | ✅ 目录不隐藏 | ✅ | `Content/TrashService.cs` |
+| 回收站（可撤销删除） | ✅ 隐藏目录 | ✅ 目录名以 `.` 开头，默认看不到 | ✅ 同左 | `Content/TrashService.cs` |
 | 下载器 | ✅ | ✅ 打开了 Network.framework TLS | ✅ | `src/Directory.Build.targets` |
 | 联机：EasyTier 下载和运行 | ✅ | 🟡 | 🟡 | `Multiplayer/EasyTier.cs` |
 | 联机：EasyTier 进程随 Jay 退出 | ✅ 作业对象 | 🪟 Jay 崩溃会留下孤儿进程 | 🪟 同左 | `Multiplayer/ProcessJob.cs` |
@@ -127,7 +127,7 @@ Linux 可以补的：SDKMAN（`~/.sdkman/candidates/java`）、`/usr/lib64/jvm`�
 - **中文路径兜底（只 Windows 需要）**：Windows 上 Java 按 ANSI 代码页读路径，系统语言是英文时中文路径会变成问号。`AsciiPaths.cs` 检测到当前代码页表示不了路径，就用 `WindowsJunction.cs` 建一个纯英文名的目录联接（不需要管理员），用联接路径启动。Mac/Linux 是 UTF-8，直接跳过。
 - **老版本家目录 🪟**：1.6 以前的 MC 和老 FML 不认 `--gameDir`，固定把 `%APPDATA%\.minecraft` 当家目录。Windows 上 `AsciiPaths.LegacyHome` 建一个指向实例的联接，只给这个游戏进程把 `APPDATA` 指过去，这样不会写进用户真正的 `.minecraft`。Mac/Linux 上这个函数直接返回 null，老版本会写进 `~/Library/Application Support/minecraft` 或 `~/.minecraft`。适配做法：建一个临时目录，里面放指向实例的符号链接（Linux 叫 `.minecraft`，macOS 是 `Library/Application Support/minecraft`），启动时设 `-Duser.home=<临时目录>`（老版本按 `user.home` 找家目录）。
 - **正常关闭**：`GameLauncher.RequestExit`。Windows 用 `Process.CloseMainWindow()`，macOS 用 `MacGameProcess.cs`（经 objc 运行时调 `NSRunningApplication terminate`，和 Dock 的“退出”一样）。Linux 上 `CloseMainWindow` 什么都不做，返回 false。可选方案：X11 下发 `WM_DELETE_WINDOW`（或者调 `xdotool`/`wmctrl`），Wayland 下没有通用办法，可以退而发 SIGTERM（JVM 会跑关闭钩子，但不保证游戏存档）。
-- **内存**：`InstanceSettings.FreePhysicalMb` 在 Windows 用 `GlobalMemoryStatusEx`，其他平台用 `GC.GetGCMemoryInfo()` 估算（容器里会被 cgroup 限制影响）。Linux 可以读 `/proc/meminfo` 的 `MemAvailable`，macOS 可以用 `host_statistics64` 或 `sysctl vm.page_free_count`。
+- **内存**：`InstanceSettings.FreePhysicalMb` 在 Windows 用 `GlobalMemoryStatusEx`，Linux 读 `/proc/meminfo` 的 `MemAvailable`（老内核用 MemFree + Buffers + Cached），macOS 用 `host_statistics64`（空闲 + 非活跃 + 可清除页 × 页大小），都拿不到时退回 `GC.GetGCMemoryInfo()` 估算。
 - **启动前后命令**：Windows 走 `cmd.exe /s /c "…"`，其他平台走 `/bin/sh -c`（`HomeViewModel.cs`）。
 - **导出启动脚本**：Windows 生成 `.bat`，其他平台生成带 `#!/bin/sh` 的 `.sh` 并加执行权限（`Toolbox.cs`）。令牌默认换成占位符。
 - **无痕模式**：给 log4j2 配置的文件 appender 加 RegexFilter，聊天行不写进 `latest.log`（`ChatLogFilter.cs`、`NoTraceDirs.cs`）。跨平台。
@@ -150,7 +150,7 @@ Linux 可以补的：SDKMAN（`~/.sdkman/candidates/java`）、`/usr/lib64/jvm`�
 - 整合包导入导出（`ModpackService*.cs`）：mrpack、CurseForge、MultiMC/Prism、HMCL、MCBBS、PCL 带启动器的包、压缩的 `.minecraft`、多套一层的包；读 PCL/HMCL 的版本隔离设置（`OtherLauncherSettings.cs`）。
 - 模组管理和兼容检查（`ModManager.cs`、`ModCompat.cs`），每个世界的数据包管理（`Game/DatapackManager.cs`）。
 - Forge/NeoForge 上跑 Fabric 模组：自动装 Sinytra Connector 和 Forgified Fabric API（`ConnectorInstaller.cs`），并提前预热（`ConnectorWarmup.cs`）。
-- 可撤销删除（`TrashService.cs`）：删除的东西先挪到回收目录，Windows 上把回收目录设成隐藏，其他平台没有隐藏（可以把目录名改成以 `.` 开头）。
+- 可撤销删除（`TrashService.cs`）：删除的东西先挪到回收目录，回收目录叫 `.amber-trash`，Mac/Linux 上以 `.` 开头本来就默认看不到；Windows 上另外设隐藏属性。
 - 平台注意点：路径比较在 Windows 上不区分大小写，其他平台区分（`ModpackService.cs`、`LauncherService.cs`、`OnboardingViewModel.cs` 都按这个写了）。macOS 默认的 APFS 其实也不区分大小写，目前按“区分”处理，最坏情况是同名不同大小写的文件被当成两个。
 
 ### 3.6 下载器 ✅
@@ -390,8 +390,8 @@ CI 的单元测试只在 `windows-latest` 上跑。有一些测试本身按 `Ope
 | 5 | 不支持的选项先说明 | `Views/MultiplayerPage.axaml`、`MultiplayerViewModel.cs`、`TestMatrix.cs` | 在 Core 里加 `PlatformFeatures`（完整局域网、全部流量出口、远程控制、极端加密各一个布尔），界面按它禁用并显示原因；全条件测试排除不支持的步骤。之后每补齐一项就把对应开关改成 true | Mac/Linux 上勾不了完整局域网，旁边有说明；全条件测试不再出现必然失败的步骤 |
 | 6 | “仅游戏”出口拦截非默认路由 | `Transport/ExitPolicy.cs` `NonDefaultRoutes` | Linux 读 `/proc/net/route` 和 `/proc/net/ipv6_route`；macOS 用 `sysctl` `NET_RT_DUMP`（或者先解析 `netstat -rn -f inet` / `inet6`）。太宽的路由（IPv4 短于 /8、IPv6 短于 /16）照 Windows 的规则不拦 | 有 VPN 内网路由时，经出口连那个网段被拒绝；补单元测试（解析部分用样例文本） |
 | 7 | 进服时查 SRV | `Transport/JoinTarget.cs` | 自己实现一个最小 DNS 客户端：读系统 DNS（Linux `/etc/resolv.conf`，macOS `scutil --dns` 或 `/etc/resolv.conf`），UDP 53 发 SRV 查询，解析应答；或者 P/Invoke libresolv 的 `res_query` | 输入不带端口的服务器域名，经出口时按 SRV 的主机和端口连 |
-| 8 | 回收目录隐藏 | `Content/TrashService.cs` `HideOnWindows` | Mac/Linux 上回收目录名用 `.` 开头；macOS 另外可以设 `UF_HIDDEN`（`chflags hidden`） | Finder / 文件管理器默认看不到回收目录 |
-| 9 | 可用内存 | `Launch/InstanceSettings.cs` `FreePhysicalMb` | Linux 读 `/proc/meminfo` 的 `MemAvailable`；macOS 用 `host_statistics64`（free + inactive + purgeable 页 × 页大小） | 自动内存给出的数值和系统监视器看到的可用内存一致 |
+| 8 | ✅ 回收目录隐藏（目录名本来就是 `.amber-trash`） | `Content/TrashService.cs` `HideOnWindows` | Mac/Linux 上回收目录名用 `.` 开头；macOS 另外可以设 `UF_HIDDEN`（`chflags hidden`） | Finder / 文件管理器默认看不到回收目录 |
+| 9 | ✅ 可用内存 | `Launch/InstanceSettings.cs` `FreePhysicalMb` | Linux 读 `/proc/meminfo` 的 `MemAvailable`；macOS 用 `host_statistics64`（free + inactive + purgeable 页 × 页大小） | 自动内存给出的数值和系统监视器看到的可用内存一致 |
 
 ### 第二批：凭据、Java、打包
 
