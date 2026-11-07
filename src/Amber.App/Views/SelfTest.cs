@@ -1131,6 +1131,16 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         Check("踢人：他进来用的那张邀请作废了，并提示房主重新发", host.PendingInvites.Count == 0 && host.Status.Contains("作废"), host.Status);
         Check("踢人：被踢的人聊天马上断开", await WaitAsync(() => !kicked.ChatReady, 10), kicked.ChatStatus);
         Check("踢人：被踢的人看到“你已被移出房间”并停止联机", await WaitAsync(() => !kicked.IsJoined && kicked.Status.Contains("移出房间"), 10), kicked.Status);
+        // 之后几秒内不能被“掉线重连”盖掉：不显示“正在连接房主”，聊天也不显示“正在重连”。
+        var kickedLater = new List<string>();
+        for (var i = 0; i < 30; i++)
+        {
+            kickedLater.Add(kicked.Status + " / " + kicked.ChatStatus);
+            await Task.Delay(100);
+        }
+        Check("踢人：被踢的人一直显示“已被移出房间”，没有变成掉线重连",
+            kickedLater.All(s => s.Contains("移出房间") && !s.Contains("正在连接房主") && !s.Contains("重连")) && !kicked.IsJoined,
+            string.Join(" | ", kickedLater.Distinct()));
         Check("踢人：留下的人收到新网络并换过去", await WaitAsync(() => stays.RoomEpoch == 2, 15), stays.Status);
         Check("踢人：被踢的人收不到新网络", kicked.RoomEpoch != 2, kicked.RoomEpoch.ToString());
         await ShotAsync("联机踢人后");
