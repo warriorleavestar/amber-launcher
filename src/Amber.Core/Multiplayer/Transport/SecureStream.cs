@@ -11,7 +11,7 @@ namespace Amber.Core.Multiplayer.Transport;
 /// 换钥用 Noise 的 Rekey()，标志在加密的明文里，别人改不了。
 /// 伪装模式下长度字段再用 AES-256-CTR 密钥流异或掉，看起来和 Minecraft 开了加密后的数据流一样是一串随机字节。
 /// </summary>
-public sealed class SecureStream : Stream
+public sealed class SecureStream : Stream, IAuthenticatedStream
 {
     public const int MaxCiphertext = ushort.MaxValue;
     public const int MaxPlaintext = MaxCiphertext - CipherState.TagLength;

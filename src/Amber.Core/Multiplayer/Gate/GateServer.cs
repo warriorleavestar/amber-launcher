@@ -91,7 +91,12 @@ public sealed class GateServer : IAsyncDisposable
         {
             var remote = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.MapToIPv6() ?? IPAddress.IPv6None;
             Pump.Tune(client);
-            if (_handshaking.AddOrUpdate(remote, 1, (_, n) => n + 1) > _config.MaxHandshakesPerIp)
+            var state = _store.Read();
+            var plus = state.Privacy == PrivacyLevel.Plus;
+            var fromRelay = state.Relays.Count > 0 && RelaySources(state).Contains(remote);
+            // 节点转来的连接共用节点的 IP，不按 IP 限握手数（总数仍受 MaxConnections 限制）。
+            if (fromRelay) remote = IPAddress.None;
+            else if (_handshaking.AddOrUpdate(remote, 1, (_, n) => n + 1) > _config.MaxHandshakesPerIp)
             {
                 Release(remote);
                 Pump.Abort(client);
@@ -99,6 +104,8 @@ public sealed class GateServer : IAsyncDisposable
             }
             Stream stream = new OwnedStream(client);
             SecureStream? secure = null;
+            Stream? session = null;
+            PendingLeg? partner = null;
             string? name = null;
             byte[]? device = null;
             McLogin.Result? login = null;
@@ -117,6 +124,7 @@ public sealed class GateServer : IAsyncDisposable
                     secure = accepted.Stream;
                     device = accepted.DevicePublicKey;
                     var fingerprint = MemberIdentity.FingerprintOf(device);
+                    var network = accepted.Version >= 2 ? _store.Network(_config) : null;
                     if (accepted.IsEnroll)
                     {
                         var (outcome, bound) = _store.Redeem(accepted.InviteId!, device);
@@ -127,7 +135,7 @@ public sealed class GateServer : IAsyncDisposable
                             RedeemOutcome.Disabled => GateStatus.Disabled,
                             _ => GateStatus.NotMember,
                         };
-                        await GateProtocol.SendEnrollResultAsync(secure, status, status == GateStatus.Ok ? _store.AccessKey() : null, bound, timeout.Token);
+                        await GateProtocol.SendEnrollResultAsync(secure, status, status == GateStatus.Ok ? _store.AccessKey() : null, bound, timeout.Token, network);
                         await secure.CloseAsync(timeout.Token);
                         _log(status == GateStatus.Ok ? L.F("core.gate.log.enrolled", bound!, fingerprint) : L.F("core.gate.log.enroll_refused", outcome, fingerprint));
                         return;
@@ -135,20 +143,56 @@ public sealed class GateServer : IAsyncDisposable
                     var names = _store.AllowedNames(device);
                     if (names.Count == 0)
                     {
-                        await GateProtocol.SendJoinResultAsync(secure, GateStatus.NotMember, timeout.Token);
+                        await GateProtocol.SendJoinResultAsync(secure, GateStatus.NotMember, timeout.Token, network);
                         await secure.CloseAsync(timeout.Token);
                         _log(L.F("core.gate.log.not_member", fingerprint));
                         return;
                     }
-                    await GateProtocol.SendJoinResultAsync(secure, GateStatus.Ok, timeout.Token);
-                    login = await McLogin.ReadAsync(secure, timeout.Token);
+                    var split = accepted.Request is { Kind: JoinKind.SplitLeg };
+                    // 隐私+：只收经节点转来的拆分连接。旧版客户端（v1）和直连都回“要拆分”，v2 客户端顺便拿到节点列表。
+                    if (plus && !(split && fromRelay))
+                    {
+                        await GateProtocol.SendJoinResultAsync(secure, GateStatus.SplitRequired, timeout.Token, network);
+                        await secure.CloseAsync(timeout.Token);
+                        _log(L.F("core.gate.log.split_required", fingerprint));
+                        return;
+                    }
+                    await GateProtocol.SendJoinResultAsync(secure, GateStatus.Ok, timeout.Token, network);
+                    if (split)
+                    {
+                        Release(remote);
+                        remote = IPAddress.None;
+                        var leg = new PendingLeg(device, accepted.Request!.Index, secure);
+                        var key = Convert.ToHexString(accepted.Request.PairId);
+                        if (await PairAsync(key, leg, timeout.Token) is not { } other)
+                        {
+                            // 先到的腿：交给后到的那条去跑，自己等整条连接结束（占着连接名额）。
+                            secure = null;
+                            await leg.Done.Task;
+                            return;
+                        }
+                        partner = other;
+                        if (!CryptographicOperations.FixedTimeEquals(other.Device, device) || other.Index == leg.Index)
+                        {
+                            other.Stream.Abort();
+                            throw new CryptographicException(L.T("core.gate.split.mismatch"));
+                        }
+                        session = leg.Index == 0 ? new SplitStream(secure, other.Stream) : new SplitStream(other.Stream, secure);
+                        secure = null;
+                    }
+                    else
+                    {
+                        session = secure;
+                        secure = null;
+                    }
+                    login = await McLogin.ReadAsync(session, timeout.Token);
                     if (login.Intent != McLogin.Intent.Status)
                     {
                         name = names.FirstOrDefault(n => string.Equals(n, login.Username, StringComparison.OrdinalIgnoreCase));
                         if (name is null)
                         {
-                            await WriteLoginDisconnectAsync(secure, L.F("core.gate.mc.name_not_bound", login.Username!), timeout.Token);
-                            await secure.CloseAsync(timeout.Token);
+                            await WriteLoginDisconnectAsync(session, L.F("core.gate.mc.name_not_bound", login.Username!), timeout.Token);
+                            await session.FlushAsync(timeout.Token);
                             _log(L.F("core.gate.log.wrong_name", fingerprint, login.Username!, string.Join(", ", names)));
                             return;
                         }
@@ -165,11 +209,11 @@ public sealed class GateServer : IAsyncDisposable
                 {
                     _store.Touch(name, device!);
                     Interlocked.Increment(ref Online);
-                    _log(L.F("core.gate.log.joined", name));
+                    _log(L.F(partner is null ? "core.gate.log.joined" : "core.gate.log.joined_split", name));
                 }
                 try
                 {
-                    await Pump.RunAsync(secure!, backendStream, ct, () => Pump.Abort(backend));
+                    await Pump.RunAsync(session!, backendStream, ct, () => Pump.Abort(backend));
                 }
                 finally
                 {
@@ -179,11 +223,12 @@ public sealed class GateServer : IAsyncDisposable
                         _log(L.F("core.gate.log.left", name));
                     }
                 }
-                secure = null;
+                session = null;
             }
             catch (Exception e) when (e is CryptographicException or IOException or SocketException or EndOfStreamException or OperationCanceledException or InvalidDataException)
             {
                 secure?.Abort();
+                (session as IAuthenticatedStream)?.Abort();
                 Pump.Abort(client);
                 if (device is not null) _log(L.F("core.gate.log.error", MemberIdentity.FingerprintOf(device), e.Message));
             }
@@ -191,8 +236,82 @@ public sealed class GateServer : IAsyncDisposable
             {
                 if (!Equals(remote, IPAddress.None)) Release(remote);
                 if (secure is not null) await secure.DisposeAsync();
+                if (session is not null) await session.DisposeAsync();
+                partner?.Done.TrySetResult();
             }
         }
+    }
+
+    /// <summary>拆分连接里等着配对的一条腿。</summary>
+    private sealed class PendingLeg(byte[] device, byte index, SecureStream stream)
+    {
+        public byte[] Device { get; } = device;
+        public byte Index { get; } = index;
+        public SecureStream Stream { get; } = stream;
+        public TaskCompletionSource<bool> Claimed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private readonly ConcurrentDictionary<string, PendingLeg> _legs = new();
+    public static readonly TimeSpan PairTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// 配对：后到的腿拿走先到的那条并返回它；先到的腿登记后等着被拿走，被拿走返回 null。
+    /// 10 秒没等到另一条腿就抛超时（连接断开）。
+    /// </summary>
+    private async Task<PendingLeg?> PairAsync(string key, PendingLeg leg, CancellationToken ct)
+    {
+        while (true)
+        {
+            if (_legs.TryRemove(key, out var other))
+            {
+                if (other.Claimed.TrySetResult(true)) return other;
+                continue;
+            }
+            if (_legs.Count >= _config.MaxConnections) throw new IOException(L.T("core.gate.split.timeout"));
+            if (_legs.TryAdd(key, leg)) break;
+        }
+        try
+        {
+            await leg.Claimed.Task.WaitAsync(PairTimeout, ct);
+            return null;
+        }
+        catch (Exception e) when (e is TimeoutException or OperationCanceledException)
+        {
+            _legs.TryRemove(new KeyValuePair<string, PendingLeg>(key, leg));
+            // 刚好在超时的同时被另一条腿拿走了：照样交出去。
+            if (!leg.Claimed.TrySetResult(false) && leg.Claimed.Task.Result) return null;
+            throw new IOException(L.T("core.gate.split.timeout"), e);
+        }
+    }
+
+    private (GateState State, DateTime Resolved, HashSet<IPAddress> Addresses)? _relaySources;
+
+    /// <summary>节点的来源 IP（填了 Source 用 Source，没填就解析地址里的主机名；一分钟重新解析一次）。</summary>
+    private HashSet<IPAddress> RelaySources(GateState state)
+    {
+        var cached = _relaySources;
+        if (cached is { } c && ReferenceEquals(c.State, state) && DateTime.UtcNow - c.Resolved < TimeSpan.FromMinutes(1)) return c.Addresses;
+        var set = new HashSet<IPAddress>();
+        foreach (var relay in state.Relays)
+        {
+            if (relay.Source is { } source && IPAddress.TryParse(source, out var ip))
+            {
+                set.Add(ip.MapToIPv6());
+                continue;
+            }
+            if (GateEndpoint.TryParse(relay.Address) is not { } endpoint) continue;
+            try
+            {
+                foreach (var a in Dns.GetHostAddresses(endpoint.Host)) set.Add(a.MapToIPv6());
+            }
+            catch (SocketException)
+            {
+                // 解析不了就先不认这个节点，下次再试。
+            }
+        }
+        _relaySources = (state, DateTime.UtcNow, set);
+        return set;
     }
 
     private void Release(IPAddress remote)

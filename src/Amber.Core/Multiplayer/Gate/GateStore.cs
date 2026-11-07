@@ -15,6 +15,11 @@ public sealed class GateState
     public int MaxDevicesPerMember { get; set; } = 2;
     public List<GateMember> Members { get; set; } = [];
     public List<GatePendingInvite> Invites { get; set; } = [];
+    /// <summary>隐私等级。放在 state.json 里，运行中的网关改了马上生效。</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter<PrivacyLevel>))]
+    public PrivacyLevel Privacy { get; set; } = PrivacyLevel.Basic;
+    /// <summary>节点（中继）。隐私+ 下客户端经其中两个连进来，网关只认这些节点的来源 IP。</summary>
+    public List<GateRelayEntry> Relays { get; set; } = [];
 
     public GateMember? Member(string name) => Members.FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
 }
@@ -33,6 +38,14 @@ public sealed class GateDevice
     public string Fingerprint { get; set; } = "";
     public DateTimeOffset Added { get; set; }
     public DateTimeOffset? LastSeen { get; set; }
+}
+
+public sealed class GateRelayEntry
+{
+    /// <summary>玩家连的地址（host:port），会发给客户端。</summary>
+    public string Address { get; set; } = "";
+    /// <summary>网关看到的这个节点的来源 IP（节点在局域网、或者和网关在同一台机器时要填）；空的就把 Address 的主机名解析成 IP。</summary>
+    public string? Source { get; set; }
 }
 
 public sealed class GatePendingInvite
@@ -200,6 +213,11 @@ public sealed class GateStore
             return 0;
         });
         CryptographicOperations.ZeroMemory(psk);
+        // 隐私+：邀请码里写随机一个节点，不写源站地址。
+        var state = Read();
+        if (state.Privacy == PrivacyLevel.Plus && state.Relays.Count > 0
+            && GateEndpoint.TryParse(state.Relays[RandomNumberGenerator.GetInt32(state.Relays.Count)].Address) is { } relay)
+            return new GateInvite(relay.Host, relay.Port, keyHash, token, name);
         return new GateInvite(config.PublicHost, config.PublicPort, keyHash, token, name);
     }
 
@@ -268,6 +286,52 @@ public sealed class GateStore
     public bool RemoveMember(string name) => Mutate(s => s.Members.RemoveAll(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)) > 0);
 
     public bool CancelInvite(string id) => Mutate(s => s.Invites.RemoveAll(i => i.Id == id) > 0);
+
+    /// <summary>告诉客户端的连法。隐私+ 下不带直连地址（源站地址不外传）。</summary>
+    public GateNetwork Network(GateConfig config)
+    {
+        var state = Read();
+        var relays = state.Relays.Select(r => GateEndpoint.TryParse(r.Address)).OfType<GateEndpoint>().ToList();
+        var direct = state.Privacy == PrivacyLevel.Plus || !GateInvite.IsValidHost(config.PublicHost) ? null : new GateEndpoint(config.PublicHost, config.PublicPort);
+        return new GateNetwork(state.Privacy, direct, relays);
+    }
+
+    /// <summary>切换隐私等级。隐私+ 至少要两个节点。</summary>
+    public void SetPrivacy(PrivacyLevel level) => Mutate(s =>
+    {
+        if (level == PrivacyLevel.Plus && s.Relays.Count < 2) throw new ArgumentException(L.T("core.gate.admin.plus_needs_relays"));
+        s.Privacy = level;
+        return 0;
+    });
+
+    /// <summary>加节点（同一地址已有就更新来源 IP）。</summary>
+    public void AddRelay(GateEndpoint address, string? source)
+    {
+        if (source is not null && !System.Net.IPAddress.TryParse(source, out _)) throw new ArgumentException(L.T("core.gate.admin.badsource"));
+        Mutate(s =>
+        {
+            var text = address.ToString();
+            var entry = s.Relays.FirstOrDefault(r => string.Equals(r.Address, text, StringComparison.OrdinalIgnoreCase));
+            if (entry is null)
+            {
+                if (s.Relays.Count >= GateNetwork.MaxRelays) throw new ArgumentException(L.T("core.gate.admin.too_many_relays"));
+                s.Relays.Add(entry = new GateRelayEntry { Address = text });
+            }
+            entry.Source = source;
+            return 0;
+        });
+    }
+
+    /// <summary>删节点。隐私+ 下删完不到两个就不让删。</summary>
+    public bool RemoveRelay(string address) => Mutate(s =>
+    {
+        var parsed = GateEndpoint.TryParse(address)?.ToString() ?? address.Trim();
+        var index = s.Relays.FindIndex(r => string.Equals(r.Address, parsed, StringComparison.OrdinalIgnoreCase));
+        if (index < 0) return false;
+        if (s.Privacy == PrivacyLevel.Plus && s.Relays.Count <= 2) throw new ArgumentException(L.T("core.gate.admin.plus_needs_relays"));
+        s.Relays.RemoveAt(index);
+        return true;
+    });
 
     private GateState Load() =>
         JsonSerializer.Deserialize(File.ReadAllBytes(StatePath), GateJsonContext.Default.GateState) ?? new GateState();

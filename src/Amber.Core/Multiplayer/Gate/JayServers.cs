@@ -19,22 +19,115 @@ public static class GateClient
         return await GateProtocol.EnrollAsync(stream, invite, identity.KeyPair, ct);
     }
 
-    /// <summary>给 <see cref="TunnelClient"/> 用：每条游戏连接打开一条到网关的已认证加密流。</summary>
-    public static Func<CancellationToken, Task<Stream>> Opener(GateMembership membership, MemberIdentity identity) => async ct =>
+    /// <summary>
+    /// 给 <see cref="TunnelClient"/> 用：每条游戏连接打开一条到网关的已认证加密流。
+    /// 隐私+ 的服务器经两个不同节点各开一条腿拼成 <see cref="SplitStream"/>；凑不齐两个能连上的节点就报错，不会退回直连。
+    /// </summary>
+    /// <param name="onNetwork">网关回了最新的连法（隐私等级、节点列表）时调用，调用方拿去存盘。</param>
+    public static Func<CancellationToken, Task<Stream>> Opener(GateMembership membership, MemberIdentity identity, Action<GateNetwork>? onNetwork = null)
     {
+        var current = membership;
+        void Update(GateNetwork network)
+        {
+            current = current with { Network = network };
+            onNetwork?.Invoke(network);
+        }
+        return async ct =>
+        {
+            var m = current;
+            if (m.Network is { Level: PrivacyLevel.Plus } plus) return await OpenSplitAsync(m, plus, identity, Update, ct);
+            try
+            {
+                return await OpenDirectAsync(m, identity, Update, ct);
+            }
+            catch (GateRejectedException e) when (e.Status == GateStatus.SplitRequired && current.Network is { Level: PrivacyLevel.Plus } changed)
+            {
+                // 服务器刚切到隐私+：网关回拒绝时已经带上了节点列表，直接改走两路。
+                return await OpenSplitAsync(current, changed, identity, Update, ct);
+            }
+        };
+    }
+
+    private static async Task<Stream> OpenDirectAsync(GateMembership m, MemberIdentity identity, Action<GateNetwork> update, CancellationToken ct)
+    {
+        var target = m.Network?.Direct ?? new GateEndpoint(m.Host, m.Port);
         var tcp = new TcpClient();
         try
         {
-            await ConnectAsync(tcp, membership.Host, membership.Port, ct);
+            await ConnectAsync(tcp, target.Host, target.Port, ct);
             Pump.Tune(tcp);
-            return await GateProtocol.JoinAsync(new OwnedStream(tcp), membership, identity.KeyPair, ct);
+            return await GateProtocol.JoinAsync(new OwnedStream(tcp), m, identity.KeyPair, JoinRequest.Direct, update, ct);
         }
         catch
         {
             tcp.Dispose();
             throw;
         }
-    };
+    }
+
+    /// <summary>随机挑两个不同的节点，各做一次完整的进服握手（同一个配对 ID，腿序号 0 / 1）。某个节点连不上就换下一个。</summary>
+    internal static async Task<Stream> OpenSplitAsync(GateMembership m, GateNetwork network, MemberIdentity identity, Action<GateNetwork>? update, CancellationToken ct)
+    {
+        var relays = network.Relays.Distinct().ToArray();
+        if (relays.Length < 2) throw new IOException(L.T("core.gate.split.need_two"));
+        RandomNumberGenerator.Shuffle(relays.AsSpan());
+        var queue = new Queue<GateEndpoint>(relays);
+        var queueLock = new Lock();
+        var pairId = RandomNumberGenerator.GetBytes(JoinRequest.PairIdLength);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+        async Task<SecureStream> LegAsync(byte index)
+        {
+            Exception? last = null;
+            while (true)
+            {
+                GateEndpoint? relay;
+                lock (queueLock) relay = queue.Count > 0 ? queue.Dequeue() : null;
+                if (relay is null) throw new IOException(L.T("core.gate.split.need_two"), last);
+                var tcp = new TcpClient();
+                try
+                {
+                    await ConnectAsync(tcp, relay.Host, relay.Port, linked.Token);
+                    Pump.Tune(tcp);
+                    return await GateProtocol.JoinAsync(new OwnedStream(tcp), m, identity.KeyPair, JoinRequest.Leg(index, pairId), update, linked.Token);
+                }
+                catch (Exception e) when (e is IOException or SocketException && !linked.IsCancellationRequested)
+                {
+                    tcp.Dispose();
+                    last = e;
+                }
+                catch
+                {
+                    tcp.Dispose();
+                    throw;
+                }
+            }
+        }
+
+        var legs = new[] { LegAsync(0), LegAsync(1) };
+        try
+        {
+            await Task.WhenAll(legs.Select(async t =>
+            {
+                try { await t; }
+                catch { await linked.CancelAsync(); throw; }
+            }));
+        }
+        catch
+        {
+            foreach (var leg in legs)
+                if (leg.IsCompletedSuccessfully)
+                {
+                    leg.Result.Abort();
+                    await leg.Result.DisposeAsync();
+                }
+            // 报最先出错的那个原因（另一条腿多半只是被取消了）。
+            var first = legs.Where(l => l.IsFaulted).Select(l => l.Exception!.InnerException!).FirstOrDefault(e => e is not OperationCanceledException);
+            if (first is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(first);
+            throw;
+        }
+        return new SplitStream(legs[0].Result, legs[1].Result);
+    }
 
     private static async Task ConnectAsync(TcpClient tcp, string host, int port, CancellationToken ct)
     {
@@ -70,6 +163,12 @@ public sealed class JayServerList
         public string ProtectedAccessKey { get; set; } = "";
         public string Username { get; set; } = "";
         public DateTimeOffset Added { get; set; }
+        /// <summary>隐私等级（basic / plus），网关每次进服都会回最新的。</summary>
+        public string Privacy { get; set; } = "basic";
+        /// <summary>网关给的直连地址（隐私+ 下没有）。</summary>
+        public string? Direct { get; set; }
+        /// <summary>节点列表（host:port）。</summary>
+        public List<string> Relays { get; set; } = [];
     }
 
     public sealed class FileModel
@@ -117,6 +216,7 @@ public sealed class JayServerList
                 Username = membership.Username,
                 Added = DateTimeOffset.UtcNow,
             };
+            Apply(entry, membership.Network);
             model.Servers.Add(entry);
             Save(model);
             return entry;
@@ -132,8 +232,36 @@ public sealed class JayServerList
         }
     }
 
-    public static GateMembership ToMembership(Entry entry) =>
-        new(entry.Host, entry.Port, Convert.FromBase64String(entry.ServerPublicKey), Unprotect(entry.ProtectedAccessKey), entry.Username);
+    /// <summary>网关回了新的连法：更新保存的隐私等级和节点列表。返回更新后的条目（找不到返回 null）。</summary>
+    public Entry? UpdateNetwork(string id, GateNetwork network)
+    {
+        lock (_gate)
+        {
+            var model = new FileModel { Servers = [.. Load()] };
+            var entry = model.Servers.FirstOrDefault(e => e.Id == id);
+            if (entry is null) return null;
+            Apply(entry, network);
+            Save(model);
+            return entry;
+        }
+    }
+
+    private static void Apply(Entry entry, GateNetwork? network)
+    {
+        if (network is null) return;
+        entry.Privacy = network.Level == PrivacyLevel.Plus ? "plus" : "basic";
+        entry.Direct = network.Direct?.ToString();
+        entry.Relays = [.. network.Relays.Select(r => r.ToString())];
+    }
+
+    public static GateMembership ToMembership(Entry entry)
+    {
+        GateNetwork? network = null;
+        if (entry.Privacy == "plus" || entry.Relays.Count > 0 || entry.Direct is not null)
+            network = new GateNetwork(entry.Privacy == "plus" ? PrivacyLevel.Plus : PrivacyLevel.Basic, GateEndpoint.TryParse(entry.Direct),
+                [.. entry.Relays.Select(GateEndpoint.TryParse).OfType<GateEndpoint>()]);
+        return new(entry.Host, entry.Port, Convert.FromBase64String(entry.ServerPublicKey), Unprotect(entry.ProtectedAccessKey), entry.Username, network);
+    }
 
     private void Save(FileModel model)
     {
