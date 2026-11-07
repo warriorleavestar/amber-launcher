@@ -186,6 +186,9 @@ public sealed class RemoteSharer : RemoteEndpoint
     /// <summary>现在允许对方控制。</summary>
     public bool ControlAllowed => _controlAllowed;
 
+    /// <summary>能不能（重新）允许控制：同意时选了“只看”就没有注入，不能改成允许。</summary>
+    public bool CanGrantControl => _input is not null && !HasEnded;
+
     /// <summary>注入了多少个输入包、丢弃了多少个（测试和诊断用）。</summary>
     public long InputsInjected => Interlocked.Read(ref _injected);
     public long InputsDropped => Interlocked.Read(ref _dropped);
@@ -202,6 +205,18 @@ public sealed class RemoteSharer : RemoteEndpoint
 
     internal static TimeSpan HelloTimeout { get; set; } = TimeSpan.FromSeconds(15);
 
+    /// <summary>控制方的 Hello 已经被读过了（房主这边先读 Hello 再弹同意窗）。</summary>
+    public bool HelloAlreadyRead { get; init; }
+
+    /// <summary>读控制方的 Hello（版本对得上返回 true）。</summary>
+    public static async Task<bool> ReadHelloAsync(Stream stream, CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(HelloTimeout);
+        var first = await RemoteWire.ReadAsync(stream, timeout.Token);
+        return first is { Type: RemoteFrameType.Hello } f && f.Payload is [RemoteWire.Version];
+    }
+
     public event Action<bool>? ControlChanged;
 
     /// <summary>跑整个会话（直到结束）。</summary>
@@ -209,15 +224,10 @@ public sealed class RemoteSharer : RemoteEndpoint
     {
         try
         {
-            using (var hello = CancellationTokenSource.CreateLinkedTokenSource(Lifetime))
+            if (!HelloAlreadyRead && !await ReadHelloAsync(Stream, Lifetime))
             {
-                hello.CancelAfter(HelloTimeout);
-                var first = await RemoteWire.ReadAsync(Stream, hello.Token);
-                if (first is not { Type: RemoteFrameType.Hello } f || f.Payload is not [RemoteWire.Version])
-                {
-                    Abort(first is null ? RemoteEnd.Disconnected : RemoteEnd.ProtocolError);
-                    return;
-                }
+                Abort(RemoteEnd.ProtocolError);
+                return;
             }
             var raw = new ScreenFrame();
             if (!_screen.TryCapture(raw))

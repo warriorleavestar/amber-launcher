@@ -166,6 +166,59 @@ public sealed class GlobalHotkey : IDisposable
     }
 }
 
+/// <summary>
+/// 被控期间屏幕边缘的红框：每条边一个系统原生的弹出窗口（WS_POPUP，没有最小尺寸限制），置顶、不抢焦点、点击穿透、不进任务栏。
+/// 必须在有消息循环的线程（界面线程）上创建和关闭。
+/// </summary>
+[SupportedOSPlatform("windows")]
+public sealed class RedFrameWindows : IDisposable
+{
+    private const string ClassName = "JayRemoteRedFrame";
+    private static bool _registered;
+    private static nint _brush;
+    private readonly List<nint> _windows = [];
+
+    /// <summary>给每个矩形（桌面像素坐标）开一个红色窗口。</summary>
+    public RedFrameWindows(IEnumerable<(int X, int Y, int Width, int Height)> rects)
+    {
+        Register();
+        var instance = Native.GetModuleHandle(0);
+        foreach (var (x, y, w, h) in rects)
+        {
+            var hwnd = Native.CreateWindowEx((int)(Native.WS_EX_TOPMOST | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE | Native.WS_EX_TRANSPARENT | Native.WS_EX_LAYERED),
+                ClassName, "", unchecked((int)Native.WS_POPUP), x, y, w, h, 0, 0, instance, 0);
+            if (hwnd == 0) continue;
+            Native.SetLayeredWindowAttributes(hwnd, 0, 255, Native.LWA_ALPHA);
+            Native.ShowWindow(hwnd, Native.SW_SHOWNOACTIVATE);
+            Native.SetWindowPos(hwnd, -1, x, y, w, h, Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+            _windows.Add(hwnd);
+        }
+    }
+
+    public int Count => _windows.Count;
+
+    private static void Register()
+    {
+        if (_registered) return;
+        _brush = Native.CreateSolidBrush(0x001C1CE5); // COLORREF 是 0x00BBGGRR：RGB(E5,1C,1C)
+        var wc = new Native.WNDCLASSEXW
+        {
+            cbSize = (uint)Marshal.SizeOf<Native.WNDCLASSEXW>(),
+            lpfnWndProc = NativeLibrary.GetExport(NativeLibrary.Load("user32.dll"), "DefWindowProcW"),
+            hInstance = Native.GetModuleHandle(0),
+            hbrBackground = _brush,
+            lpszClassName = Marshal.StringToHGlobalUni(ClassName),
+        };
+        _registered = Native.RegisterClassEx(ref wc) != 0;
+    }
+
+    public void Dispose()
+    {
+        foreach (var hwnd in _windows) Native.DestroyWindow(hwnd);
+        _windows.Clear();
+    }
+}
+
 /// <summary>窗口点击穿透（红框窗口用）：加上 WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE。</summary>
 [SupportedOSPlatform("windows")]
 public static class WindowStyles
@@ -175,6 +228,12 @@ public static class WindowStyles
         var style = Native.GetWindowLongPtr(hwnd, Native.GWL_EXSTYLE);
         Native.SetWindowLongPtr(hwnd, Native.GWL_EXSTYLE, style | Native.WS_EX_TRANSPARENT | Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE);
     }
+
+    /// <summary>
+    /// 按像素放到指定位置并置顶（不激活）。Avalonia 给窗口设的最小尺寸比红框的一条边粗，这里直接用系统接口定尺寸。
+    /// </summary>
+    public static void Place(nint hwnd, int x, int y, int width, int height) =>
+        Native.SetWindowPos(hwnd, -1, x, y, width, height, Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
 
     /// <summary>不抢焦点、不出现在任务栏（顶部小条用）。</summary>
     public static void MakeToolWindow(nint hwnd)
@@ -350,6 +409,57 @@ internal static partial class Native
 
     [LibraryImport("kernel32.dll")]
     public static partial uint GetCurrentThreadId();
+
+    public const uint SWP_NOACTIVATE = 0x0010, SWP_SHOWWINDOW = 0x0040;
+    public const uint WS_POPUP = 0x80000000;
+    public const nint WS_EX_TOPMOST = 0x8;
+    public const uint LWA_ALPHA = 0x2;
+    public const int SW_SHOWNOACTIVATE = 4;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WNDCLASSEXW
+    {
+        public uint cbSize;
+        public uint style;
+        public nint lpfnWndProc;
+        public int cbClsExtra;
+        public int cbWndExtra;
+        public nint hInstance;
+        public nint hIcon;
+        public nint hCursor;
+        public nint hbrBackground;
+        public nint lpszMenuName;
+        public nint lpszClassName;
+        public nint hIconSm;
+    }
+
+    [LibraryImport("user32.dll", EntryPoint = "RegisterClassExW")]
+    public static partial ushort RegisterClassEx(ref WNDCLASSEXW wc);
+
+    [LibraryImport("user32.dll", EntryPoint = "CreateWindowExW", StringMarshalling = StringMarshalling.Utf16)]
+    public static partial nint CreateWindowEx(int exStyle, string className, string windowName, int style, int x, int y, int w, int h, nint parent, nint menu, nint instance, nint param);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DestroyWindow(nint hwnd);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool ShowWindow(nint hwnd, int cmd);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetLayeredWindowAttributes(nint hwnd, uint key, byte alpha, uint flags);
+
+    [LibraryImport("gdi32.dll")]
+    public static partial nint CreateSolidBrush(uint color);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "GetModuleHandleW")]
+    public static partial nint GetModuleHandle(nint name);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
 
     [LibraryImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     public static partial nint GetWindowLongPtr(nint hwnd, int index);

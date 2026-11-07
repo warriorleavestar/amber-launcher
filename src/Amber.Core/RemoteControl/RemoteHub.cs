@@ -172,6 +172,8 @@ public sealed class RemoteHub : IAsyncDisposable
     private async Task ServeControllerAsync(SecureStream stream, MemberEntry member, Action releasePending)
     {
         var name = ChatWire.NameOf(member);
+        // 先读完控制方的 Hello（版本不对就不弹窗）；不读的话拒绝后关连接时未读的数据会让对方收到重置、看不到“拒绝”。
+        if (!await RemoteSharer.ReadHelloAsync(stream, _cts.Token)) return;
         if (Sharing is not null || Interlocked.Exchange(ref _prompting, 1) != 0)
         {
             await DenyAsync(stream, RemoteDenyReason.Busy);
@@ -206,7 +208,7 @@ public sealed class RemoteHub : IAsyncDisposable
             return;
         }
         var input = consent.ViewOnly ? null : _options.Input();
-        var sharer = new RemoteSharer(stream, screen, input, _options.Codec, !consent.ViewOnly, name, member.Fingerprint);
+        var sharer = new RemoteSharer(stream, screen, input, _options.Codec, !consent.ViewOnly, name, member.Fingerprint) { HelloAlreadyRead = true };
         if (Interlocked.CompareExchange(ref _sharing, sharer, null) is not null)
         {
             screen.Dispose();
