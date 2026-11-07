@@ -368,6 +368,7 @@
   "core.launch.cleanup.partialdownloadsdescription": "ダウンロード未完了の .part ファイル",
   "core.launch.game.javastartfailed": "Java プロセスを起動できません",
   "core.launch.game.legacyappdata": "[Jay] 旧バージョン：今回のゲームの APPDATA は {0} を指します（その中の .minecraft がインスタンスディレクトリです）。ユーザー自身の .minecraft には書き込みません",
+  "core.launch.game.legacyhome": "[Jay] 旧バージョン：今回のゲームのシステムホームは {0} を指します。ユーザー自身の minecraft ディレクトリには書き込みません",
   "core.launch.game.missingmainclass": "{0} に mainClass がありません",
   "core.launch.paths.homejunctionfailed": "[Jay] 旧バージョン用のホームディレクトリのジャンクションを作成できません：{0}",
   "core.launch.paths.junctionfallback": "パスに現在のシステム言語で表せない文字があります。ジャンクションを使用します：{0} → {1}",

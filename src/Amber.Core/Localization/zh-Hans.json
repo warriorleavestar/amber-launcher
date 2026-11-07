@@ -368,6 +368,7 @@
   "core.launch.cleanup.partialdownloadsdescription": "没下载完的 .part 文件",
   "core.launch.game.javastartfailed": "无法启动 Java 进程",
   "core.launch.game.legacyappdata": "[Jay] 旧版本：这次游戏的 APPDATA 指向 {0}（其中 .minecraft 就是实例目录），不会写到你自己的 .minecraft",
+  "core.launch.game.legacyhome": "[Jay] 旧版本：这次游戏的系统家目录指向 {0}，不会写到你自己的 minecraft 目录",
   "core.launch.game.missingmainclass": "{0} 没有 mainClass",
   "core.launch.paths.homejunctionfailed": "[Jay] 建不了旧版本用的家目录联接：{0}",
   "core.launch.paths.junctionfallback": "路径里有当前系统语言表示不了的字符，改用联接 {0} → {1}",

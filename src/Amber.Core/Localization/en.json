@@ -376,6 +376,7 @@
   "core.launch.cleanup.partialdownloadsdescription": "Unfinished .part downloads",
   "core.launch.game.javastartfailed": "Could not start the Java process",
   "core.launch.game.legacyappdata": "[Jay] Legacy version: APPDATA for this game session points to {0} (its .minecraft is the instance directory). Your own .minecraft will not be written to",
+  "core.launch.game.legacyhome": "[Jay] Legacy version: the system home for this game session points to {0}. Your own minecraft directory will not be written to",
   "core.launch.game.missingmainclass": "{0} has no mainClass",
   "core.launch.paths.homejunctionfailed": "[Jay] Could not create the home directory junction for legacy versions: {0}",
   "core.launch.paths.junctionfallback": "The path contains characters the current system language cannot represent. Using a junction: {0} → {1}",

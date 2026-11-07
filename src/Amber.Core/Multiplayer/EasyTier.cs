@@ -364,6 +364,7 @@ public sealed class EasyTierSession : IEasyTierSession
     internal static (Process Process, ProcessJob? Job) Launch(string corePath, IEnumerable<string> args, IReadOnlyDictionary<string, string> environment, string workDir)
     {
         Directory.CreateDirectory(workDir);
+        EasyTierProcessTracker.Cleanup(workDir, corePath);
         var info = new ProcessStartInfo(corePath)
         {
             WorkingDirectory = workDir,
@@ -375,6 +376,7 @@ public sealed class EasyTierSession : IEasyTierSession
         foreach (var a in args) info.ArgumentList.Add(a);
         foreach (var (name, value) in environment) info.Environment[name] = value;
         var process = Process.Start(info) ?? throw new InvalidOperationException(L.T("core.mp.component.startfailed"));
+        EasyTierProcessTracker.Track(process, workDir, corePath);
         ProcessJob? job = null;
         if (OperatingSystem.IsWindows())
         {
