@@ -57,6 +57,19 @@ public static class MemberChannel
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(Timeout);
         var member = await ReadMemberAsync(stream, members, timeout.Token);
+        return await AcceptMemberAsync(stream, member, profile, purpose, acceptPayload, timeout.Token);
+    }
+
+    /// <summary>
+    /// 查到成员之后的握手。查到和取钥匙之间他可能刚好被踢：那时钥匙已清零，CopyPsk 抛 CryptographicException，
+    /// 不会拿一把全零的 psk 去握手。
+    /// </summary>
+    internal static async Task<(SecureStream Stream, MemberEntry Member, byte[] Payload)> AcceptMemberAsync(Stream stream, MemberEntry member, TransportProfile profile, string purpose,
+        Func<byte[], bool>? acceptPayload, CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(Timeout);
+        if (member.Revoked) throw new CryptographicException(L.T("core.mp.member.unknown"));
         var psk = member.Key.CopyPsk();
         try
         {
@@ -83,7 +96,7 @@ public static class MemberChannel
     }
 
     internal static MemberEntry Lookup(MemberTable members, ReadOnlySpan<byte> id) =>
-        members.TryGet(id, out var member) ? member : throw new CryptographicException(L.T("core.mp.member.unknown"));
+        members.TryGet(id, out var member) && !member.Revoked ? member : throw new CryptographicException(L.T("core.mp.member.unknown"));
 
     internal static async Task WriteFramedAsync(Stream stream, byte[] message, CancellationToken ct)
     {

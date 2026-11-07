@@ -998,7 +998,7 @@
   "multiplayer.proxy.stopped": "ゲーム通信の転送を停止しました。今後起動するゲームは直接インターネットに接続します。",
   "multiplayer.proxy.switching": "ゲームの通信は {0}（{1}）のパソコンを経由します。相手が先に「メンバーが自分のパソコン経由でゲームの通信を転送することを許可」を有効にする必要があります。今後、起動ページから起動したゲームに適用されます。",
   "multiplayer.room.added_to_servers": "{0} のマルチプレイ一覧に追加しました（アドレス：{1}、ポートはルームに参加するたびに変わります）",
-  "multiplayer.room.code_copied": "ルームコードをコピーしました",
+  "multiplayer.room.code_copied": "ルームコードをコピーしました。60 秒後にクリップボードから消去します",
   "multiplayer.room.code_hint": "ルームコードにはルームキーが含まれています。一緒に遊ぶ相手にだけ送ってください。ゲームを起動したまま、ワールドをLANに公開しておく必要があります。",
   "multiplayer.room.code_label": "ルームコード（フレンドに送信）",
   "multiplayer.room.connected": "ホストに接続しました{0}。ゲーム内でサーバー {1} を追加するか、下のボタンで直接参加できます。",
@@ -1292,7 +1292,7 @@
   "multiplayer.invite.name_mismatch": "注意：信頼リストに同じ名前の人がいますが、フィンガープリントが違います。別人の可能性があります",
   "multiplayer.invite.created": "招待コードを作成しました。友だちにコピーして送ってください",
   "multiplayer.invite.lobby_failed": "ロビーを開けません（ノック用ポート {0} が使用中の可能性）：{1}",
-  "multiplayer.invite.copied": "招待コードをコピーしました",
+  "multiplayer.invite.copied": "招待コードをコピーしました。60 秒後にクリップボードから消去します",
   "multiplayer.invite.revoked": "招待を取り消しました",
   "multiplayer.invite.trusted": "{0}（{1}）を信頼しました。今後のノックは自動で承認されます",
   "multiplayer.identity.reset_done": "新しい身元に切り替えました（フィンガープリント {0}）。あなたを信頼していたホストには、もう一度承認してもらう必要があります",
@@ -1423,5 +1423,10 @@
   "multiplayer.direct.admitting": "ホストに承認されました。メンバーを確認しています…",
   "multiplayer.direct.invite_created": "直接接続の招待コードを作成しました（この招待とあなたのアドレス入り）",
   "multiplayer.direct.ip_warning": "直接接続コードにはあなたのグローバル IP アドレスが含まれます。一緒に遊ぶ人にだけ送ってください。",
-  "multiplayer.kick.you_were_kicked": "ルームから外されました"
+  "multiplayer.kick.you_were_kicked": "ルームから外されました",
+  "core.mp.direct.closed_to_new": "{0} から直接接続がありましたが、未使用の招待がないため新しい直接接続は受け付けません",
+  "multiplayer.clipboard.autoclear_hint": "60 秒後にクリップボードから自動で消去します",
+  "multiplayer.clipboard.copied_autoclear": "コピーしました。60 秒後にクリップボードから消去します",
+  "multiplayer.transport.privacy.general": "最速です。メンバー間のゲーム通信はルームのネットワーク鍵だけで保護され、その鍵はルームの全員が持っています。",
+  "multiplayer.transport.privacy.member_channel": "メンバーごとに専用の暗号化チャネルを使うため、ほかのメンバーや中継ノードからはゲーム通信が見えません。"
 }

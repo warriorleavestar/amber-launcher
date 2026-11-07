@@ -21,7 +21,22 @@ public sealed record InviteExpiryChoice(TimeSpan? Lifetime, string Key) : Locali
 /// <summary>还能用的一张邀请（房主的“待用邀请”列表）。</summary>
 public sealed record PendingInviteItem(PendingInvite Invite) : LocalizedRecord
 {
-    public string Label => L.F("multiplayer.invite.pending_item", Invite.Invite.Masked, Invite.UsesLeft, Invite.Uses,
+    private bool _shown;
+
+    /// <summary>显示完整的邀请码（默认打码；离开联机页时重新打码）。</summary>
+    public bool Shown
+    {
+        get => _shown;
+        set
+        {
+            if (_shown == value) return;
+            _shown = value;
+            OnPropertyChanged(nameof(Shown));
+            OnPropertyChanged(nameof(Label));
+        }
+    }
+
+    public string Label => L.F("multiplayer.invite.pending_item", Shown ? Invite.Invite.ToString() : Invite.Invite.Masked, Invite.UsesLeft, Invite.Uses,
         Invite.ExpiresAt is { } at ? L.F("multiplayer.invite.expires_at", at.ToLocalTime().ToString("HH:mm")) : L.T("multiplayer.invite.expiry.room"),
         Invite.AutoApprove ? L.T("multiplayer.invite.auto_suffix") : "");
 }
@@ -448,14 +463,40 @@ public sealed partial class MultiplayerViewModel
     private void ToggleInviteShown() => InviteShown = !InviteShown;
 
     [RelayCommand]
+    private void TogglePendingInviteShown(PendingInviteItem? item)
+    {
+        if (item is not null) item.Shown = !item.Shown;
+    }
+
+    /// <summary>输入框里粘贴的码（房间码、邀请码、直连码、回复码）默认也打码显示。</summary>
+    [ObservableProperty] public partial bool JoinCodeShown { get; set; }
+    [ObservableProperty] public partial bool DirectInviteInputShown { get; set; }
+    [ObservableProperty] public partial bool DirectReplyInputShown { get; set; }
+
+    [RelayCommand] private void ToggleJoinCodeShown() => JoinCodeShown = !JoinCodeShown;
+    [RelayCommand] private void ToggleDirectInviteInputShown() => DirectInviteInputShown = !DirectInviteInputShown;
+    [RelayCommand] private void ToggleDirectReplyInputShown() => DirectReplyInputShown = !DirectReplyInputShown;
+
+    /// <summary>离开联机页：所有码重新打码。</summary>
+    protected override void OnLeftCurrent() => MaskAllCodes();
+
+    internal void MaskAllCodes()
+    {
+        InviteShown = false;
+        DirectCodeShown = false;
+        JoinCodeShown = false;
+        DirectInviteInputShown = false;
+        DirectReplyInputShown = false;
+        foreach (var item in PendingInvites) item.Shown = false;
+        OnPropertyChanged(nameof(InviteDisplay));
+    }
+
+    [RelayCommand]
     private async Task CopyInviteAsync()
     {
         if (_lastInvite is not { } invite) return;
-        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
-        {
-            await clipboard.SetTextAsync(IsDirect && MyDirectCode.Length > 0 ? MyDirectCode : invite.ToString());
+        if (await SecretClipboard.CopyAsync(IsDirect && MyDirectCode.Length > 0 ? MyDirectCode : invite.ToString()))
             SetStatus(StatusMessage.Success("multiplayer.invite.copied"));
-        }
     }
 
     [RelayCommand]

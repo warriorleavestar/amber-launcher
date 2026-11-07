@@ -998,7 +998,7 @@
   "multiplayer.proxy.stopped": "已停止转发游戏流量，之后启动的游戏直接连网。",
   "multiplayer.proxy.switching": "游戏流量会经 {0}（{1}）的电脑出去。对方要先勾选“允许成员经我的电脑转发游戏流量”。之后从启动页启动游戏生效。",
   "multiplayer.room.added_to_servers": "已加到 {0} 的多人游戏列表（地址 {1}，每次加入房间端口会变）",
-  "multiplayer.room.code_copied": "房间码已复制",
+  "multiplayer.room.code_copied": "房间码已复制，60 秒后自动从剪贴板清除",
   "multiplayer.room.code_hint": "房间码里含密钥，只发给要一起玩的人。游戏要一直开着，世界也要保持“对局域网开放”。",
   "multiplayer.room.code_label": "房间码（发给朋友）",
   "multiplayer.room.connected": "已连上房主{0}。在游戏里添加服务器 {1}，或点下面的按钮直接进入",
@@ -1292,7 +1292,7 @@
   "multiplayer.invite.name_mismatch": "注意：信任列表里有同名的人，但指纹不一样，可能不是同一个人",
   "multiplayer.invite.created": "已生成邀请码，复制给朋友即可",
   "multiplayer.invite.lobby_failed": "大厅开不起来（敲门端口 {0} 可能被占用）：{1}",
-  "multiplayer.invite.copied": "邀请码已复制",
+  "multiplayer.invite.copied": "邀请码已复制，60 秒后自动从剪贴板清除",
   "multiplayer.invite.revoked": "邀请已撤销",
   "multiplayer.invite.trusted": "已信任 {0}（{1}），以后 TA 敲门会直接批准",
   "multiplayer.identity.reset_done": "已换成新身份，指纹 {0}。之前信任你的房主需要重新批准",
@@ -1423,5 +1423,10 @@
   "multiplayer.direct.admitting": "房主已批准，正在确认成员身份…",
   "multiplayer.direct.invite_created": "已生成直连邀请码（带着这张邀请和你的地址）",
   "multiplayer.direct.ip_warning": "直连码里有你的公网 IP 地址，只发给要一起玩的人。",
-  "multiplayer.kick.you_were_kicked": "你已被移出房间"
+  "multiplayer.kick.you_were_kicked": "你已被移出房间",
+  "core.mp.direct.closed_to_new": "{0} 想直连进来，但现在没有待用的邀请，不接新的直连",
+  "multiplayer.clipboard.autoclear_hint": "60 秒后自动从剪贴板清除",
+  "multiplayer.clipboard.copied_autoclear": "已复制，60 秒后自动从剪贴板清除",
+  "multiplayer.transport.privacy.general": "最快。成员之间的游戏流量只靠房间网络密钥保护，房间里每个人都有这把密钥。",
+  "multiplayer.transport.privacy.member_channel": "每个成员单独一条加密通道，其他成员和中转节点都看不到你的游戏流量。"
 }

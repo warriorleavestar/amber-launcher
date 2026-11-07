@@ -140,8 +140,10 @@ public sealed class MemberKeyTests : IDisposable
         Assert.False(table.TryGet(oldId, out _));
         Assert.True(table.TryGet(second.Key.Id, out _));
         Assert.Single(table.All);
-        // 旧钥匙清零了。
-        Assert.All(first.Key.CopyPsk(), x => Assert.Equal(0, x));
+        // 旧钥匙清零作废了：再也取不出 psk。
+        Assert.True(first.Revoked);
+        Assert.True(first.Key.IsZeroed);
+        Assert.Throws<CryptographicException>(() => first.Key.CopyPsk());
     }
 
     [Fact]

@@ -998,7 +998,7 @@
   "multiplayer.proxy.stopped": "已停止轉發遊戲流量，之後啟動的遊戲會直接連上網路。",
   "multiplayer.proxy.switching": "遊戲流量會經由 {0}（{1}）的電腦送出。對方必須先勾選「允許成員透過我的電腦轉發遊戲流量」。之後從啟動頁啟動的遊戲才會生效。",
   "multiplayer.room.added_to_servers": "已加入 {0} 的多人遊戲清單（位址 {1}，每次加入房間時連接埠都會改變）",
-  "multiplayer.room.code_copied": "已複製房間碼",
+  "multiplayer.room.code_copied": "已複製房間碼，60 秒後自動從剪貼簿清除",
   "multiplayer.room.code_hint": "房間碼含有金鑰，請只傳給要一起遊玩的人。遊戲必須保持開啟，世界也必須持續「在區域網路上開放」。",
   "multiplayer.room.code_label": "房間碼（傳給朋友）",
   "multiplayer.room.connected": "已連上房主{0}。請在遊戲中新增伺服器 {1}，或點選下方按鈕直接進入",
@@ -1292,7 +1292,7 @@
   "multiplayer.invite.name_mismatch": "注意：信任清單裡有同名的人，但指紋不一樣，可能不是同一個人",
   "multiplayer.invite.created": "已產生邀請碼，複製給朋友即可",
   "multiplayer.invite.lobby_failed": "大廳開不起來（敲門連接埠 {0} 可能被占用）：{1}",
-  "multiplayer.invite.copied": "邀請碼已複製",
+  "multiplayer.invite.copied": "邀請碼已複製，60 秒後自動從剪貼簿清除",
   "multiplayer.invite.revoked": "邀請已撤銷",
   "multiplayer.invite.trusted": "已信任 {0}（{1}），以後 TA 敲門會直接批准",
   "multiplayer.identity.reset_done": "已換成新身分，指紋 {0}。之前信任你的房主需要重新批准",
@@ -1423,5 +1423,10 @@
   "multiplayer.direct.admitting": "房主已批准，正在確認成員身分…",
   "multiplayer.direct.invite_created": "已產生直連邀請碼（帶著這張邀請和你的位址）",
   "multiplayer.direct.ip_warning": "直連碼裡有你的公網 IP 位址，只發給要一起玩的人。",
-  "multiplayer.kick.you_were_kicked": "你已被移出房間"
+  "multiplayer.kick.you_were_kicked": "你已被移出房間",
+  "core.mp.direct.closed_to_new": "{0} 想直連進來，但目前沒有待用的邀請，不接受新的直連",
+  "multiplayer.clipboard.autoclear_hint": "60 秒後自動從剪貼簿清除",
+  "multiplayer.clipboard.copied_autoclear": "已複製，60 秒後自動從剪貼簿清除",
+  "multiplayer.transport.privacy.general": "最快。成員之間的遊戲流量只靠房間網路金鑰保護，房間裡每個人都有這把金鑰。",
+  "multiplayer.transport.privacy.member_channel": "每位成員各有一條加密通道，其他成員和中繼節點都看不到你的遊戲流量。"
 }

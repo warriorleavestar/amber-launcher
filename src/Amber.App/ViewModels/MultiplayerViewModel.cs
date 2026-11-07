@@ -53,6 +53,13 @@ public sealed record TransportChoice(TransportMode Mode) : LocalizedRecord
         _ => "multiplayer.transport.mode.general",
     });
     public string Detail => TransportProfile.Describe(Mode);
+
+    /// <summary>一句话说清这种模式下谁看得到游戏流量。</summary>
+    public string Privacy => L.T(Mode switch
+    {
+        TransportMode.General => "multiplayer.transport.privacy.general",
+        _ => "multiplayer.transport.privacy.member_channel",
+    });
     public override string ToString() => Label;
 }
 
@@ -886,7 +893,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (_session is not { } session || _refreshing) return;
         if (session.HasExited)
         {
-            var last = session.RecentOutput.LastOrDefault(l => !string.IsNullOrWhiteSpace(l)) ?? "";
+            // EasyTier 最后一行输出要显示在状态栏：先遮掉房间密钥和各种码。
+            var last = NetDiagnostics.Redact(session.RecentOutput.LastOrDefault(l => !string.IsNullOrWhiteSpace(l)) ?? "", _room is { } r ? [.. r.Secrets] : [], includePublicIps: true);
             StopSession();
             Status = session.Options.Tun ? L.F("multiplayer.room.full_lan_ended", last) : L.F("multiplayer.component.exited", last);
             return;
@@ -941,14 +949,14 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
     }
 
+    /// <summary>复制房间码、邀请码、直连码用的剪贴板：60 秒后自动清掉（自检里换成短一点的）。</summary>
+    internal Amber.App.Services.SensitiveClipboard SecretClipboard { get; set; } = Amber.App.Services.SensitiveClipboard.Shared;
+
     [RelayCommand]
     private async Task CopyRoomCodeAsync()
     {
-        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
-        {
-            await clipboard.SetTextAsync(RoomCodeText);
+        if (await SecretClipboard.CopyAsync(RoomCodeText))
             SetStatus(StatusMessage.Success("multiplayer.room.code_copied"));
-        }
     }
 
     /// <summary>把房间加进所选版本的服务器列表。</summary>

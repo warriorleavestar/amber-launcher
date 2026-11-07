@@ -163,14 +163,16 @@ public static class LobbyJoin
         var localPort = EasyTierArgs.FreeTcpPort();
         var options = new LobbyOptions(LobbyKeys.LobbyName(invite.LobbyKey), LobbyKeys.LobbySecret(invite.LobbyKey), false, peers, EasyTierArgs.FreeTcpPort(), localPort);
         using var lobby = EasyTierLobby.Start(installer, options, workDir);
-        if (log is not null) lobby.Output += line => log(line);
+        // 大厅 EasyTier 的输出里可能带着大厅的网络名和密钥（打印配置时）：先遮掉再记。
+        string[] lobbySecrets = [options.Secret, options.Name];
+        if (log is not null) lobby.Output += line => log(NetDiagnostics.Redact(line, lobbySecrets, includePublicIps: true));
         // 先等大厅里看到房主再敲：没连上时本机转发端口会接了又断，白白算作一次失败。
         using (var find = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
             find.CancelAfter(FindHostTimeout);
             while (true)
             {
-                if (lobby.HasExited) throw new IOException(L.F("core.mp.lobby.exited", lobby.RecentOutput.LastOrDefault() ?? ""));
+                if (lobby.HasExited) throw new IOException(L.F("core.mp.lobby.exited", NetDiagnostics.Redact(lobby.RecentOutput.LastOrDefault() ?? "", lobbySecrets, includePublicIps: true)));
                 var peersNow = await lobby.PeersAsync(find.Token);
                 if (peersNow.Any(p => p.Ip == LobbyArgs.HostIp && p.Cost != "Local")) break;
                 try { await Task.Delay(1000, find.Token); }

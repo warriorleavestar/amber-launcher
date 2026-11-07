@@ -359,7 +359,7 @@ try
             var log = new DiagnosticLog();
             log.Added += e => { if (debug || e.Category is not "EasyTier") Console.WriteLine("  log| " + NetDiagnostics.Redact(e.ToString(), room is { } r ? [.. r.Secrets] : [], true)); };
             var options = new DirectOptions(stunList.Count > 0 ? stunList : Stun.DefaultServers, !sim, nodes, false, false, debug, sim);
-            await using var direct = new DirectSession(et, Path.Combine(AmberDataDir(), "easytier"), room, isHost, options, log) { BridgeKey = bridgeKey };
+            await using var direct = new DirectSession(et, Path.Combine(AmberDataDir(), "easytier"), room, isHost, options, log) { BridgeKey = bridgeKey, AcceptNewPeers = book is null ? null : () => book.HasPending };
             var code = await direct.PrepareAsync(cts.Token);
             await using var lobby = isHost
                 ? HostLobby.Create(et, Path.Combine(AmberDataDir(), "easytier", "lobby"), () => nodes, me, () => credentials!, _ => false, (_, _) => Task.FromResult(true),

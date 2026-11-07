@@ -178,7 +178,7 @@ public sealed class DirectInviteTests
         public readonly DirectSession Host;
         public readonly UdpClient Lobby;
 
-        public DirectRoom()
+        public DirectRoom(Func<bool>? acceptNewPeers = null)
         {
             Credentials = RoomCredentials.Create(HostKey.PublicKey, 25565, TunnelSettings.Default);
             HostRoom = Credentials.ToHostRoom(Members, "Host");
@@ -187,6 +187,7 @@ public sealed class DirectInviteTests
                 BridgeKey = DirectTestKeys.Bridge,
                 StartForTest = (o, _) => Task.FromResult<IEasyTierSession>(new FakeEasyTier(o)),
                 SpeedTestPortForTest = 0,
+                AcceptNewPeers = acceptNewPeers,
             };
             // 代替大厅的 EasyTier：在大厅端口上收（房间的那个由各个测试在房间端口上开）。
             Lobby = new UdpClient(new IPEndPoint(IPAddress.Loopback, Host.LobbyUdpPort!.Value));
@@ -313,6 +314,41 @@ public sealed class DirectInviteTests
         await Task.Delay(DirectBridge.ReprobeAfter + TimeSpan.FromSeconds(1.5));
         Assert.Empty(host.Host.Bridge.Peers);
         Assert.Null(await ArrivesAtAsync(guest, host.Lobby, room, "after-kick"));
+    }
+
+    /// <summary>
+    /// 没有待用邀请时房主的直连桥不接新人：桥钥匙（由 L 派生）整个房间都不换，拿着旧码的人连大厅都到不了。
+    /// 有了新邀请又能接。
+    /// </summary>
+    [Fact]
+    public async Task ClosedRoomRefusesNewBridgePeers()
+    {
+        var open = false;
+        await using var host = new DirectRoom(() => Volatile.Read(ref open));
+        var code = await host.PrepareAsync();
+        await using var guest = Guest();
+        await guest.PrepareAsync();
+        Assert.Null(await guest.Bridge!.PunchAsync(code.Candidates, code.Nat, TimeSpan.FromSeconds(3)));
+        Assert.Empty(host.Host.Bridge!.Peers);
+        Volatile.Write(ref open, true);
+        Assert.NotNull(await guest.Bridge.PunchAsync(code.Candidates, code.Nat, TimeSpan.FromSeconds(5)));
+        Assert.Single(host.Host.Bridge.Peers);
+    }
+
+    /// <summary>邀请用完了（不再接新人），已经证明过身份的直连成员照常：还连着房间。</summary>
+    [Fact]
+    public async Task AdmittedMembersKeepWorkingAfterInvitesRunOut()
+    {
+        var open = true;
+        await using var host = new DirectRoom(() => Volatile.Read(ref open));
+        var invite = (await host.PrepareAsync()) with { IsReply = false, Invite = DirectTestKeys.Invite };
+        using var room = new UdpClient(new IPEndPoint(IPAddress.Loopback, host.Host.Bridge!.LocalPort));
+        await using var guest = Guest();
+        await guest.PrepareAsync();
+        Assert.True(await guest.JoinAsync(invite, (_, _) => Task.FromResult<RoomCode?>(host.Admit(RandomNumberGenerator.GetBytes(32), "Steve"))));
+        Volatile.Write(ref open, false);
+        Assert.True(host.Host.Bridge.Peers.Single().Admitted);
+        Assert.Equal("room", await ArrivesAtAsync(guest, host.Lobby, room, "still-here"));
     }
 
     /// <summary>踢人换网络：留下的直连成员换到新房间，直连桥不动（还是接在房间上）。</summary>

@@ -93,8 +93,9 @@ public sealed class RekeyTests : IDisposable
         await using var again = new ChatClient(aliceRoom, "Alice");
         await Assert.ThrowsAnyAsync<Exception>(() => again.ConnectAsync("127.0.0.1", hub.Port));
         Assert.Equal(0, hub.MemberCount);
-        // 钥匙清零了。
-        Assert.All(alice.Key.CopyPsk(), b => Assert.Equal(0, b));
+        // 钥匙清零作废了：再也取不出 psk。
+        Assert.True(alice.Key.IsZeroed);
+        Assert.Throws<CryptographicException>(() => alice.Key.CopyPsk());
     }
 
     /// <summary>同一个人重新被批准、换了新钥匙：旧钥匙作废，旧的聊天和封装连接马上断开（不会同时出现两个他）。</summary>

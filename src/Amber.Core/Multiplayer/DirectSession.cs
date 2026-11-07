@@ -107,6 +107,9 @@ public sealed class DirectSession : IAsyncDisposable
     /// </summary>
     public int? LobbyUdpPort { get; }
 
+    /// <summary>房主：现在收不收新的直连加入方（没有待用邀请时不收），见 <see cref="DirectBridge.AcceptingNewPeers"/>。</summary>
+    public Func<bool>? AcceptNewPeers { get; init; }
+
     /// <summary>加入方：证明自己是批准过的成员最多等这么久。</summary>
     internal static TimeSpan AdmitTimeout { get; set; } = TimeSpan.FromSeconds(20);
     private TaskCompletionSource<byte[]>? _challenge;
@@ -163,7 +166,7 @@ public sealed class DirectSession : IAsyncDisposable
         if (IsHost)
         {
             _easyTierUdpPort = FreeUdpPort();
-            Bridge = new DirectBridge(socket, key, true, _easyTierUdpPort, Log, LobbyUdpPort);
+            Bridge = new DirectBridge(socket, key, true, _easyTierUdpPort, Log, LobbyUdpPort) { AcceptingNewPeers = AcceptNewPeers };
             Bridge.Connected += OnConnected;
             Bridge.ControlReceived += OnControl;
             _speed = new SpeedTestServer(SpeedTestPortForTest);
@@ -310,7 +313,7 @@ public sealed class DirectSession : IAsyncDisposable
                     : elevatedStart
                         ? EasyTierElevatedSession.Start(_installer, options, Path.Combine(_workDir, "run-lan"))
                         : EasyTierSession.Start(_installer, options, Path.Combine(_workDir, IsHost ? "run-direct-host" : "run-direct-guest"));
-                if (EasyTier is EasyTierSession plain && Options.Verbose) plain.Output += line => _log.Add("EasyTier", line);
+                if (EasyTier is EasyTierSession plain && Options.Verbose) plain.Output += line => _log.Add("EasyTier", NetDiagnostics.Redact(line, _room is { } r ? [.. r.Secrets] : [], includePublicIps: true));
                 if (EasyTier is EasyTierElevatedSession fresh) await fresh.WaitForReadyAsync(ct);
             }
             if (!_disposed && (EasyTier is null || EasyTier.HasExited)) throw new IOException(L.T("core.mp.component.startfailed"));
@@ -463,7 +466,16 @@ public sealed class DirectSession : IAsyncDisposable
             return false;
         }
         if (mac.Length != 32 || !members.TryGet(id, out var entry) || entry.IsHost || entry.Revoked) return false;
-        var expected = DirectKeys.AdmitProof(entry.Key, local.Session, challenge);
+        byte[] expected;
+        try
+        {
+            expected = DirectKeys.AdmitProof(entry.Key, local.Session, challenge);
+        }
+        catch (CryptographicException)
+        {
+            // 查到之后、算证明之前他刚好被踢（钥匙已清零）：按拒绝处理。
+            return false;
+        }
         if (!CryptographicOperations.FixedTimeEquals(expected, mac)) return false;
         return bridge.Admit(peer, entry);
     }

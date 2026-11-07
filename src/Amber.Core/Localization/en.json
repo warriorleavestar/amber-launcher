@@ -1026,7 +1026,7 @@
   "multiplayer.proxy.stopped": "Game traffic forwarding stopped. Games launched afterward will connect directly.",
   "multiplayer.proxy.switching": "Game traffic will go through {0}’s computer ({1}). They must first enable “Allow members to forward game traffic through my computer”. This applies to games launched from the launch page afterward.",
   "multiplayer.room.added_to_servers": "Added to the Multiplayer list for {0} (address {1}; the port changes each time you join a room)",
-  "multiplayer.room.code_copied": "Room code copied",
+  "multiplayer.room.code_copied": "Room code copied. It will be cleared from the clipboard in 60 seconds",
   "multiplayer.room.code_hint": "The room code contains a room key. Share it only with people you want to play with. Keep the game running and the world open to LAN.",
   "multiplayer.room.code_label": "Room code (send to friends)",
   "multiplayer.room.connected": "Connected to host{0}. Add server {1} in the game, or use the button below to join directly.",
@@ -1323,7 +1323,7 @@
   "multiplayer.invite.name_mismatch": "Careful: someone with this name is in your trusted list, but the fingerprint is different. It may not be the same person",
   "multiplayer.invite.created": "Invite created. Copy it to your friend",
   "multiplayer.invite.lobby_failed": "Couldn't open the lobby (knock port {0} may be in use): {1}",
-  "multiplayer.invite.copied": "Invite copied",
+  "multiplayer.invite.copied": "Invite copied. It will be cleared from the clipboard in 60 seconds",
   "multiplayer.invite.revoked": "Invite revoked",
   "multiplayer.invite.trusted": "Trusted {0} ({1}). Their knocks will be approved automatically from now on",
   "multiplayer.identity.reset_done": "Switched to a new identity, fingerprint {0}. Hosts who trusted you will need to approve you again",
@@ -1454,5 +1454,10 @@
   "multiplayer.direct.admitting": "The host approved you. Confirming membership…",
   "multiplayer.direct.invite_created": "Created a direct invite (this invite plus your addresses)",
   "multiplayer.direct.ip_warning": "Direct codes contain your public IP address. Only send them to people you want to play with.",
-  "multiplayer.kick.you_were_kicked": "You were removed from the room"
+  "multiplayer.kick.you_were_kicked": "You were removed from the room",
+  "core.mp.direct.closed_to_new": "{0} tried to connect directly, but there are no open invites, so new direct connections are refused",
+  "multiplayer.clipboard.autoclear_hint": "Cleared from the clipboard after 60 seconds",
+  "multiplayer.clipboard.copied_autoclear": "Copied. It will be cleared from the clipboard in 60 seconds",
+  "multiplayer.transport.privacy.general": "Fastest. Game traffic between members is protected only by the room network key, which everyone in the room has.",
+  "multiplayer.transport.privacy.member_channel": "Each member gets their own encrypted channel, so other members and relays can't see your game traffic."
 }

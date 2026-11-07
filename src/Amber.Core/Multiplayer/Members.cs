@@ -12,6 +12,8 @@ public sealed class MemberKey
     public const int PskLength = 32;
 
     private readonly byte[] _psk;
+    private readonly Lock _gate = new();
+    private bool _zeroed;
 
     public MemberKey(ReadOnlySpan<byte> id, ReadOnlySpan<byte> psk)
     {
@@ -35,12 +37,50 @@ public sealed class MemberKey
     /// <summary>编号的十六进制（聊天里的发送者 id）。</summary>
     public string IdHex { get; }
 
-    /// <summary>握手用的 psk 的副本（用完由调用方清零）。</summary>
-    internal byte[] CopyPsk() => (byte[])_psk.Clone();
+    /// <summary>
+    /// 握手用的 psk 的副本（用完由调用方清零）。钥匙已经清零（成员被移出）时抛 CryptographicException，
+    /// 免得查到成员之后、取钥匙之前他刚好被踢，拿到一把全零的 psk 去握手。
+    /// </summary>
+    internal byte[] CopyPsk()
+    {
+        lock (_gate)
+        {
+            ThrowIfZeroed();
+            return (byte[])_psk.Clone();
+        }
+    }
 
-    internal string PskBase64 => Convert.ToBase64String(_psk);
+    internal string PskBase64
+    {
+        get
+        {
+            lock (_gate)
+            {
+                ThrowIfZeroed();
+                return Convert.ToBase64String(_psk);
+            }
+        }
+    }
 
-    internal void Zero() => CryptographicOperations.ZeroMemory(_psk);
+    /// <summary>已经清零（作废）了。</summary>
+    internal bool IsZeroed
+    {
+        get { lock (_gate) return _zeroed; }
+    }
+
+    internal void Zero()
+    {
+        lock (_gate)
+        {
+            _zeroed = true;
+            CryptographicOperations.ZeroMemory(_psk);
+        }
+    }
+
+    private void ThrowIfZeroed()
+    {
+        if (_zeroed) throw new CryptographicException("member key revoked");
+    }
 
     public override string ToString() => "MemberKey";
 }
@@ -49,9 +89,13 @@ public sealed class MemberKey
 public sealed class MemberEntry
 {
     private readonly CancellationTokenSource _revocation = new();
+    private volatile bool _revoked;
 
-    /// <summary>这把钥匙作废了（踢出、同一个人重新批准换了新钥匙、房间结束）。</summary>
-    public bool Revoked => _revocation.IsCancellationRequested;
+    /// <summary>
+    /// 这把钥匙作废了（踢出、同一个人重新批准换了新钥匙、房间结束）。
+    /// 在成员表的锁里先标记再清零钥匙，所以钥匙变成全零时这里一定已经是 true。
+    /// </summary>
+    public bool Revoked => _revoked || _revocation.IsCancellationRequested;
 
     /// <summary>作废时取消：游戏通道和聊天里这个成员现有的连接都挂在上面，一作废马上断开。</summary>
     public CancellationToken Revocation => _revocation.Token;
@@ -59,9 +103,16 @@ public sealed class MemberEntry
     /// <summary>钥匙清零并通知所有连接断开。在成员表的锁外面调用（回调会关连接）。</summary>
     internal void Revoke()
     {
-        Key.Zero();
+        MarkRevoked();
         try { _revocation.Cancel(); }
         catch (AggregateException) { }
+    }
+
+    /// <summary>标记作废并清零钥匙（成员表在锁里调用；不触发回调，回调由锁外的 Revoke 触发）。</summary>
+    internal void MarkRevoked()
+    {
+        _revoked = true;
+        Key.Zero();
     }
 
     internal MemberEntry(MemberKey key, byte[] publicKey, string name, bool isHost, PendingInvite? invite = null)
@@ -124,7 +175,7 @@ public sealed class MemberTable
             foreach (var old in replaced)
             {
                 _byId.Remove(old.Id);
-                old.Key.Zero();
+                old.MarkRevoked();
             }
             MemberKey key;
             do key = MemberKey.Create();
@@ -161,7 +212,7 @@ public sealed class MemberTable
         {
             if (!_byId.TryGetValue(entry.Id, out var current) || current != entry) return false;
             _byId.Remove(entry.Id);
-            entry.Key.Zero();
+            entry.MarkRevoked();
         }
         entry.Revoke();
         Removed?.Invoke(entry);
@@ -240,7 +291,7 @@ public sealed class MemberTable
         lock (_gate)
         {
             all = [.. _byId.Values];
-            foreach (var e in all) e.Key.Zero();
+            foreach (var e in all) e.MarkRevoked();
             _byId.Clear();
             _banned.Clear();
         }

@@ -159,7 +159,12 @@ public sealed partial class MultiplayerViewModel
         var bridgeKey = DirectKeys.Bridge(lobbyKey);
         System.Security.Cryptography.CryptographicOperations.ZeroMemory(lobbyKey);
         SetStatus(StatusMessage.Info("multiplayer.direct.gathering_host"));
-        var direct = new DirectSession(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier"), room, true, MakeDirectOptions(), _diag) { BridgeKey = bridgeKey };
+        var direct = new DirectSession(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier"), room, true, MakeDirectOptions(), _diag)
+        {
+            BridgeKey = bridgeKey,
+            // 桥钥匙整个房间都不换：没有待用邀请时不接新的直连加入方。
+            AcceptNewPeers = () => book.HasPending,
+        };
         System.Security.Cryptography.CryptographicOperations.ZeroMemory(bridgeKey);
         try
         {
@@ -548,11 +553,8 @@ public sealed partial class MultiplayerViewModel
     [RelayCommand]
     private async Task CopyDirectCodeAsync()
     {
-        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
-        {
-            await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(clipboard, MyDirectCode);
-            SetStatus(StatusMessage.Success("common.copied"));
-        }
+        if (await SecretClipboard.CopyAsync(MyDirectCode))
+            SetStatus(StatusMessage.Success("multiplayer.clipboard.copied_autoclear"));
     }
 
     /// <summary>导出诊断报告：去掉房间密钥和各种码；默认遮住公网 IP。</summary>

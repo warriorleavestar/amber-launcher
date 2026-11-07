@@ -188,12 +188,12 @@ public class DownloaderTests : IDisposable
 
     private static string Sha1(byte[] data) => Convert.ToHexStringLower(SHA1.HashData(data));
 
-    private Downloader Make(SourceChain? chain = null, HashCache? cache = null) => new(_http, chain ?? new SourceChain([new OfficialSource()]))
+    private Downloader Make(SourceChain? chain = null, HashCache? cache = null, TimeSpan? stall = null) => new(_http, chain ?? new SourceChain([new OfficialSource()]))
     {
         RetriesPerSource = 2,
         ChunkThreshold = 1024 * 1024,
         MinChunkSize = 256 * 1024,
-        StallTimeout = TimeSpan.FromSeconds(2),
+        StallTimeout = stall ?? TimeSpan.FromSeconds(2),
         Hashes = cache,
     };
 
@@ -213,7 +213,11 @@ public class DownloaderTests : IDisposable
             var data = RandomBytes(1000 + i);
             items.Add(new(_server.Add($"s{i}", data), Local($"s{i}"), Sha1(data), data.Length));
         }
-        var downloader = Make(MirrorOf(_server, 3));
+        // 服务器按“收到请求到开始回数据之前”算并发。客户端只有在这段时间里放弃一个请求（卡住超时）再重试，
+        // 才会让服务器同时数到被放弃的那个和新的那个——繁忙机器上 30 ms 的延迟可能被拖过 2 秒的卡住超时，
+        // 这个测试就偶尔多数出一个。这里不测卡住超时：给一个远大于任何调度延迟的期限，客户端不会放弃请求，
+        // 服务器数到的就严格等于客户端占着的名额。
+        var downloader = Make(MirrorOf(_server, 3), stall: TimeSpan.FromMinutes(5));
 
         await downloader.DownloadAllAsync(items);
 

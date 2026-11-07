@@ -954,6 +954,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         main.CurrentPage = host;
         await Task.Delay(500);
         host.JoinCode = "JAY2-123";
+        await PasteBoxMaskedAsync(host);
         Check("联机：邀请码格式错误有提示", Press(await FindAsync<Button>(b => b.Content as string == "加入房间")) && host.Status.Contains("格式") || !host.IsComponentReady && host.Status.Contains("组件"), host.Status);
         if (host.IsComponentReady)
         {
@@ -1001,6 +1002,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         guest.TestPeers = [$"tcp://127.0.0.1:{relayPort}"];
         // 邀请两次：第一次要房主点批准，之后把对方加进信任列表，第二次重新加入时直接批准。
         var invite = await CreateInviteAsync(host, uses: 2, auto: false);
+        await CodeHygieneAsync(host, invite);
         guest.JoinCode = "朋友发来的：" + invite;
         var joining = guest.JoinCommand.ExecuteAsync(null);
         var asked = await WaitAsync(() => host.ApprovalCards.Count > 0, 90);
@@ -1299,6 +1301,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         await joining;
         Check("直连：批准后加入房间", guest.IsDirect && guest.IsJoined, guest.Status);
         Check("直连：证明了成员身份，直连桥接到房间", host.DirectForTest?.Bridge?.Peers is { Count: 1 } after && after.First().Admitted);
+        Check("直连：邀请用完后不再接新的直连", host.DirectForTest?.Bridge?.AcceptingNewPeers?.Invoke() == false && host.PendingInvites.Count == 0, host.PendingInvites.Count.ToString());
         Check("直连：房主的成员列表里有这个人", await WaitAsync(() => host.Members.Count == 1, 10), string.Join(" | ", host.Members.Select(m => m.Label)));
 
         string? reply = null;

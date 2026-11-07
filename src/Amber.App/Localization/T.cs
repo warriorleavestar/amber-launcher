@@ -154,6 +154,9 @@ public abstract record LocalizedRecord : System.ComponentModel.INotifyPropertyCh
 
     private void Raise() => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(string.Empty));
 
+    /// <summary>派生 record 里可变的显示状态（比如“显示/隐藏”）变了。</summary>
+    protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+
     public virtual bool Equals(LocalizedRecord? other) => other is not null && EqualityContract == other.EqualityContract;
 
     public override int GetHashCode() => EqualityContract.GetHashCode();

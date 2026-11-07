@@ -325,6 +325,8 @@ public sealed class DirectBridge : IAsyncDisposable
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     /// <summary>房主：踢出的人的地址，之后它的探测包不再接。</summary>
     private readonly HashSet<IPEndPoint> _blocked = [];
+    /// <summary>房主：证明过成员身份的地址（桥断了从同一地址回来时不算新人）。</summary>
+    private readonly ConcurrentDictionary<IPEndPoint, MemberEntry> _admittedRemotes = new();
     private Socket? _guestLocal;
     private int _probeRound;
 
@@ -336,6 +338,12 @@ public sealed class DirectBridge : IAsyncDisposable
     public IPEndPoint SocketEndPoint => (IPEndPoint)_socket.LocalEndPoint!;
     public IReadOnlyCollection<DirectPeer> Peers => _peers.Values.ToList();
     public HashSet<PathKind> AllowedPaths { get; } = [.. Enum.GetValues<PathKind>()];
+
+    /// <summary>
+    /// 房主：现在收不收新的加入方。直连房间的大厅密钥 L（也就是桥钥匙）整个房间都不换，
+    /// 所以没有待用邀请时不再接新的桥——拿着旧码的人连大厅都到不了；已经连着的、证明过身份的照常。
+    /// </summary>
+    public Func<bool>? AcceptingNewPeers { get; set; }
 
     /// <summary>喷洒时每轮往多少个端口发（对方对称 NAT 时用）。</summary>
     public int SprayPorts { get; set; } = 256;
@@ -621,6 +629,12 @@ public sealed class DirectBridge : IAsyncDisposable
             connected = resumed;
             return true;
         }
+        if (_isHost && AcceptingNewPeers?.Invoke() == false
+            && !(_admittedRemotes.TryGetValue(from, out var member) && !member.Revoked))
+        {
+            _log(L.F("core.mp.direct.closed_to_new", from));
+            return false;
+        }
         if (_isHost && _peers.Count + _pausedPeers.Count >= MaxHostPeers)
         {
             _log(L.F("core.mp.punch.toomanypeers", from, MaxHostPeers));
@@ -818,6 +832,7 @@ public sealed class DirectBridge : IAsyncDisposable
             peer.TargetPort = LocalPort;
             peer.Member = member;
             peer.Admitted = true;
+            _admittedRemotes[peer.Remote] = member;
             _loops.Add(HostLocalLoopAsync(peer, local));
         }
         old?.Dispose();
@@ -833,6 +848,7 @@ public sealed class DirectBridge : IAsyncDisposable
         lock (_peerGate)
         {
             _blocked.Add(peer.Remote);
+            _admittedRemotes.TryRemove(peer.Remote, out _);
             if (_peers.TryGetValue(peer.Remote, out var active) && ReferenceEquals(active, peer)) _peers.TryRemove(peer.Remote, out _);
             if (_pausedPeers.TryGetValue(peer.Remote, out var paused) && ReferenceEquals(paused, peer)) _pausedPeers.Remove(peer.Remote);
             peer.Local?.Dispose();
