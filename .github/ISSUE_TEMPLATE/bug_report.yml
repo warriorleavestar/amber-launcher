@@ -11,7 +11,7 @@ body:
     attributes:
       label: Jay 版本
       description: 下载时 Release 页面上的版本号，自己从源码构建的话写提交号
-      placeholder: v0.5.9
+      placeholder: v0.7.0
     validations:
       required: true
   - type: dropdown
