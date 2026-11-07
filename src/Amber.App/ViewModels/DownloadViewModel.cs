@@ -25,8 +25,16 @@ public sealed partial class RemoteVersionItem(ManifestEntry entry, bool installe
     };
     public string Date => Entry.ReleaseTime.LocalDateTime.ToString("yyyy-MM-dd");
 
+    /// <summary>类型胶囊的色调：正式版 Success，快照 Accent，远古版本中性色（改版规格 4.4）。</summary>
+    public bool IsRelease => Entry.Type == "release";
+    public bool IsSnapshot => Entry.Type == "snapshot";
+
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(InstallLabel))]
     public partial bool Installed { get; set; } = installed;
+
+    /// <summary>已经装过的版本按钮写“再装一份…”。</summary>
+    public string InstallLabel => L.T(Installed ? "download.install.again" : "common.install_more");
 }
 
 public sealed record LoaderChoice(string Name, LoaderKind? Kind) : LocalizedRecord
@@ -58,6 +66,81 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     ];
 
     public ObservableCollection<LoaderVersion> LoaderVersions { get; } = [];
+
+    /// <summary>列表上方的热门版本芯片（和新手卡同一组），前面再加“最新正式版”。</summary>
+    public HotVersion[] HotVersions => OnboardingViewModel.HotVersions;
+
+    /// <summary>最新正式版的版本号（取到版本列表之前为 null）。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LatestReleaseLabel), nameof(HasLatestRelease))]
+    public partial string? LatestRelease { get; set; }
+
+    public bool HasLatestRelease => LatestRelease is not null;
+    public string LatestReleaseLabel => L.F("download.hot.latest", LatestRelease);
+
+    // ---- 版本列表的加载和出错（改版规格 4.4）----
+
+    [ObservableProperty] public partial bool IsLoadingList { get; set; }
+    /// <summary>取版本列表失败的原因（null 表示没出错）。</summary>
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(HasListError))] public partial string? ListError { get; set; }
+    public bool HasListError => ListError is not null;
+
+    /// <summary>现在用的下载源（“自动”按时区判断）。</summary>
+    public bool UsesMirror => _service.Settings.DownloadSource switch
+    {
+        "mirror" => true,
+        "official" => false,
+        _ => ReferenceEquals(Amber.Core.Net.SourceChain.Default(), Amber.Core.Net.SourceChain.MirrorFirst),
+    };
+
+    public string SourceLabel => L.T(UsesMirror ? "onboarding.source.mirror" : "onboarding.source.official");
+    public string SourceText => L.F("onboarding.source", SourceLabel);
+
+    /// <summary>【切换下载源】：官方 ⇄ 镜像，存进设置后重新取列表（安装中不切）。</summary>
+    [RelayCommand]
+    private async Task SwitchDownloadSourceAsync()
+    {
+        if (IsBusy) return;
+        _service.Settings.DownloadSource = UsesMirror ? "official" : "mirror";
+        _service.SaveAndReload();
+        OnPropertyChanged(nameof(UsesMirror));
+        OnPropertyChanged(nameof(SourceLabel));
+        OnPropertyChanged(nameof(SourceText));
+        await RefreshAsync();
+    }
+
+    /// <summary>安装进度下面的一行：“下载源：镜像 · 已等待 12 秒”。</summary>
+    [ObservableProperty] public partial string WaitText { get; set; } = "";
+    private Avalonia.Threading.DispatcherTimer? _waitTimer;
+
+    /// <summary>点热门版本芯片：打开那个版本的安装面板并选好加载器。</summary>
+    [RelayCommand]
+    private void ConfigureHot(HotVersion? hot)
+    {
+        if (hot is null) return;
+        if (Find(hot.McVersion) is not { } item)
+        {
+            SetStatus(StatusMessage.Warning("download.hot.missing", hot.McVersion));
+            return;
+        }
+        Configure(item);
+        if (hot.Loader is { } kind) SelectedLoader = LoaderChoices.First(c => c.Kind == kind);
+    }
+
+    [RelayCommand]
+    private void ConfigureLatest()
+    {
+        if (LatestRelease is { } id && Find(id) is { } item) Configure(item);
+    }
+
+    /// <summary>在完整列表里找版本（不受筛选和搜索影响）。</summary>
+    private RemoteVersionItem? Find(string id)
+    {
+        var shown = Items.FirstOrDefault(i => i.Id == id);
+        if (shown is not null) return shown;
+        var entry = _all.FirstOrDefault(v => v.Id == id);
+        return entry is null ? null : new RemoteVersionItem(entry, _service.InstalledVersions().Contains(id));
+    }
 
     private int _filterIndex;
     public OptionItem Filter
@@ -204,16 +287,24 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     private async Task RefreshAsync()
     {
         SetStatus(StatusMessage.Info("download.status.fetching_versions"));
+        IsLoadingList = true;
+        ListError = null;
         try
         {
             var manifest = await _service.Installer.GetManifestAsync();
             _all = manifest.Versions;
+            LatestRelease = manifest.Latest.GetValueOrDefault("release");
             ApplyFilter();
             SetStatus(StatusMessage.Success("download.status.latest", manifest.Latest.GetValueOrDefault("release"), manifest.Latest.GetValueOrDefault("snapshot")));
         }
         catch (Exception e)
         {
             SetStatus(StatusMessage.Failure("download.status.fetch_failed", e, ErrorText.Of(e)));
+            ListError = Status;
+        }
+        finally
+        {
+            IsLoadingList = false;
         }
     }
 
@@ -282,7 +373,38 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
     private void UpdateDefaultName()
     {
         if (Target is null) return;
-        CustomName = SelectedLoader.Kind is null ? Target.Id : SelectedLoaderVersion?.DefaultId ?? "";
+        // 原版的文件夹名就是版本号；加载器默认“1.21.1-Fabric”，重名加序号（改版规格 4.4）。
+        CustomName = SelectedLoader.Kind is not { } kind ? Target.Id
+            : SelectedLoaderVersion is null ? ""
+            : DefaultName(Target.Id, kind, _service.InstalledVersions());
+    }
+
+    /// <summary>加载器实例的默认名字：“{MC 版本}-{加载器}”，已有同名实例时加“-2”“-3”……</summary>
+    internal static string DefaultName(string mcVersion, LoaderKind kind, IEnumerable<string> installed)
+    {
+        var taken = installed.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var name = $"{mcVersion}-{kind}";
+        if (!taken.Contains(name)) return name;
+        for (var n = 2; ; n++)
+            if (!taken.Contains($"{name}-{n}")) return $"{name}-{n}";
+    }
+
+    private void StartWaitTimer()
+    {
+        var started = DateTime.UtcNow;
+        void Update() => WaitText = L.F("download.install.wait", SourceLabel, (int)(DateTime.UtcNow - started).TotalSeconds);
+        Update();
+        _waitTimer?.Stop();
+        _waitTimer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _waitTimer.Tick += (_, _) => Update();
+        _waitTimer.Start();
+    }
+
+    private void StopWaitTimer()
+    {
+        _waitTimer?.Stop();
+        _waitTimer = null;
+        WaitText = "";
     }
 
     private bool CanInstall() => !IsBusy;
@@ -299,6 +421,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
         }
 
         IsBusy = true;
+        StartWaitTimer();
         var installCts = _installCts = new CancellationTokenSource();
         var watch = Stopwatch.StartNew();
         var ct = installCts.Token;
@@ -371,6 +494,7 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             // 刷新失败或取消后的状态；已回滚的目录不再保留标记，其余未完成安装仍显示标注。
             if (_service.IsCurrentDirectory(ctx)) _service.NotifyInstanceStateChanged(expectedId);
             IsBusy = false;
+            StopWaitTimer();
             Progress = 0;
         }
     }

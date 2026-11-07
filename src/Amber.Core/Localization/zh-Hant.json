@@ -1549,5 +1549,11 @@
   "core.gate.log.breaker_open": "隱私++ 熔斷：不可用的節點 {0}；斷開了 {1} 條連線，暫停接受新連線",
   "core.gate.log.breaker_closed": "隱私++ 熔斷解除：節點恢復，重新接受連線",
   "core.gate.admin.bad_rotation": "輪換設定不對：時間窗 30 秒到 1 天，連接埠範圍在 1024–65535 之間且至少 100 個連接埠",
-  "core.gate.log.listen_failed": "開不了連接埠 {0}"
+  "core.gate.log.listen_failed": "開不了連接埠 {0}",
+  "download.install.again": "再裝一份…",
+  "download.installed.chip": "已安裝",
+  "download.hot.latest": "最新正式版 {0}",
+  "download.hot.missing": "版本清單裡沒有 {0}，請重新整理後再試",
+  "download.install.wait": "下載來源：{0} · 已等待 {1} 秒",
+  "download.source.switch": "切換下載來源"
 }
