@@ -1492,5 +1492,17 @@
   "core.gate.admin.too_many_relays": "节点太多了（最多 16 个）",
   "core.gate.admin.badrelay": "节点地址要写成 主机:端口",
   "core.gate.log.split_required": "拒绝：设备 {0} 没经两个节点连接（隐私+）",
-  "core.gate.log.joined_split": "进服（两路）：{0}"
+  "core.gate.log.joined_split": "进服（两路）：{0}",
+  "core.gate.status.circuitopen": "服务器的隐私++ 熔断中：能用的节点不够，暂停进服。节点恢复后会自动可用，稍后重连就行",
+  "core.gate.admin.plusplus_needs_codes": "隐私++ 至少要 {0} 个发过节点码的节点：先用 jay-server relays add 加节点，并在节点上用节点码运行",
+  "core.gate.admin.no_such_relay": "没有这个节点",
+  "core.gate.relay.code_hidden": "JAYR1-...（节点码）",
+  "core.gate.relay.heartbeat_up": "心跳通道已连上网关",
+  "core.gate.relay.heartbeat_down": "心跳通道断开，稍后重连：{0}",
+  "core.gate.log.relay_wrong_key": "拒绝：节点 {0} 的身份变了（{1}）。如果是重装了节点，用 jay-server relays code 重发节点码",
+  "core.gate.log.epoch": "节点被吊销（纪元 {0}）：断开全部 {1} 条连接，大家重新握手换新密钥",
+  "core.gate.log.relay_up": "节点在线：{0}",
+  "core.gate.log.relay_down": "节点没有心跳了：{0}",
+  "core.gate.log.breaker_open": "隐私++ 熔断：不可用的节点 {0}；断开了 {1} 条连接，暂停接受新连接",
+  "core.gate.log.breaker_closed": "隐私++ 熔断解除：节点恢复，重新接受连接"
 }

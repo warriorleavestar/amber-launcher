@@ -35,12 +35,24 @@ public static class GateClient
         return async ct =>
         {
             var m = current;
-            if (m.Network is { Level: PrivacyLevel.Plus } plus) return await OpenSplitAsync(m, plus, identity, Update, ct);
+            if (m.Network is { } plus && plus.Level.IsSplit())
+            {
+                // 节点被吊销到只剩一个：先经它问一次网关要最新的节点列表（网关会回“要拆分”并附上列表），够两个再走两路。
+                if (plus.Relays.Count == 1)
+                {
+                    try { await (await OpenDirectAsync(m, plus.Relays[0], identity, Update, ct)).DisposeAsync(); }
+                    catch (GateRejectedException e) when (e.Status is GateStatus.SplitRequired or GateStatus.CircuitOpen) { }
+                    m = current;
+                    if (m.Network is not { } updated || !updated.Level.IsSplit())
+                        return await OpenDirectAsync(m, m.Network?.Direct ?? new GateEndpoint(m.Host, m.Port), identity, Update, ct);
+                }
+                return await OpenSplitAsync(m, m.Network!, identity, Update, ct);
+            }
             try
             {
-                return await OpenDirectAsync(m, identity, Update, ct);
+                return await OpenDirectAsync(m, m.Network?.Direct ?? new GateEndpoint(m.Host, m.Port), identity, Update, ct);
             }
-            catch (GateRejectedException e) when (e.Status == GateStatus.SplitRequired && current.Network is { Level: PrivacyLevel.Plus } changed)
+            catch (GateRejectedException e) when (e.Status == GateStatus.SplitRequired && current.Network is { } changed && changed.Level.IsSplit())
             {
                 // 服务器刚切到隐私+：网关回拒绝时已经带上了节点列表，直接改走两路。
                 return await OpenSplitAsync(current, changed, identity, Update, ct);
@@ -48,9 +60,8 @@ public static class GateClient
         };
     }
 
-    private static async Task<Stream> OpenDirectAsync(GateMembership m, MemberIdentity identity, Action<GateNetwork> update, CancellationToken ct)
+    private static async Task<Stream> OpenDirectAsync(GateMembership m, GateEndpoint target, MemberIdentity identity, Action<GateNetwork> update, CancellationToken ct)
     {
-        var target = m.Network?.Direct ?? new GateEndpoint(m.Host, m.Port);
         var tcp = new TcpClient();
         try
         {
@@ -249,7 +260,7 @@ public sealed class JayServerList
     private static void Apply(Entry entry, GateNetwork? network)
     {
         if (network is null) return;
-        entry.Privacy = network.Level == PrivacyLevel.Plus ? "plus" : "basic";
+        entry.Privacy = network.Level switch { PrivacyLevel.PlusPlus => "plusplus", PrivacyLevel.Plus => "plus", _ => "basic" };
         entry.Direct = network.Direct?.ToString();
         entry.Relays = [.. network.Relays.Select(r => r.ToString())];
     }
@@ -257,8 +268,9 @@ public sealed class JayServerList
     public static GateMembership ToMembership(Entry entry)
     {
         GateNetwork? network = null;
-        if (entry.Privacy == "plus" || entry.Relays.Count > 0 || entry.Direct is not null)
-            network = new GateNetwork(entry.Privacy == "plus" ? PrivacyLevel.Plus : PrivacyLevel.Basic, GateEndpoint.TryParse(entry.Direct),
+        var level = entry.Privacy switch { "plusplus" => PrivacyLevel.PlusPlus, "plus" => PrivacyLevel.Plus, _ => PrivacyLevel.Basic };
+        if (level != PrivacyLevel.Basic || entry.Relays.Count > 0 || entry.Direct is not null)
+            network = new GateNetwork(level, GateEndpoint.TryParse(entry.Direct),
                 [.. entry.Relays.Select(GateEndpoint.TryParse).OfType<GateEndpoint>()]);
         return new(entry.Host, entry.Port, Convert.FromBase64String(entry.ServerPublicKey), Unprotect(entry.ProtectedAccessKey), entry.Username, network);
     }
