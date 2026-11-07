@@ -1578,5 +1578,7 @@
   "core.gate.log.relay_up": "Relay up: {0}",
   "core.gate.log.relay_down": "Relay stopped sending heartbeats: {0}",
   "core.gate.log.breaker_open": "Privacy++ breaker open: unavailable relays {0}; dropped {1} connections and paused new ones",
-  "core.gate.log.breaker_closed": "Privacy++ breaker closed: relays recovered, accepting connections again"
+  "core.gate.log.breaker_closed": "Privacy++ breaker closed: relays recovered, accepting connections again",
+  "core.gate.admin.bad_rotation": "Invalid rotation settings: the window must be 30 seconds to 1 day and the port range within 1024–65535 with at least 100 ports",
+  "core.gate.log.listen_failed": "Couldn't open port {0}"
 }

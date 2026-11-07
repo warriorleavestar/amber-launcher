@@ -98,4 +98,31 @@ public sealed class JayServerCliTests
             try { Directory.Delete(root, true); } catch (IOException) { }
         }
     }
+
+    [Fact]
+    public void RotateCommands()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "jay-cli-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            GateStore.Initialize(Path.Combine(root, "gate"), "203.0.113.10", 47670, 47670);
+            var output = new StringWriter();
+            int Run(params string[] args) => Program.Admin(root, Options.Parse(args), output);
+            Assert.Equal(0, Run("rotate", "on", "--window", "5m", "--range", "30000-40000", "--grace", "1d"));
+            var store = new GateStore(Path.Combine(root, "gate"));
+            Assert.Equal(new GateRotation(300, 30000, 40000), store.Rotation()!.Value.Rule);
+            Assert.NotNull(store.Read().Rotation!.FixedUntil);
+            Run("rotate", "status");
+            Assert.Contains("网关直连", output.ToString());
+            Run("invite", "Steve");
+            Assert.NotNull(GateInvite.TryParse(output.ToString(), out _)!.Rotation);
+            Assert.Throws<ArgumentException>(() => Run("rotate", "on", "--range", "30000-30010"));
+            Run("rotate", "off");
+            Assert.Null(store.Rotation());
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (IOException) { }
+        }
+    }
 }

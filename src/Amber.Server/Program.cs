@@ -46,6 +46,12 @@ public static class Program
           jay-server privacy basic|plus|plusplus               plus 至少要两个节点；plusplus 还要节点发心跳，不够就熔断
           jay-server status                                    节点心跳、熔断状态、在线人数（服务运行时）
 
+        入口端口轮换（像验证器 App 的动态码：入口端口每隔一段时间按种子换一个，扫描器找不到，泄露的旧地址自动过期）：
+          jay-server rotate on [--window 10m] [--range 20000-60000] [--grace 3d] [--new-seed]
+              普通模式轮换网关端口，隐私+/++ 轮换节点端口（节点要带节点码运行）。
+              grace 期间固定端口照开，老玩家进一次服就会拿到轮换信息；之后固定端口关闭
+          jay-server rotate off / rotate status
+
         通用选项：--dir <数据目录>（默认是程序旁边的 jay-server-data，也可以用环境变量 JAY_SERVER_DIR）
         """;
 
@@ -367,6 +373,47 @@ public static class Program
                 }
                 return 0;
             }
+            case "rotate":
+            {
+                switch (Arg(0, "on、off 或 status"))
+                {
+                    case "on":
+                    {
+                        var range = (options.Get("range") ?? $"{GateRotation.Default.MinPort}-{GateRotation.Default.MaxPort}").Split('-');
+                        if (range.Length != 2 || !int.TryParse(range[0], out var min) || !int.TryParse(range[1], out var max)) throw new ArgumentException("--range 写成 20000-60000");
+                        var window = ParseDuration(options.Get("window") ?? "10m");
+                        var grace = ParseDuration(options.Get("grace") ?? "3d");
+                        store.EnableRotation(new GateRotation((int)window.TotalSeconds, min, max), grace, options.Has("new-seed"));
+                        output.WriteLine($"已开启入口端口轮换：每 {FormatDuration(window)}换一次，端口在 {min}–{max} 之间。");
+                        output.WriteLine("防火墙 / 安全组要放行这个端口范围（网关在普通模式下，节点在隐私+/++ 下）。之后发的邀请码里带着轮换信息。");
+                        if (store.Read().Rotation?.FixedUntil is { } until)
+                            output.WriteLine($"固定端口开放到 {until.ToLocalTime():yyyy-MM-dd HH:mm}，这之前进过服的玩家会自动改用轮换端口；之后没进过服的老玩家要重新发邀请。");
+                        return 0;
+                    }
+                    case "off":
+                        store.DisableRotation();
+                        output.WriteLine("已关闭轮换，回到固定端口。");
+                        return 0;
+                    case "status":
+                    {
+                        var rotation = store.Rotation();
+                        if (rotation is not { } r)
+                        {
+                            output.WriteLine("没开轮换。");
+                            return 0;
+                        }
+                        var config = store.LoadConfig();
+                        var now = DateTimeOffset.UtcNow;
+                        output.WriteLine($"轮换中：每 {FormatDuration(TimeSpan.FromSeconds(r.Rule.WindowSeconds))}换一次，端口 {r.Rule.MinPort}–{r.Rule.MaxPort}");
+                        output.WriteLine($"  网关直连：现在 {r.Rule.PortAt(GateRotation.EntrySeed(r.Master, GateRotation.DirectEntry), now)}（固定端口 {config.ListenPort}）");
+                        foreach (var relay in store.Read().Relays)
+                            output.WriteLine($"  节点 {relay.Address}：现在 {r.Rule.PortAt(GateRotation.EntrySeed(r.Master, relay.Address), now)}");
+                        return 0;
+                    }
+                    default:
+                        throw new ArgumentException("只能是 on、off 或 status");
+                }
+            }
             case "status":
             {
                 var state = store.Read();
@@ -432,7 +479,7 @@ public static class Program
 /// <summary>最简单的参数解析：第一个词是命令，--name value 是选项，--flag 是开关，其余是位置参数。</summary>
 internal sealed class Options
 {
-    private static readonly HashSet<string> Flags = ["accept-eula", "no-mc", "console"];
+    private static readonly HashSet<string> Flags = ["accept-eula", "no-mc", "console", "new-seed"];
     private readonly Dictionary<string, string?> _values = new(StringComparer.OrdinalIgnoreCase);
     public string? Command { get; private set; }
     public List<string> Positional { get; } = [];

@@ -9,13 +9,15 @@ namespace Amber.Core.Multiplayer.Gate;
 /// Jay 服务器的邀请码：<c>JAYS1-</c> + Crockford Base32。管理员在 VPS 上用 <c>jay-gate invite</c> 生成，发给一个具体的玩家。
 /// 内容：网关地址和端口、网关公钥的哈希（钉住，防冒充服务器）、一次性令牌（128 位）、这份邀请绑定的用户名、4 字节校验。
 /// 任何一位被改都会校验失败，直接报错，不会被当成别的码。邀请里没有长期密钥：令牌只用来做第一次握手，用掉或过期就作废。
+/// <para>版本 2：入口开了端口轮换时，后面再接轮换规则和这个入口的种子（Port 只是固定端口，可能已经关了）。</para>
 /// </summary>
-public sealed record GateInvite(string Host, int Port, byte[] ServerKeyHash, byte[] Token, string Username)
+public sealed record GateInvite(string Host, int Port, byte[] ServerKeyHash, byte[] Token, string Username, GateEntryRotation? Rotation = null)
 {
     public const string Prefix = "JAYS1-";
     public const int KeyHashLength = 16;
     public const int TokenLength = 16;
     private const byte Version = 1;
+    private const byte VersionRotating = 2;
     private const int ChecksumLength = 4;
     private const string Crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -24,7 +26,7 @@ public sealed record GateInvite(string Host, int Port, byte[] ServerKeyHash, byt
         Validate(Host, Port, ServerKeyHash, Token, Username);
         var host = Encoding.ASCII.GetBytes(Host);
         var name = Encoding.ASCII.GetBytes(Username);
-        var body = new List<byte> { Version, (byte)host.Length };
+        var body = new List<byte> { Rotation is null ? Version : VersionRotating, (byte)host.Length };
         body.AddRange(host);
         Span<byte> port = stackalloc byte[2];
         BinaryPrimitives.WriteUInt16BigEndian(port, (ushort)Port);
@@ -33,6 +35,11 @@ public sealed record GateInvite(string Host, int Port, byte[] ServerKeyHash, byt
         body.AddRange(Token);
         body.Add((byte)name.Length);
         body.AddRange(name);
+        if (Rotation is not null)
+        {
+            Rotation.Rotation.Write(body);
+            body.AddRange(Rotation.Seed);
+        }
         var bytes = body.ToArray();
         return Prefix + Base32Encode([.. bytes, .. Checksum(bytes)]);
     }
@@ -63,7 +70,7 @@ public sealed record GateInvite(string Host, int Port, byte[] ServerKeyHash, byt
             error = L.T("core.gate.invite.corrupt");
             return null;
         }
-        if (bytes[0] != Version)
+        if (bytes[0] is not (Version or VersionRotating))
         {
             error = L.T("core.gate.invite.version");
             return null;
@@ -78,9 +85,17 @@ public sealed record GateInvite(string Host, int Port, byte[] ServerKeyHash, byt
             var token = bytes.Slice(p, TokenLength).ToArray(); p += TokenLength;
             int nameLength = bytes[p++];
             var name = Encoding.ASCII.GetString(bytes.Slice(p, nameLength)); p += nameLength;
+            GateEntryRotation? rotation = null;
+            if (bytes[0] == VersionRotating)
+            {
+                var rule = GateRotation.Read(bytes[p..]) ?? throw new FormatException();
+                p += GateRotation.EncodedLength;
+                rotation = new GateEntryRotation(rule, bytes.Slice(p, GateRotation.SeedLength).ToArray());
+                p += GateRotation.SeedLength;
+            }
             if (p != bytes.Length) throw new FormatException();
             Validate(host, port, keyHash, token, name);
-            return new GateInvite(host, port, keyHash, token, name);
+            return new GateInvite(host, port, keyHash, token, name, rotation);
         }
         catch (Exception e) when (e is FormatException or ArgumentException or ArgumentOutOfRangeException)
         {

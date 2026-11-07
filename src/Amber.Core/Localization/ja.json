@@ -1547,5 +1547,7 @@
   "core.gate.log.relay_up": "中継ノード稼働：{0}",
   "core.gate.log.relay_down": "中継ノードのハートビート停止：{0}",
   "core.gate.log.breaker_open": "プライバシー++ ブレーカー作動：利用不可の中継ノード {0}。{1} 接続を切断し、新規接続を停止しました",
-  "core.gate.log.breaker_closed": "プライバシー++ ブレーカー解除：中継ノードが復旧し、接続を再開しました"
+  "core.gate.log.breaker_closed": "プライバシー++ ブレーカー解除：中継ノードが復旧し、接続を再開しました",
+  "core.gate.admin.bad_rotation": "ローテーション設定が正しくありません。時間枠は 30 秒〜1 日、ポート範囲は 1024–65535 の中で 100 ポート以上にしてください",
+  "core.gate.log.listen_failed": "ポートを開けません：{0}"
 }

@@ -13,8 +13,7 @@ public static class GateClient
     /// <summary>用邀请码入服（连网关、握手、拿到访问密钥）。</summary>
     public static async Task<GateMembership> EnrollAsync(GateInvite invite, MemberIdentity identity, CancellationToken ct = default)
     {
-        using var tcp = new TcpClient();
-        await ConnectAsync(tcp, invite.Host, invite.Port, ct);
+        using var tcp = await ConnectEntryAsync(new GateEndpoint(invite.Host, invite.Port), invite.Rotation, ct);
         await using var stream = tcp.GetStream();
         return await GateProtocol.EnrollAsync(stream, invite, identity.KeyPair, ct);
     }
@@ -62,16 +61,17 @@ public static class GateClient
 
     private static async Task<Stream> OpenDirectAsync(GateMembership m, GateEndpoint target, MemberIdentity identity, Action<GateNetwork> update, CancellationToken ct)
     {
-        var tcp = new TcpClient();
+        TcpClient? tcp = null;
         try
         {
-            await ConnectAsync(tcp, target.Host, target.Port, ct);
+            var rotation = target == m.Network?.Direct ? m.Network.DirectRotation : m.Network?.RelayRotation(target);
+            tcp = await ConnectEntryAsync(target, rotation, ct);
             Pump.Tune(tcp);
             return await GateProtocol.JoinAsync(new OwnedStream(tcp), m, identity.KeyPair, JoinRequest.Direct, update, ct);
         }
         catch
         {
-            tcp.Dispose();
+            tcp?.Dispose();
             throw;
         }
     }
@@ -95,21 +95,21 @@ public static class GateClient
                 GateEndpoint? relay;
                 lock (queueLock) relay = queue.Count > 0 ? queue.Dequeue() : null;
                 if (relay is null) throw new IOException(L.T("core.gate.split.need_two"), last);
-                var tcp = new TcpClient();
+                TcpClient? tcp = null;
                 try
                 {
-                    await ConnectAsync(tcp, relay.Host, relay.Port, linked.Token);
+                    tcp = await ConnectEntryAsync(relay, network.RelayRotation(relay), linked.Token);
                     Pump.Tune(tcp);
                     return await GateProtocol.JoinAsync(new OwnedStream(tcp), m, identity.KeyPair, JoinRequest.Leg(index, pairId), update, linked.Token);
                 }
                 catch (Exception e) when (e is IOException or SocketException && !linked.IsCancellationRequested)
                 {
-                    tcp.Dispose();
+                    tcp?.Dispose();
                     last = e;
                 }
                 catch
                 {
-                    tcp.Dispose();
+                    tcp?.Dispose();
                     throw;
                 }
             }
@@ -140,10 +140,41 @@ public static class GateClient
         return new SplitStream(legs[0].Result, legs[1].Result);
     }
 
-    private static async Task ConnectAsync(TcpClient tcp, string host, int port, CancellationToken ct)
+    /// <summary>
+    /// 连一个入口。开了端口轮换就按当前窗、上一个窗、下一个窗的顺序试（容忍两边时钟差一个窗），最后再试固定端口（过渡期里还开着）。
+    /// 轮换端口连不上多半是被直接拒绝，很快；被防火墙丢包时每个端口最多等几秒。
+    /// </summary>
+    internal static async Task<TcpClient> ConnectEntryAsync(GateEndpoint endpoint, GateEntryRotation? rotation, CancellationToken ct)
+    {
+        var ports = rotation is null ? [endpoint.Port] : rotation.CandidatePorts(DateTimeOffset.UtcNow).Append(endpoint.Port).Distinct().ToList();
+        Exception? last = null;
+        foreach (var port in ports)
+        {
+            var tcp = new TcpClient();
+            try
+            {
+                await ConnectAsync(tcp, endpoint.Host, port, ct, rotation is null ? TimeSpan.FromSeconds(10) : TimeSpan.FromSeconds(4));
+                return tcp;
+            }
+            catch (Exception e) when (e is IOException or SocketException && !ct.IsCancellationRequested)
+            {
+                tcp.Dispose();
+                last = e;
+            }
+            catch
+            {
+                tcp.Dispose();
+                throw;
+            }
+        }
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(last!);
+        throw last!;
+    }
+
+    private static async Task ConnectAsync(TcpClient tcp, string host, int port, CancellationToken ct, TimeSpan? limit = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        timeout.CancelAfter(limit ?? TimeSpan.FromSeconds(10));
         try
         {
             await tcp.ConnectAsync(host, port, timeout.Token);
@@ -180,6 +211,10 @@ public sealed class JayServerList
         public string? Direct { get; set; }
         /// <summary>节点列表（host:port）。</summary>
         public List<string> Relays { get; set; } = [];
+        /// <summary>入口端口轮换：规则（窗口秒数,最小端口,最大端口）、直连入口的种子、每个节点的种子（Base64，和 Relays 一一对应）。没开为 null。</summary>
+        public string? Rotation { get; set; }
+        public string? DirectSeed { get; set; }
+        public List<string>? RelaySeeds { get; set; }
     }
 
     public sealed class FileModel
@@ -263,6 +298,25 @@ public sealed class JayServerList
         entry.Privacy = network.Level switch { PrivacyLevel.PlusPlus => "plusplus", PrivacyLevel.Plus => "plus", _ => "basic" };
         entry.Direct = network.Direct?.ToString();
         entry.Relays = [.. network.Relays.Select(r => r.ToString())];
+        entry.Rotation = network.Rotation is { } r ? $"{r.Rule.WindowSeconds},{r.Rule.MinPort},{r.Rule.MaxPort}" : null;
+        entry.DirectSeed = network.Rotation?.DirectSeed is { } d ? Convert.ToBase64String(d) : null;
+        entry.RelaySeeds = network.Rotation is { } rr ? [.. rr.RelaySeeds.Select(Convert.ToBase64String)] : null;
+    }
+
+    private static GateNetworkRotation? LoadRotation(Entry entry)
+    {
+        if (entry.Rotation?.Split(',') is not [var w, var min, var max] || entry.RelaySeeds is null) return null;
+        if (!int.TryParse(w, out var window) || !int.TryParse(min, out var low) || !int.TryParse(max, out var high)) return null;
+        var rule = new GateRotation(window, low, high);
+        if (!rule.IsValid || entry.RelaySeeds.Count != entry.Relays.Count) return null;
+        try
+        {
+            return new GateNetworkRotation(rule, entry.DirectSeed is null ? null : Convert.FromBase64String(entry.DirectSeed), [.. entry.RelaySeeds.Select(Convert.FromBase64String)]);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
     }
 
     public static GateMembership ToMembership(Entry entry)
@@ -271,7 +325,7 @@ public sealed class JayServerList
         var level = entry.Privacy switch { "plusplus" => PrivacyLevel.PlusPlus, "plus" => PrivacyLevel.Plus, _ => PrivacyLevel.Basic };
         if (level != PrivacyLevel.Basic || entry.Relays.Count > 0 || entry.Direct is not null)
             network = new GateNetwork(level, GateEndpoint.TryParse(entry.Direct),
-                [.. entry.Relays.Select(GateEndpoint.TryParse).OfType<GateEndpoint>()]);
+                [.. entry.Relays.Select(GateEndpoint.TryParse).OfType<GateEndpoint>()], LoadRotation(entry));
         return new(entry.Host, entry.Port, Convert.FromBase64String(entry.ServerPublicKey), Unprotect(entry.ProtectedAccessKey), entry.Username, network);
     }
 
