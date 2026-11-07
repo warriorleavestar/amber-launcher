@@ -39,17 +39,18 @@ public static class Program
     public static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
-        var options = Options.Parse(args);
-        var root = options.Get("dir") ?? Environment.GetEnvironmentVariable("JAY_SERVER_DIR") ?? Path.Combine(AppContext.BaseDirectory, "jay-server-data");
-        root = Path.GetFullPath(root);
         try
         {
+            var options = Options.Parse(args);
+            if (options.WantsHelp) return Help();
+            var root = options.Get("dir") ?? Environment.GetEnvironmentVariable("JAY_SERVER_DIR") ?? Path.Combine(AppContext.BaseDirectory, "jay-server-data");
+            root = Path.GetFullPath(root);
             return options.Command switch
             {
                 "init" => Init(root, options),
                 "setup" => await SetupAsync(root, options),
                 "run" => await RunAsync(root, options),
-                null or "help" or "--help" or "-h" => Help(),
+                null => Help(),
                 _ => Admin(root, options, Console.Out),
             };
         }
@@ -286,12 +287,20 @@ internal sealed class Options
     public string? Command { get; private set; }
     public List<string> Positional { get; } = [];
 
+    /// <summary>help、-h、--help、/?（放在哪里都行）：显示用法，不执行命令。</summary>
+    public bool WantsHelp { get; private set; }
+
     public static Options Parse(IReadOnlyList<string> args)
     {
         var o = new Options();
         for (var i = 0; i < args.Count; i++)
         {
             var a = args[i];
+            if (a is "--help" or "-h" or "/?" || (a == "help" && o.Command is null))
+            {
+                o.WantsHelp = true;
+                continue;
+            }
             if (a.StartsWith("--", StringComparison.Ordinal))
             {
                 var name = a[2..];
