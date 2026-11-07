@@ -180,9 +180,34 @@ public sealed class DirectSession : IAsyncDisposable
             Bridge.Connected += OnConnected;
             Bridge.ControlReceived += OnControl;
         }
+        if (!Options.Simulated) await StartNatKeepAliveAsync(ct);
         var session = IsHost ? Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8)) : _remote?.Session ?? "";
         LocalCode = new DirectCode(!IsHost, session.Length >= 8 ? session : "0000000000000000", _gathered.Nat, _gathered.Candidates);
         return LocalCode;
+    }
+
+    /// <summary>
+    /// 码里有 STUN 查到的外部地址时，让桥一直往 STUN 服务器发保活包，免得等对方贴码的时候 NAT 映射被回收、码里的端口失效。
+    /// 解析不了服务器就不保活（不影响建房间/加入）。
+    /// </summary>
+    private async Task StartNatKeepAliveAsync(CancellationToken ct)
+    {
+        if (Bridge is null || _gathered?.Candidates.FirstOrDefault(c => c.Kind == PathKind.Punch) is not { } punch) return;
+        foreach (var server in Options.StunServers.Where(s => !string.IsNullOrWhiteSpace(s)))
+        {
+            IPEndPoint target;
+            try
+            {
+                target = await Stun.ResolveAsync(server.Trim(), ct).WaitAsync(TimeSpan.FromSeconds(3), ct);
+            }
+            catch (Exception e) when (e is SocketException or FormatException or ArgumentException or TimeoutException)
+            {
+                continue;
+            }
+            // 对称 NAT 每个目的地址一个端口，保活服务器看到的端口本来就和码里的不同，不比较。
+            Bridge.StartNatKeepAlive(target, _gathered.Nat == NatKind.Cone ? punch.EndPoint : null);
+            return;
+        }
     }
 
     /// <summary>房主：给一张邀请配上本机地址，生成直连邀请码（JAY2D-）。</summary>
@@ -396,7 +421,11 @@ public sealed class DirectSession : IAsyncDisposable
         {
             var reason = FailureReason(invite.Nat, LocalNat, invite.Candidates, _gathered?.Candidates ?? []);
             Log(L.T("core.mp.session.failed") + reason);
-            if (Options.FallbackNodes.Count == 0) throw new DirectFailedException(reason);
+            if (Options.FallbackNodes.Count == 0)
+            {
+                Log(L.T("core.mp.session.nofallback"));
+                throw new DirectFailedException(reason);
+            }
             Log(L.T("core.mp.session.fallback") + string.Join(L.T("core.mp.format.listseparator"), Options.FallbackNodes));
             UsingFallbackNode = true;
             lobbyPeers = Options.FallbackNodes;

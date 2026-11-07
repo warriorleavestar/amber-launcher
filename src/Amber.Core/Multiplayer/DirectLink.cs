@@ -466,6 +466,58 @@ public sealed class DirectBridge : IAsyncDisposable
         return null;
     }
 
+    /// <summary>NAT 保活的间隔。很多运营商（尤其是国内的 CGNAT）几十秒没有包就回收 UDP 映射。</summary>
+    internal TimeSpan NatKeepAliveInterval { get; init; } = TimeSpan.FromSeconds(10);
+
+    private byte[]? _keepAliveId;
+    private IPEndPoint? _keepAliveExpected;
+    private int _keepAliveStarted;
+
+    /// <summary>
+    /// 打洞套接字的 NAT 保活：每隔 <see cref="NatKeepAliveInterval"/> 往 STUN 服务器发一个 Binding 请求。
+    /// 码里写的外部地址（STUN 查到的端口）只有在映射一直活着时才有效：房主发出邀请码后要等对方贴回复码，
+    /// 这段时间套接字上没有任何包，路由器/运营商把映射回收后，再发包会换一个新的外部端口，
+    /// 对方往码里的旧端口发的探测全被丢掉，端口受限锥形 NAT 的对方又不收新端口发来的包，两边都打不通。
+    /// <paramref name="expected"/> 不为空时（锥形 NAT），回复里的外部地址变了就记一笔，方便排查。
+    /// </summary>
+    public void StartNatKeepAlive(IPEndPoint stunServer, IPEndPoint? expected)
+    {
+        if (Interlocked.Exchange(ref _keepAliveStarted, 1) != 0) return;
+        _keepAliveExpected = expected is null ? null : Stun.Normalize(expected);
+        _loops.Add(KeepAliveLoopAsync(stunServer));
+    }
+
+    private async Task KeepAliveLoopAsync(IPEndPoint stunServer)
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(NatKeepAliveInterval, _cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            var id = RandomNumberGenerator.GetBytes(12);
+            Volatile.Write(ref _keepAliveId, id);
+            await SendRawAsync(Stun.BuildRequest(id), stunServer, _cts.Token);
+        }
+    }
+
+    /// <summary>接收循环收到的包是不是保活请求的 STUN 回复（是的话吃掉，不再往下处理）。</summary>
+    private bool HandleKeepAliveResponse(ReadOnlySpan<byte> packet)
+    {
+        if (Volatile.Read(ref _keepAliveId) is not { } id || Stun.ParseResponse(packet, id) is not { } mapped) return false;
+        mapped = Stun.Normalize(mapped);
+        if (_keepAliveExpected is { } expected && !expected.Equals(mapped))
+        {
+            _log(L.F("core.mp.punch.mapping_changed", expected.Port, mapped.Port));
+            _keepAliveExpected = mapped;
+        }
+        return true;
+    }
+
     /// <summary>房主没有对方地址时也能被连：只要有人发来认证通过的探测包就接受。</summary>
     public Task<DirectPeer?> WaitForPeerAsync(TimeSpan timeout, CancellationToken ct = default) => PunchAsync([], NatKind.Unknown, timeout, ct);
 
@@ -524,6 +576,7 @@ public sealed class DirectBridge : IAsyncDisposable
             var packet = buffer.AsSpan(0, r.ReceivedBytes);
             if (packet.Length == 0) continue;
             var type = packet[0];
+            if (HandleKeepAliveResponse(packet)) continue;
 
             // 对方发来的内容不可信：处理一个包时出任何错（坏 JSON、字段类型不对、事件处理抛异常、转发出错）都只丢掉这个包、记一笔，
             // 不能让共用的接收循环停掉。数据包也在里面。
