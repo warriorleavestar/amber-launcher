@@ -1561,7 +1561,7 @@
   "core.gate.split.leg_lost": "One of the two relay paths was lost",
   "core.gate.split.mismatch": "The two relay paths don't match; the connection was closed",
   "core.gate.split.timeout": "Timed out waiting for the second relay path",
-  "core.gate.split.need_two": "Privacy+ needs two reachable relays and fewer are available (Jay won't fall back to a direct connection)",
+  "core.gate.split.need_two": "The two-path connection needs two reachable relays and fewer are available (Jay won't fall back to a direct connection). If the relays are online, the server owner may have changed settings; ask them for a new invite code",
   "core.gate.admin.plus_needs_relays": "Privacy+ needs at least two relays. Add them with jay-server relays add first.",
   "core.gate.admin.badsource": "The source must be an IP address",
   "core.gate.admin.too_many_relays": "Too many relays (at most 16)",
@@ -1581,5 +1581,7 @@
   "core.gate.log.breaker_open": "Privacy++ breaker open: unavailable relays {0}; dropped {1} connections and paused new ones",
   "core.gate.log.breaker_closed": "Privacy++ breaker closed: relays recovered, accepting connections again",
   "core.gate.admin.bad_rotation": "Invalid rotation settings: the window must be 30 seconds to 1 day and the port range within 1024–65535 with at least 100 ports",
-  "core.gate.log.listen_failed": "Couldn't open port {0}"
+  "core.gate.log.listen_failed": "Couldn't open port {0}",
+  "core.gate.log.revoked_dropped": "Device {1} was revoked or {0} was disabled/removed: dropped its live connection",
+  "core.net.download.every_source_failed": "Could not download {0}; every download source failed: {1}"
 }

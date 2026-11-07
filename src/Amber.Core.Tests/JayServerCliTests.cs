@@ -19,6 +19,15 @@ public sealed class JayServerCliTests
         Assert.True(options.WantsHelp);
     }
 
+    [Theory]
+    [InlineData("0", 0)]
+    [InlineData("0m", 0)]
+    [InlineData("30m", 30)]
+    [InlineData("2h", 120)]
+    [InlineData("3d", 4320)]
+    public void DurationsIncludingBareZero(string text, double minutes) =>
+        Assert.Equal(TimeSpan.FromMinutes(minutes), Amber.Server.Program.ParseDuration(text));
+
     [Fact]
     public void HelpAsUsernameIsNotHelp()
     {

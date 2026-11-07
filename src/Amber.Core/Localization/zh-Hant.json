@@ -1530,7 +1530,7 @@
   "core.gate.split.leg_lost": "兩路連線中的一路斷開了",
   "core.gate.split.mismatch": "兩路資料對不上，連線已斷開",
   "core.gate.split.timeout": "等另一路連線逾時",
-  "core.gate.split.need_two": "隱私+ 需要兩個能連上的節點，現在湊不齊（不會退回直連）",
+  "core.gate.split.need_two": "兩路連線需要兩個能連上的節點，現在湊不齊（不會退回直連）。節點都在線的話，可能是服主改了設定，請向服主要一個新邀請碼",
   "core.gate.admin.plus_needs_relays": "隱私+ 至少要兩個節點：先用 jay-server relays add 加節點",
   "core.gate.admin.badsource": "來源必須是一個 IP 位址",
   "core.gate.admin.too_many_relays": "節點太多了（最多 16 個）",
@@ -1550,5 +1550,7 @@
   "core.gate.log.breaker_open": "隱私++ 熔斷：不可用的節點 {0}；斷開了 {1} 條連線，暫停接受新連線",
   "core.gate.log.breaker_closed": "隱私++ 熔斷解除：節點恢復，重新接受連線",
   "core.gate.admin.bad_rotation": "輪換設定不對：時間窗 30 秒到 1 天，連接埠範圍在 1024–65535 之間且至少 100 個連接埠",
-  "core.gate.log.listen_failed": "開不了連接埠 {0}"
+  "core.gate.log.listen_failed": "開不了連接埠 {0}",
+  "core.gate.log.revoked_dropped": "裝置 {1} 已被撤銷或 {0} 已停用/移出名單：斷開它在線的連線",
+  "core.net.download.every_source_failed": "下載 {0} 失敗，每個下載源都試過了：{1}"
 }

@@ -68,6 +68,8 @@ public sealed class GateServer : IAsyncDisposable
     /// <summary>
     /// 入口端口轮换：普通模式下开了轮换就关掉固定端口，只听当前前后三个时间窗的端口。
     /// 隐私+/++ 下玩家连的是节点，网关的固定端口留给节点转发（用防火墙只放行节点），轮换交给节点去做。
+    /// 从隐私+/++ 降回普通模式时，节点还在转发到固定端口：配着节点就让固定端口一直开着，但过渡期后只收节点转来的连接（见 <see cref="FixedPortClosedTo"/>）。
+    /// 这样还拿着节点列表的老玩家照样经节点进一次服，顺便拿到新的地址簿，之后改走网关的轮换端口。
     /// </summary>
     private void SyncListeners(GateState state)
     {
@@ -77,7 +79,7 @@ public sealed class GateServer : IAsyncDisposable
         {
             var seed = GateRotation.EntrySeed(rotation.Value.Master, GateRotation.DirectEntry);
             _listeners.SetRotating([.. rotation.Value.Rule.CandidatePorts(seed, DateTimeOffset.UtcNow)]);
-            _listeners.SetFixedOpen(GateStore.FixedPortWanted(state));
+            _listeners.SetFixedOpen(GateStore.FixedPortWanted(state) || state.Relays.Count > 0);
         }
         else
         {
@@ -85,6 +87,11 @@ public sealed class GateServer : IAsyncDisposable
             _listeners.SetRotating([]);
         }
     }
+
+    /// <summary>普通模式开着轮换、过渡期也过了：固定端口只为节点开着，别的来源连到固定端口一律直接断开。</summary>
+    private bool FixedPortClosedTo(TcpClient client, GateState state, bool fromRelay) =>
+        !fromRelay && !state.Privacy.IsSplit() && _store.Rotation(state) is not null && !GateStore.FixedPortWanted(state)
+        && _listeners is { } listeners && (client.Client.LocalEndPoint as IPEndPoint)?.Port == listeners.FixedPort;
 
     private async Task HandleAsync(TcpClient client, CancellationToken ct)
     {
@@ -95,6 +102,12 @@ public sealed class GateServer : IAsyncDisposable
             var state = _store.Read();
             var plus = state.Privacy.IsSplit();
             var fromRelay = state.Relays.Count > 0 && RelaySources(state).Contains(remote);
+            if (FixedPortClosedTo(client, state, fromRelay))
+            {
+                Interlocked.Increment(ref Rejected);
+                Pump.Abort(client);
+                return;
+            }
             // 节点转来的连接共用节点的 IP，不按 IP 限握手数（总数仍受 MaxConnections 限制）。
             if (fromRelay) remote = IPAddress.None;
             else if (_handshaking.AddOrUpdate(remote, 1, (_, n) => n + 1) > _config.MaxHandshakesPerIp)
@@ -231,12 +244,12 @@ public sealed class GateServer : IAsyncDisposable
                 }
                 var sessionId = Interlocked.Increment(ref _sessionIds);
                 var live = session!;
-                _sessions[sessionId] = () =>
+                _sessions[sessionId] = new LiveSession(device, name, () =>
                 {
                     (live as IAuthenticatedStream)?.Abort();
                     Pump.Abort(backend);
                     try { backend.Close(); } catch (ObjectDisposedException) { }
-                };
+                });
                 try
                 {
                     if (_epoch != _store.Read().Epoch || BreakerOpen) throw new IOException(GateRejectedException.Describe(GateStatus.CircuitOpen));
@@ -272,7 +285,10 @@ public sealed class GateServer : IAsyncDisposable
 
     // ---------------- 隐私++：节点心跳和熔断 ----------------
 
-    private readonly ConcurrentDictionary<long, Action> _sessions = new();
+    /// <summary>一条进了服务端的游戏连接：哪台设备、用哪个名字（状态查询没有名字），以及怎么把它断开。</summary>
+    private sealed record LiveSession(byte[]? Device, string? Name, Action Abort);
+
+    private readonly ConcurrentDictionary<long, LiveSession> _sessions = new();
     private long _sessionIds;
     private readonly ConcurrentDictionary<string, DateTime> _heartbeats = new();
     private readonly ConcurrentDictionary<string, SecureStream> _relayChannels = new();
@@ -413,6 +429,13 @@ public sealed class GateServer : IAsyncDisposable
             var n = AbortAll();
             _log(L.F("core.gate.log.epoch", _epoch, n));
         }
+        // 撤销、停用或移出名单的设备：已经在线的连接也马上断开，不等它下次重连。
+        foreach (var (id, live) in _sessions)
+            if (live is { Device: { } device, Name: { } name } && !StillAllowed(state, name, device) && _sessions.TryRemove(id, out _))
+            {
+                live.Abort();
+                _log(L.F("core.gate.log.revoked_dropped", name, MemberIdentity.FingerprintOf(device)));
+            }
         var timeout = HeartbeatTimeout(state);
         var healthy = known.Where(id => _heartbeats.TryGetValue(id, out var t) && now - t < timeout).ToHashSet();
         foreach (var id in healthy.Except(_healthyLast)) _log(L.F("core.gate.log.relay_up", id));
@@ -444,6 +467,12 @@ public sealed class GateServer : IAsyncDisposable
         }
     }
 
+    private static bool StillAllowed(GateState state, string name, byte[] device)
+    {
+        var key = Convert.ToBase64String(device);
+        return state.Members.Any(m => !m.Disabled && string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase) && m.Devices.Any(d => d.PublicKey == key));
+    }
+
     /// <summary>断开全部游戏连接（不发正常结束：对面按出错处理，重新握手时是新密钥）。</summary>
     private int AbortAll()
     {
@@ -451,7 +480,7 @@ public sealed class GateServer : IAsyncDisposable
         foreach (var (id, abort) in _sessions)
             if (_sessions.TryRemove(id, out _))
             {
-                abort();
+                abort.Abort();
                 n++;
             }
         return n;

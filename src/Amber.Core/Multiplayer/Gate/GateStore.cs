@@ -374,8 +374,9 @@ public sealed class GateStore
     public GateNetwork Network(GateConfig config)
     {
         var state = Read();
-        // 隐私++ 只发有节点码（会发心跳）的节点。不按当前是否健康过滤：客户端要留着完整列表，节点恢复后才连得回来。
-        var relays = state.Relays.Where(r => state.Privacy != PrivacyLevel.PlusPlus || r.HeartbeatPsk is not null).Select(r => GateEndpoint.TryParse(r.Address)).OfType<GateEndpoint>().ToList();
+        // 普通模式不发节点地址（玩家用不上，少暴露一点）。隐私++ 只发有节点码（会发心跳）的节点。
+        // 不按当前是否健康过滤：客户端要留着完整列表，节点恢复后才连得回来。
+        var relays = !state.Privacy.IsSplit() ? [] : state.Relays.Where(r => state.Privacy != PrivacyLevel.PlusPlus || r.HeartbeatPsk is not null).Select(r => GateEndpoint.TryParse(r.Address)).OfType<GateEndpoint>().ToList();
         var direct = state.Privacy.IsSplit() || !GateInvite.IsValidHost(config.PublicHost) ? null : new GateEndpoint(config.PublicHost, config.PublicPort);
         GateNetworkRotation? rotation = null;
         if (Rotation(state) is { } r)

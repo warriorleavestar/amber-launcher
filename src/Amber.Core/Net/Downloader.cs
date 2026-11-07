@@ -312,6 +312,8 @@ public sealed class Downloader
         var state = temp + ".state";
 
         Exception? last = null;
+        // 每个源最后一次失败的原因：全都失败时一起报出来（否则只看得到最后一个源，比如镜像限流，看不出官方源也连不上）。
+        var reasons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var candidates = OrderedCandidates(item.Url);
         foreach (var url in candidates)
         {
@@ -332,12 +334,14 @@ public sealed class Downloader
                 catch (HostThrottledException e)
                 {
                     last = e;
+                    reasons[HostOf(url)] = e.Message;
                     // 还有别的源就不等了；已有进度留着，换源后接着下。
                     if (url != candidates[^1]) break;
                 }
                 catch (Exception e) when (!ct.IsCancellationRequested)
                 {
                     last = e;
+                    reasons[HostOf(url)] = e.Message;
                     NoteFailure(url);
                     // 校验失败说明这份数据是坏的；换的源不支持分块时旧断点也接不上。
                     if (e is InvalidDataException or RangeNotSupportedException)
@@ -350,6 +354,8 @@ public sealed class Downloader
                 }
             }
         }
+        if (reasons.Count > 1 && last is HostThrottledException)
+            throw new IOException(L.F("core.net.download.every_source_failed", Path.GetFileName(item.LocalPath), string.Join("; ", reasons.Select(r => $"{r.Key}: {r.Value}"))), last);
         throw last ?? new IOException(L.F("core.net.download.failed", item.Url));
     }
 

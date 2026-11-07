@@ -11,7 +11,7 @@ namespace Amber.Core.Tests;
 /// <summary>入口端口轮换（TOTP 原理）：端口计算、邀请码和地址簿里的种子、网关和节点按时间窗开关端口、客户端照着连。</summary>
 public sealed class EntryRotationTests : IAsyncLifetime
 {
-    private static readonly GateRotation Rule = new(600, 41000, 59000);
+    private static readonly GateRotation Rule = new(600, 30000, 45000);
     private readonly string _root = Path.Combine(Path.GetTempPath(), "jay-rotation-test-" + Guid.NewGuid().ToString("N"));
     private GateStore _store = null!;
     private GateServer _server = null!;
@@ -213,6 +213,45 @@ public sealed class EntryRotationTests : IAsyncLifetime
         var back = list.ToMembership(list.Load().Single());
         Assert.Equal(membership.Network.Rotation.RelaySeeds.Count, back.Network!.Rotation!.RelaySeeds.Count);
         await PlayAsync(back, identity);
+    }
+
+    [Fact]
+    public async Task DowngradingToBasicKeepsRelayPlayersAndHidesRelaysFromNewOnes()
+    {
+        var a = AddRelay();
+        var b = AddRelay();
+        _store.SetPrivacy(PrivacyLevel.Plus);
+        await Until(() => a.HeartbeatConnected && b.HeartbeatConnected, "heartbeats");
+        _store.EnableRotation(Rule, TimeSpan.Zero);
+        using var identity = MemberIdentity.LoadOrCreate(Path.Combine(_root, "client"));
+        var old = await GateClient.EnrollAsync(_store.CreateInvite("Steve", TimeSpan.FromHours(1), 1, _serverKey.PublicKey), identity);
+        Assert.True(old.Network!.Level.IsSplit());
+        Assert.Null(old.Network.DirectRotation);
+
+        // 降回普通模式（轮换开着、没有过渡期）：网关为节点留着固定端口（只收节点转来的连接；测试里都在本机，没法区分来源，这里只看端口开着）。
+        _store.SetPrivacy(PrivacyLevel.Basic);
+        await Until(() => _server.RotatingPorts.Count > 0, "gate rotating");
+        Assert.True(_server.FixedPortOpen);
+
+        // 老玩家照旧经两个节点进服，拿到新的地址簿（普通模式、网关轮换种子、没有节点地址）。
+        GateNetwork? learned = null;
+        var opener = GateClient.Opener(old, identity, n => learned = n);
+        await using (var stream = await opener(CancellationToken.None))
+        {
+            var hello = LoginPackets("Steve");
+            await stream.WriteAsync(hello);
+            await stream.FlushAsync();
+            using var server = await _backend.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            var received = new byte[hello.Length];
+            await server.GetStream().ReadExactlyAsync(received).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(hello, received);
+        }
+        Assert.Equal(PrivacyLevel.Basic, learned!.Level);
+        Assert.Empty(learned.Relays);
+        Assert.NotNull(learned.DirectRotation);
+
+        // 下一次就直接走网关的轮换端口。
+        await PlayAsync(old with { Network = learned }, identity);
     }
 
     private static byte[] LoginPackets(string name) => [.. Handshake(2), .. Packet([0x00, .. String(name), .. new byte[16]])];

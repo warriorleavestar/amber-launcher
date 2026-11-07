@@ -260,6 +260,24 @@ public class DownloaderTests : IDisposable
     }
 
     [Fact]
+    public async Task EverySourceFailing_ReportsEachSource_NotJustTheThrottledMirror()
+    {
+        // 官方源连不上（这里是 404），最后一个源（镜像）又限流：报错里两边的原因都要有。
+        using var mirror = new TestServer();
+        var data = RandomBytes(5000);
+        mirror.Add("a.bin", data);
+        mirror.FailNext = 1000;
+        mirror.RetryAfter = "0";
+        var chain = new SourceChain([new OfficialSource(), new PrefixMirrorSource("镜像", new Dictionary<string, string> { [_server.Root] = mirror.Root })]);
+
+        var e = await Assert.ThrowsAsync<IOException>(() => Make(chain).DownloadOneAsync(new(_server.Root + "a.bin", Local("a.bin"), Sha1(data), data.Length)));
+
+        Assert.Contains(new Uri(_server.Root).Authority, e.Message);
+        Assert.Contains(new Uri(mirror.Root).Authority, e.Message);
+        Assert.Contains("a.bin", e.Message);
+    }
+
+    [Fact]
     public async Task Throttled_OnlySource_WaitsForRetryAfter()
     {
         var data = RandomBytes(5000);
