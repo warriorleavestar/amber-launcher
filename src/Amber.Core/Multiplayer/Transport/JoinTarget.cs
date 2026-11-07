@@ -135,10 +135,10 @@ public static partial class JoinTarget
         return b[0] == 198 && b[1] is 18 or 19;
     }
 
-    /// <summary>查 SRV 记录（Windows 的 DnsQuery）。查不到或不是 Windows 返回 null。</summary>
+    /// <summary>查 SRV 记录：Windows 用 DnsQuery，Mac/Linux 用系统解析库的 res_query（按系统的 DNS 设置）。查不到返回 null。</summary>
     public static (string Host, int Port)? LookupSrv(string name)
     {
-        if (!OperatingSystem.IsWindows()) return null;
+        if (!OperatingSystem.IsWindows()) return UnixResolver.QuerySrv(name);
         const ushort DnsTypeSrv = 33;
         var status = DnsQuery(name, DnsTypeSrv, 0, IntPtr.Zero, out var results, IntPtr.Zero);
         if (results == IntPtr.Zero) return null;
@@ -171,4 +171,130 @@ public static partial class JoinTarget
 
     [LibraryImport("dnsapi.dll")]
     private static partial void DnsRecordListFree(IntPtr list, int freeType);
+}
+
+/// <summary>Mac/Linux 上查 SRV：调系统的 res_query 拿原始应答，自己解析（只认 SRV，处理名字压缩）。</summary>
+internal static unsafe class UnixResolver
+{
+    private const int ClassIn = 1;
+    private const int TypeSrv = 33;
+    private static readonly Lock Gate = new();
+    private static bool _loaded;
+    private static delegate* unmanaged<byte*, int, int, byte*, int, int> _query;
+
+    /// <summary>
+    /// res_query 在哪：glibc 2.34 起在 libc 里，更早在 libresolv（导出名 __res_query）；macOS 在 libresolv.9（res_9_query / res_query）。
+    /// 都找不到时返回 false，查 SRV 就当查不到（和以前一样直接按名字连）。
+    /// </summary>
+    private static bool Load()
+    {
+        lock (Gate)
+        {
+            if (_loaded) return _query != null;
+            _loaded = true;
+            (string Library, string[] Names)[] candidates = OperatingSystem.IsMacOS()
+                ? [("/usr/lib/libresolv.9.dylib", ["res_9_query", "res_query"])]
+                : [("libc.so.6", ["res_query"]), ("libresolv.so.2", ["__res_query", "res_query"]), ("libresolv.so", ["__res_query", "res_query"])];
+            foreach (var (library, names) in candidates)
+            {
+                if (!NativeLibrary.TryLoad(library, out var handle)) continue;
+                foreach (var export in names)
+                    if (NativeLibrary.TryGetExport(handle, export, out var fn))
+                    {
+                        _query = (delegate* unmanaged<byte*, int, int, byte*, int, int>)fn;
+                        return true;
+                    }
+            }
+            return false;
+        }
+    }
+
+    internal static (string Host, int Port)? QuerySrv(string name)
+    {
+        if (!Load()) return null;
+        var answer = new byte[4096];
+        var question = System.Text.Encoding.ASCII.GetBytes(name + "\0");
+        int length;
+        // 老的 glibc 和 macOS 的 res_query 用进程共享的解析状态：一次只查一个。
+        lock (Gate)
+        {
+            fixed (byte* q = question)
+            fixed (byte* a = answer)
+                length = _query(q, ClassIn, TypeSrv, a, answer.Length);
+        }
+        return length > 0 ? ParseSrv(answer.AsSpan(0, Math.Min(length, answer.Length))) : null;
+    }
+
+    /// <summary>从 DNS 应答里挑优先级数字最小的 SRV（和 Windows 那边一样）。格式不对返回 null，不抛异常。</summary>
+    internal static (string Host, int Port)? ParseSrv(ReadOnlySpan<byte> message)
+    {
+        try
+        {
+            if (message.Length < 12) return null;
+            var questions = ReadU16(message, 4);
+            var answers = ReadU16(message, 6);
+            var offset = 12;
+            for (var i = 0; i < questions; i++)
+            {
+                ReadName(message, ref offset);
+                offset += 4;
+            }
+            (string Host, int Port, int Priority)? best = null;
+            for (var i = 0; i < answers; i++)
+            {
+                ReadName(message, ref offset);
+                var type = ReadU16(message, offset);
+                var rdLength = ReadU16(message, offset + 8);
+                var data = offset + 10;
+                offset = data + rdLength;
+                if (offset > message.Length) return best is { } partial ? (partial.Host, partial.Port) : null;
+                if (type != TypeSrv || rdLength < 7) continue;
+                var priority = ReadU16(message, data);
+                var port = ReadU16(message, data + 4);
+                var targetOffset = data + 6;
+                var target = ReadName(message, ref targetOffset);
+                // 目标是“.”表示这个服务明确不存在。
+                if (target.Length == 0 || port == 0) continue;
+                if (best is null || priority < best.Value.Priority) best = (target, port, priority);
+            }
+            return best is { } b ? (b.Host, b.Port) : null;
+        }
+        catch (IndexOutOfRangeException) { return null; }
+        catch (ArgumentOutOfRangeException) { return null; }
+        catch (FormatException) { return null; }
+    }
+
+    private static int ReadU16(ReadOnlySpan<byte> m, int at) => m[at] << 8 | m[at + 1];
+
+    /// <summary>读一个域名（支持压缩指针，最多跳 32 次防止循环），offset 移到名字后面。</summary>
+    private static string ReadName(ReadOnlySpan<byte> m, ref int offset)
+    {
+        var labels = new List<string>();
+        var at = offset;
+        var jumped = false;
+        for (var jumps = 0; ; )
+        {
+            var len = m[at];
+            if (len == 0)
+            {
+                if (!jumped) offset = at + 1;
+                break;
+            }
+            if ((len & 0xC0) == 0xC0)
+            {
+                if (++jumps > 32) throw new FormatException("dns name loop");
+                var pointer = (len & 0x3F) << 8 | m[at + 1];
+                if (!jumped) offset = at + 2;
+                jumped = true;
+                at = pointer;
+                continue;
+            }
+            if ((len & 0xC0) != 0) throw new FormatException("dns label");
+            labels.Add(System.Text.Encoding.ASCII.GetString(m.Slice(at + 1, len)));
+            at += 1 + len;
+        }
+        var name = string.Join('.', labels);
+        if (name.Length > 253) throw new FormatException("dns name too long");
+        return name;
+    }
 }
