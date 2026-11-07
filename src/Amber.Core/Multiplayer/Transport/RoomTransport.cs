@@ -39,6 +39,7 @@ public sealed class RoomTransport : IAsyncDisposable
     public TunnelServer? Server { get; private set; }
     public TunnelClient? Game { get; private set; }
     public TunnelClient? Chat { get; private set; }
+    public TunnelClient? Remote { get; private set; }
     public TunnelClient? Socks { get; private set; }
     public GameProxy? Proxy { get; private set; }
 
@@ -84,6 +85,7 @@ public sealed class RoomTransport : IAsyncDisposable
             {
                 TunnelService.Game when o.IsHost && settings.Wraps => TunnelServer.ToLocalPort(room.Port),
                 TunnelService.Chat when o.IsHost && settings.Wraps => TunnelServer.ToLocalPort(RoomChat.Port),
+                TunnelService.Remote when o.IsHost && settings.Wraps && room.FromInvite => TunnelServer.ToLocalPort(RemoteControl.RemoteHub.Port),
                 TunnelService.Socks when allowProxy => async (stream, ct) =>
                 {
                     // 收到 CONNECT 请求时（不是连接刚开时）确认公网 IP：查到太久了（路由器可能重新拨号）就先重查（最多 8 秒）；
@@ -101,6 +103,7 @@ public sealed class RoomTransport : IAsyncDisposable
             var (host, port) = o.Tun ? (EasyTierArgs.HostIp, TunnelSettings.Port) : ("127.0.0.1", o.LocalTunnelPort ?? throw new ArgumentException(L.T("core.mp.transport.join_port_required")));
             if (o.LocalForwardPort is { } game) Game = Add(new TunnelClient(game, TunnelClient.Wrapped(host, port, room, settings, TunnelService.Game), _log));
             if (o.LocalChatPort is { } chat) Chat = Add(new TunnelClient(chat, TunnelClient.Wrapped(host, port, room, settings, TunnelService.Chat), _log));
+            if (o.LocalRemotePort is { } remote && room.FromInvite) Remote = Add(new TunnelClient(remote, TunnelClient.Wrapped(host, port, room, settings, TunnelService.Remote), _log));
         }
 
         if (o.ProxyExit is { } exit && o.LocalSocksPort is { } socks)

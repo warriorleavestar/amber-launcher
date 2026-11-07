@@ -54,6 +54,8 @@ public partial class MainWindow : Window
             {
                 if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "content-layout")
                     await new ContentPageSelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
+                else if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "remote")
+                    await new RemoteSelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
                 else if (Environment.GetEnvironmentVariable("AMBER_SELFTEST_SCOPE") == "bake-notice")
                     await new BakeNoticeSelfTest(this, (MainViewModel)DataContext!, report).RunAsync();
                 else

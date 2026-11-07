@@ -218,6 +218,15 @@ internal static class ChatWire
     /// <summary>成员收到“你已被移出房间”后回的确认。不带字段：只决定房主什么时候断开，安全上仍靠钥匙作废。</summary>
     public static byte[] KickedAck() => KnockProtocol.Json(new JsonObject { ["ctl"] = "kicked-ack" });
 
+    /// <summary>远程控制：房主 → 成员“我想看/控你的屏幕”（带随机会话号）；成员 → 房主“不同意”。</summary>
+    public static byte[] RemoteRequest(string sessionId) => KnockProtocol.Json(new JsonObject { ["ctl"] = "remote-request", ["sid"] = sessionId });
+
+    public static byte[] RemoteDeny(string sessionId) => KnockProtocol.Json(new JsonObject { ["ctl"] = "remote-deny", ["sid"] = sessionId });
+
+    /// <summary>控制帧里的会话号（格式不对返回 null）。</summary>
+    internal static string? SessionOf(JsonObject json) =>
+        json["sid"] is JsonValue v && v.TryGetValue<string>(out var sid) && RemoteControl.RemoteConnector.IsSessionId(sid) ? sid : null;
+
     internal static int? EpochOf(JsonObject json) => json["epoch"] is JsonValue v && v.TryGetValue<int>(out var epoch) ? epoch : null;
 
     public static byte[] FromMember(ChatMessage message, out string nonce)
@@ -626,6 +635,23 @@ public sealed class ChatHub : IAsyncDisposable
         }
     }
 
+    /// <summary>远程控制：成员回了“不同意”（会话号、成员都由 RemoteHub 再核对）。</summary>
+    public event Action<MemberEntry, string>? RemoteDeclined;
+
+    /// <summary>
+    /// 远程控制：经这个成员自己的通道发“请求查看/控制”。他同意后由他连回房主的远程控制服务（带这个会话号）。
+    /// 不在线（没加入聊天）时返回 false。
+    /// </summary>
+    public bool SendRemoteRequest(MemberEntry entry, string sessionId)
+    {
+        if (_table is null || entry.IsHost || entry.Revoked) return false;
+        var frame = ChatWire.RemoteRequest(sessionId);
+        var sent = false;
+        foreach (var member in _members.Values)
+            if (member.Authenticated && !member.IsHost && ReferenceEquals(member.Entry, entry)) sent |= member.Outbox.Writer.TryWrite(frame);
+        return sent;
+    }
+
     private void OnRekeyAck(MemberEntry who, int epoch)
     {
         if (epoch == Volatile.Read(ref _rekeyEpoch) && _rekeyAcks.TryGetValue(who.Id, out var ack)) ack.TrySetResult();
@@ -681,6 +707,8 @@ public sealed class ChatHub : IAsyncDisposable
                     // 控制帧从不转发。成员只能回“rekey-ack”和“kicked-ack”；成员发来的“rekey”“kicked”（想替房主操作）不理。
                     Interlocked.Exchange(ref member.LastActivity, Clock().UtcTicks);
                     if (ctl == "rekey-ack" && member.Authenticated && member.Entry is { } who && ChatWire.EpochOf(control!) is { } epoch) OnRekeyAck(who, epoch);
+                    else if (ctl == "remote-deny" && member.Authenticated && !member.IsHost && member.Entry is { } decliner && ChatWire.SessionOf(control!) is { } sid)
+                        RemoteDeclined?.Invoke(decliner, sid);
                     // 只完成这条连接自己的等待：没收到过踢人通知的连接 KickAck 是 null，回了也没用。
                     else if (ctl == "kicked-ack" && member.Authenticated && member.Entry is not null) member.KickAck?.TrySetResult(true);
                     continue;
@@ -846,6 +874,16 @@ public sealed class ChatClient : IAsyncDisposable
     /// <summary>邀请房间：房主踢出了自己（经房主这条腿上来的通知）。只报一次；报过之后不再报 Disconnected。</summary>
     public event Action? Kicked;
 
+    /// <summary>邀请房间：房主请求看/控自己的屏幕（会话号）。只认房主这条腿上来的。</summary>
+    public event Action<string>? RemoteRequested;
+
+    /// <summary>远程控制：告诉房主“不同意”。</summary>
+    public async Task DeclineRemoteAsync(string sessionId, CancellationToken ct = default)
+    {
+        if (_key is null) return;
+        await SendControlAsync(ChatWire.RemoteDeny(sessionId), ct);
+    }
+
     /// <summary>测试用：收到踢人通知时不回确认（模拟旧客户端）。</summary>
     internal bool SkipKickAckForTest { get; init; }
 
@@ -962,6 +1000,7 @@ public sealed class ChatClient : IAsyncDisposable
                         }
                         Kicked?.Invoke();
                     }
+                    else if (ctl == "remote-request" && ChatWire.SessionOf(control!) is { } sid) RemoteRequested?.Invoke(sid);
                     continue;
                 }
                 if ((_cipher is not null ? _cipher.Open(frame) : ChatWire.ParseRelay(frame)) is not { } message) continue;

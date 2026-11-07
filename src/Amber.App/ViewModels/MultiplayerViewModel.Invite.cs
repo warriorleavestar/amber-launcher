@@ -304,6 +304,8 @@ public sealed partial class MultiplayerViewModel
     /// </summary>
     private bool SwitchNetwork(RoomCode next)
     {
+        // 换网络：远程控制会话一律断开（经旧网络的连接本来也要断）。
+        StopAllRemote();
         if (_direct is { } direct)
         {
             // 直连房间：直连桥不动（钥匙和房间无关），只让直连会话换上新房间重启 EasyTier。

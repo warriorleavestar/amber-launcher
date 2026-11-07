@@ -12,6 +12,8 @@ public enum TunnelService : byte
     Chat = 2,
     /// <summary>“仅游戏”转发：经出口成员的 SOCKS5 代理上网。</summary>
     Socks = 3,
+    /// <summary>邀请房间的远程控制（成员连房主的远程控制服务；里面再跑一层成员钥匙的握手）。</summary>
+    Remote = 4,
 }
 
 /// <summary>

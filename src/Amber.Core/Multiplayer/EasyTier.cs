@@ -146,6 +146,8 @@ public sealed record EasyTierOptions(
 {
     /// <summary>封装模式下加入方：本机这个端口经 EasyTier 转发到房主的封装端口（游戏和聊天都走它）。</summary>
     public int? LocalTunnelPort { get; init; }
+    /// <summary>邀请房间的加入方：远程控制连房主用的本机端口（不建网卡时经 EasyTier 或封装通道转到房主的 47662）。</summary>
+    public int? LocalRemotePort { get; init; }
     /// <summary>允许房间里的人经自己“仅游戏”转发（只开 SOCKS5，不用建网卡）。</summary>
     public bool AllowProxy { get; init; }
     /// <summary>“仅游戏”转发经过的成员（虚拟 IP）。</summary>
@@ -247,6 +249,8 @@ public static class EasyTierArgs
             args.AddRange(["--port-forward", $"tcp://127.0.0.1:{local}/{HostIp}:{o.Room.Port}"]);
             // 房间聊天：本机另一个端口转发到房主的聊天服务。
             if (o.LocalChatPort is { } chat) args.AddRange(["--port-forward", $"tcp://127.0.0.1:{chat}/{HostIp}:{RoomChat.Port}"]);
+            // 邀请房间的远程控制：本机另一个端口转发到房主的远程控制服务。
+            if (o.LocalRemotePort is { } remote && o.Room.FromInvite) args.AddRange(["--port-forward", $"tcp://127.0.0.1:{remote}/{HostIp}:{RemoteControl.RemoteHub.Port}"]);
         }
         if (!o.Tun && o.ProxyExit is { } proxyExit)
         {
@@ -276,6 +280,7 @@ public static class EasyTierArgs
             {
                 ports.Add(o.Room.Port);
                 ports.Add(RoomChat.Port);
+                if (o.Room.FromInvite) ports.Add(RemoteControl.RemoteHub.Port);
             }
             if (o.ServesSpeedTest) ports.Add(SpeedTestServer.Port);
         }

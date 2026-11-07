@@ -281,6 +281,7 @@ public sealed partial class MultiplayerViewModel
             AttachDirect(direct, room);
             JoinAddress = FullLanMode ? $"{EasyTierArgs.HostIp}:{room.Port}" : $"127.0.0.1:{direct.LocalGamePort}";
             _localChatPort = FullLanMode ? null : direct.LocalChatPort;
+            _localRemotePort = FullLanMode ? null : direct.LocalRemotePort;
             RestoreChatHistory(room);
             ChatStatus = L.T("multiplayer.chat.awaiting_host");
             Status = direct.UsingFallbackNode ? L.T("multiplayer.direct.fallback") : L.T("multiplayer.direct.connected");

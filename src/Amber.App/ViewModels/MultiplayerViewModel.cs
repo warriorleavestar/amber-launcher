@@ -535,15 +535,18 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         var wraps = room.Tunnel.Wraps;
         var local = FullLanMode && !wraps ? (int?)null : EasyTierArgs.FreeTcpPort();
         var chatPort = FullLanMode && !wraps ? (int?)null : EasyTierArgs.FreeTcpPort();
+        var remotePort = room.FromInvite && !(FullLanMode && !wraps) ? EasyTierArgs.FreeTcpPort() : (int?)null;
         if (!TryStartSession(new EasyTierOptions(room, false, TestPeers ?? _service.MultiplayerPeers, EasyTierArgs.FreeTcpPort(), local, TestListeners, Guid.NewGuid().ToString(), FullLanMode, chatPort, FullLanMode && AllowExitNode)
             {
                 LocalTunnelPort = wraps && !FullLanMode ? EasyTierArgs.FreeTcpPort() : null,
+                LocalRemotePort = remotePort,
                 AllowProxy = AllowGameProxy,
             })) return false;
         _room = room;
         MarkJoinStarted(newRoom: true);
         RestoreChatHistory(room);
         _localChatPort = chatPort;
+        _localRemotePort = remotePort;
         ChatStatus = L.T("multiplayer.chat.awaiting_host");
         Mode = "join";
         // 完整局域网模式下直接连房主的虚拟 IP；普通模式连本机转发端口。
@@ -686,6 +689,9 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         try
         {
             _hub = new ChatHub(room, RoomChat.Port);
+            var hub = _hub;
+            hub.RemoteDeclined += (who, sid) => _remoteHub?.Decline(who, sid);
+            StartRemoteHub(room);
             // 房主自己的客户端走转发留给它的本机端口（房间连接满了也能连上）。
             _ = ConnectChatAsync("127.0.0.1", _hub.HostPort);
         }
@@ -703,6 +709,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         client.Received += m => Dispatcher.UIThread.Post(() => OnChatMessage(client, m));
         client.Rekeyed += next => Dispatcher.UIThread.Post(() => OnRekey(client, next));
         client.Kicked += () => Dispatcher.UIThread.Post(() => OnKicked(client));
+        client.RemoteRequested += sid => Dispatcher.UIThread.Post(() => _ = OnRemoteRequestedAsync(client, sid));
         client.Disconnected += () => Dispatcher.UIThread.Post(() =>
         {
             if (_chat != client) return;
@@ -790,6 +797,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         // 端口一时被占（比如刚结束的房间还没放开）时，下次刷新再试。
         if (IsHosting && _hub is null && _room is { } room) StartHub(room);
         if (IsHosting && _chat is null && _hub is not null) _ = ConnectChatAsync("127.0.0.1", _hub.HostPort);
+        TickRemote();
     }
 
     private bool _hubOnVirtualIp;
@@ -1012,6 +1020,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         HostFingerprint = "";
         _localChatPort = null;
         _hubOnVirtualIp = false;
+        StopRemote();
         var chat = _chat;
         var hub = _hub;
         _chat = null;
