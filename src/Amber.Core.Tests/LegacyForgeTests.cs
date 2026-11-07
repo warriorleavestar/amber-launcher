@@ -127,6 +127,65 @@ public class LegacyForgeTests : IDisposable
         Assert.Equal(expected, GameLauncher.IsPreLaunchwrapperHome(new VersionJson { ReleaseTime = released, AmberForge = amberForge }));
 
     [Fact]
+    public void LegacyHomeLinksTheGamesMinecraftDirectoryToTheInstance()
+    {
+        // 测试只在临时目录里建链接，不碰用户真实的 minecraft 目录。
+        var instance = Path.Combine(_dir, "实例 1");
+        Directory.CreateDirectory(instance);
+        var root = Path.Combine(_dir, "legacyhome");
+        var home = AsciiPaths.LegacyHome(instance, root, null);
+        if (home is null && OperatingSystem.IsWindows()) return; // 没有权限建联接的 Windows 环境
+        Assert.NotNull(home);
+        Assert.StartsWith(root, home);
+        var link = Path.Combine(home, AsciiPaths.LegacyMinecraftDirectory());
+        if (OperatingSystem.IsMacOS()) Assert.EndsWith(Path.Combine("Library", "Application Support", "minecraft"), link);
+        else Assert.EndsWith(".minecraft", link);
+        // 游戏写到“家目录里的 minecraft”就是写到实例目录。
+        File.WriteAllText(Path.Combine(link, "options.txt"), "lang:zh_CN");
+        Assert.True(File.Exists(Path.Combine(instance, "options.txt")));
+        // 第二次直接复用；实例换了位置时换新链接，旧目标不受影响。
+        Assert.Equal(home, AsciiPaths.LegacyHome(instance, root, null));
+        Assert.True(File.Exists(Path.Combine(instance, "options.txt")));
+    }
+
+    [Fact]
+    public void LegacyHomeNeverReplacesARealDirectory()
+    {
+        var instance = Path.Combine(_dir, "inst");
+        Directory.CreateDirectory(instance);
+        var root = Path.Combine(_dir, "legacyhome");
+        var first = AsciiPaths.LegacyHome(instance, root, null);
+        if (first is null) return;
+        var link = Path.Combine(first, AsciiPaths.LegacyMinecraftDirectory());
+        new DirectoryInfo(link).Delete();
+        Directory.CreateDirectory(link);
+        File.WriteAllText(Path.Combine(link, "keep.txt"), "x");
+        Assert.Null(AsciiPaths.LegacyHome(instance, root, null));
+        Assert.True(File.Exists(Path.Combine(link, "keep.txt")));
+    }
+
+    [Fact]
+    public void LegacyHomeIsPassedToTheGameProcess()
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("java");
+        psi.ArgumentList.Add("-cp");
+        psi.ArgumentList.Add("a.jar");
+        psi.ArgumentList.Add("net.minecraft.client.Minecraft");
+        GameLauncher.ApplyLegacyHome(psi, "/tmp/legacy home");
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal("/tmp/legacy home", psi.Environment["APPDATA"]);
+            Assert.Equal(3, psi.ArgumentList.Count);
+        }
+        else
+        {
+            // 必须在主类前面，作为一个完整参数（路径里有空格也不拆开）。
+            Assert.Equal("-Duser.home=/tmp/legacy home", psi.ArgumentList[0]);
+            Assert.Equal("net.minecraft.client.Minecraft", psi.ArgumentList[^1]);
+        }
+    }
+
+    [Fact]
     public void EnsureLibrariesCopiesAndReplacesBadCopies()
     {
         var root = Path.Combine(_dir, "root");

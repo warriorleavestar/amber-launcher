@@ -65,31 +65,36 @@ public static class AsciiPaths
     }
 
     /// <summary>
-    /// 1.6 以前的 Minecraft 和老 FML 不认 --gameDir，固定用 %APPDATA%\.minecraft 做“家目录”（日志、lib、coremods 都写在那）。
-    /// 给这个实例建 本地数据\Amber\legacyhome\哈希\.minecraft → 实例目录的联接，启动时只给这个游戏进程把 APPDATA 指过去，
-    /// 用户真正的 .minecraft 就不会被写。返回要设成 APPDATA 的目录；建不了时返回 null。
+    /// 1.6 以前的 Minecraft 和老 FML 不认 --gameDir，固定用系统的 minecraft 目录做“家目录”（日志、lib、coremods 都写在那）：
+    /// Windows 是 %APPDATA%\.minecraft，Linux 是 ~/.minecraft，macOS 是 ~/Library/Application Support/minecraft。
+    /// 给这个实例建 本地数据/Amber/legacyhome/哈希/（对应的相对位置）→ 实例目录的链接，启动时只给这个游戏进程把家目录指过去
+    /// （Windows 改 APPDATA 环境变量，Mac/Linux 加 -Duser.home），用户真正的 minecraft 目录就不会被写。
+    /// 返回要当作家目录的目录；建不了时返回 null。
     /// </summary>
-    public static string? LegacyHome(string workDir, Action<string>? log = null)
+    public static string? LegacyHome(string workDir, Action<string>? log = null) =>
+        LegacyHome(workDir, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Amber", "legacyhome"), log);
+
+    internal static string? LegacyHome(string workDir, string root, Action<string>? log)
     {
-        if (!OperatingSystem.IsWindows()) return null;
         var full = FullDirectoryPath(workDir);
-        var name = "h" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(full.ToLowerInvariant())))[..10];
-        var parent = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Amber", "legacyhome", name);
-        if (!Representable(parent)) parent = Path.Combine(Environment.GetEnvironmentVariable("PUBLIC") ?? @"C:\Users\Public", "AmberLegacyHome", name);
-        var link = Path.Combine(parent, ".minecraft");
+        var name = "h" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(OperatingSystem.IsLinux() ? full : full.ToLowerInvariant())))[..10];
+        var parent = Path.Combine(root, name);
+        if (OperatingSystem.IsWindows() && !Representable(parent)) parent = Path.Combine(Environment.GetEnvironmentVariable("PUBLIC") ?? @"C:\Users\Public", "AmberLegacyHome", name);
+        var link = Path.Combine(parent, LegacyMinecraftDirectory());
         try
         {
-            Directory.CreateDirectory(parent);
+            Directory.CreateDirectory(Path.GetDirectoryName(link)!);
             var info = new DirectoryInfo(link);
-            if (info.Exists && info.LinkTarget is { } target && FullDirectoryPath(target).Equals(full, StringComparison.OrdinalIgnoreCase))
+            if (info.Exists && info.LinkTarget is { } target && FullDirectoryPath(Path.GetFullPath(target, Path.GetDirectoryName(link)!)).Equals(full, OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase))
                 return parent;
-            if (info.Exists)
+            if (info.Exists || info.LinkTarget is not null)
             {
-                // 只移除旧联接本身，不碰目标和普通目录；新联接仍由原生接口独占创建。
+                // 只移除旧链接本身，不碰目标和普通目录（悬空的旧链接 Exists 为 false，但 LinkTarget 有值）。
                 if (info.LinkTarget is null) return null;
                 info.Delete();
             }
-            WindowsJunction.Create(link, full);
+            if (OperatingSystem.IsWindows()) WindowsJunction.Create(link, full);
+            else Directory.CreateSymbolicLink(link, full);
             return parent;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
@@ -98,6 +103,10 @@ public static class AsciiPaths
         }
         return null;
     }
+
+    /// <summary>老版本游戏在家目录下找的 minecraft 目录（相对家目录）。</summary>
+    internal static string LegacyMinecraftDirectory() =>
+        OperatingSystem.IsMacOS() ? Path.Combine("Library", "Application Support", "minecraft") : ".minecraft";
 
     private static string FullDirectoryPath(string directory)
     {

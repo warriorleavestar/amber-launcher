@@ -307,12 +307,12 @@ public sealed class GameLauncher(GameDirectory dir)
             DeleteNoTraceDir(noTraceDir);
             throw;
         }
-        // 1.6 以前的版本（和 Amber 装的老 Forge）把 %APPDATA%\.minecraft 当家目录，改成指向这个实例。
+        // 1.6 以前的版本（和 Amber 装的老 Forge）把系统的 minecraft 目录当家目录，改成指向这个实例。
         var realWorkDir = RealRoot is { } real ? AsciiPaths.Remap(workDir, dir.Root, real) : workDir;
         if (IsPreLaunchwrapperHome(version) && AsciiPaths.LegacyHome(realWorkDir, onOutput) is { } home)
         {
-            psi.Environment["APPDATA"] = home;
-            onOutput?.Invoke(L.F("core.launch.game.legacyappdata", home));
+            ApplyLegacyHome(psi, home);
+            onOutput?.Invoke(L.F(OperatingSystem.IsWindows() ? "core.launch.game.legacyappdata" : "core.launch.game.legacyuserhome", home));
         }
 
         Process process;
@@ -368,6 +368,13 @@ public sealed class GameLauncher(GameDirectory dir)
     public static int SweepNoTrace(string? root = null) => NoTraceDirs.Sweep(root ?? DefaultNoTraceRoot, DateTime.UtcNow);
 
     /// <summary>1.6.1（2013-06-25）以前发布的版本，或者 Amber 装的老 Forge。</summary>
+    /// <summary>Windows 上老版本按 APPDATA 找 .minecraft；Mac/Linux 上按 Java 的 user.home。JVM 参数放最前面（主类之前都行）。</summary>
+    internal static void ApplyLegacyHome(ProcessStartInfo psi, string home)
+    {
+        if (OperatingSystem.IsWindows()) psi.Environment["APPDATA"] = home;
+        else psi.ArgumentList.Insert(0, "-Duser.home=" + home);
+    }
+
     internal static bool IsPreLaunchwrapperHome(VersionJson version) =>
         version.AmberForge is not null
         || DateTimeOffset.TryParse(version.ReleaseTime, out var released) && released < new DateTimeOffset(2013, 6, 25, 0, 0, 0, TimeSpan.Zero);
