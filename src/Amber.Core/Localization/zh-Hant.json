@@ -1151,6 +1151,7 @@
   "home.status.in_game": "{0} 執行中 · 已 {1} 分鐘",
   "home.status.maybe_in_game": "{0} 可能已進入遊戲 · 已 {1} 分鐘",
   "home.status.exiting": "正在儲存並結束 {0}…",
+  "home.status.exiting_signal": "已要求 {0} 結束。找不到遊戲視窗，送出的是結束訊號：新版本會正常存檔，較舊的版本可能來不及存檔。",
   "home.status.preparing_other": "另一個實例正在準備啟動，等它起來後再試。",
   "home.status.repairing": "正在補裝它依賴的原版 {0}…",
   "home.multi.warning": "已有遊戲在執行（{0}）。再啟動會同時開兩個用戶端。",

@@ -67,7 +67,7 @@
 | 启动游戏 | ✅ | ✅ | 🟡 | `Launch/GameLauncher.cs` |
 | 非 ASCII 路径（中文路径）兜底 | ✅ 目录联接 | 不需要 | 不需要 | `Launch/AsciiPaths.cs`、`Launch/WindowsJunction.cs` |
 | 1.6 以前老版本的家目录重定向 | ✅ | 🪟 没做，会写进真实 `minecraft` 目录 | 🪟 同左 | `Launch/AsciiPaths.cs` `LegacyHome` |
-| 正常关闭游戏（让游戏存档） | ✅ `CloseMainWindow` | ✅ `NSRunningApplication.terminate` | 🪟 `CloseMainWindow` 在 Linux 上无效 | `Launch/GameLauncher.cs`、`Launch/MacGameProcess.cs` |
+| 正常关闭游戏（让游戏存档） | ✅ `CloseMainWindow` | ✅ `NSRunningApplication.terminate` | 🟡 X11 发 `WM_DELETE_WINDOW`，Wayland 发 SIGTERM（待真机验证） | `Launch/GameLauncher.cs`、`Launch/MacGameProcess.cs`、`Launch/LinuxGameProcess.cs` |
 | 可用内存检测（自动内存） | ✅ `GlobalMemoryStatusEx` | 🟡 用 GC 信息估算 | 🟡 同左 | `Launch/InstanceSettings.cs` |
 | 启动前后命令、导出启动脚本 | ✅ cmd / .bat | ✅ /bin/sh / .sh | ✅ | `ViewModels/HomeViewModel.cs`、`Launch/Toolbox.cs` |
 | 账号令牌加密 | ✅ DPAPI | 🟡 本机密钥文件（0600） | 🟡 同左 | `Auth/Accounts.cs` |
@@ -126,7 +126,7 @@ Linux 可以补的：SDKMAN（`~/.sdkman/candidates/java`）、`/usr/lib64/jvm`�
 
 - **中文路径兜底（只 Windows 需要）**：Windows 上 Java 按 ANSI 代码页读路径，系统语言是英文时中文路径会变成问号。`AsciiPaths.cs` 检测到当前代码页表示不了路径，就用 `WindowsJunction.cs` 建一个纯英文名的目录联接（不需要管理员），用联接路径启动。Mac/Linux 是 UTF-8，直接跳过。
 - **老版本家目录 🪟**：1.6 以前的 MC 和老 FML 不认 `--gameDir`，固定把 `%APPDATA%\.minecraft` 当家目录。Windows 上 `AsciiPaths.LegacyHome` 建一个指向实例的联接，只给这个游戏进程把 `APPDATA` 指过去，这样不会写进用户真正的 `.minecraft`。Mac/Linux 上这个函数直接返回 null，老版本会写进 `~/Library/Application Support/minecraft` 或 `~/.minecraft`。适配做法：建一个临时目录，里面放指向实例的符号链接（Linux 叫 `.minecraft`，macOS 是 `Library/Application Support/minecraft`），启动时设 `-Duser.home=<临时目录>`（老版本按 `user.home` 找家目录）。
-- **正常关闭**：`GameLauncher.RequestExit`。Windows 用 `Process.CloseMainWindow()`，macOS 用 `MacGameProcess.cs`（经 objc 运行时调 `NSRunningApplication terminate`，和 Dock 的“退出”一样）。Linux 上 `CloseMainWindow` 什么都不做，返回 false。可选方案：X11 下发 `WM_DELETE_WINDOW`（或者调 `xdotool`/`wmctrl`），Wayland 下没有通用办法，可以退而发 SIGTERM（JVM 会跑关闭钩子，但不保证游戏存档）。
+- **正常关闭**：`GameLauncher.RequestExit`。Windows 用 `Process.CloseMainWindow()`，macOS 用 `MacGameProcess.cs`（经 objc 运行时调 `NSRunningApplication terminate`，和 Dock 的“退出”一样）。Linux 用 `LinuxGameProcess.cs`：X11 下找 `_NET_WM_PID` 是游戏进程的窗口（往下找几层，窗口管理器会套边框），发 `WM_DELETE_WINDOW`；找不到这样的窗口时（Wayland 原生窗口、没有 X11、还在加载、老 LWJGL 没设 PID）发 SIGTERM（`UnixGameProcess.cs`）（JVM 跑关闭钩子，新版本会存档，老版本不保证），界面提示“可能来不及存档”。libX11 运行时按需加载，没有就当没有 X11。
 - **内存**：`InstanceSettings.FreePhysicalMb` 在 Windows 用 `GlobalMemoryStatusEx`，其他平台用 `GC.GetGCMemoryInfo()` 估算（容器里会被 cgroup 限制影响）。Linux 可以读 `/proc/meminfo` 的 `MemAvailable`，macOS 可以用 `host_statistics64` 或 `sysctl vm.page_free_count`。
 - **启动前后命令**：Windows 走 `cmd.exe /s /c "…"`，其他平台走 `/bin/sh -c`（`HomeViewModel.cs`）。
 - **导出启动脚本**：Windows 生成 `.bat`，其他平台生成带 `#!/bin/sh` 的 `.sh` 并加执行权限（`Toolbox.cs`）。令牌默认换成占位符。
@@ -385,7 +385,7 @@ CI 的单元测试只在 `windows-latest` 上跑。有一些测试本身按 `Ope
 |---|---|---|---|---|
 | 1 | Jay 服务器访问密钥加密 | `Gate/JayServers.cs` `Protect`/`Unprotect` | 先改成和 `Auth/Accounts.cs` 一样的 AES-GCM + 本机密钥（新前缀，比如 `aesgcm:`），旧的 `plain:` 能读，下次保存自动迁移；第二批再接钥匙串 | Mac/Linux 上 `jay-servers.json` 里看不到明文密钥；旧文件升级后还能进服；补单元测试 |
 | 2 | 老版本（1.6 以前）家目录 | `Launch/AsciiPaths.cs` `LegacyHome`、`GameLauncher.cs` 第 310 行附近 | 在数据目录下建 `legacyhome/<哈希>/`，里面放指向实例的符号链接（Linux：`.minecraft`；macOS：`Library/Application Support/minecraft`），启动时加 `-Duser.home=<该目录>`；符号链接用 `Directory.CreateSymbolicLink` | 在测试目录里启动 1.5.2 + 老 Forge，用户真实的 minecraft 目录没有新文件 |
-| 3 | 正常关闭游戏（Linux） | `GameLauncher.RequestExit` | X11：找到游戏进程的窗口（`_NET_WM_PID`）发 `WM_DELETE_WINDOW`；Wayland 或找不到窗口时发 SIGTERM，并在界面上提示“可能来不及存档” | X11 下点“关闭游戏”，世界正常保存（看 `latest.log` 的 Saving 行） |
+| 3 | ✅ 正常关闭游戏（Linux） | `GameLauncher.RequestExit` | X11：找到游戏进程的窗口（`_NET_WM_PID`）发 `WM_DELETE_WINDOW`；Wayland 或找不到窗口时发 SIGTERM，并在界面上提示“可能来不及存档” | X11 下点“关闭游戏”，世界正常保存（看 `latest.log` 的 Saving 行） |
 | 4 | EasyTier 不残留 | `Multiplayer/EasyTier.cs` `Launch` | 每次启动把 PID + 进程启动时间写进 `easytier/run/*.pid`；Jay 启动和开房间前清理“PID 还在、启动时间对得上”的旧进程。Linux 额外可以用 `prctl(PR_SET_PDEATHSIG, SIGTERM)`（需要一个小包装进程，因为 .NET 的 `Process.Start` 不能在 fork 后插代码） | `kill -9` 掉 Jay 后重新打开，没有 easytier-core 残留 |
 | 5 | 不支持的选项先说明 | `Views/MultiplayerPage.axaml`、`MultiplayerViewModel.cs`、`TestMatrix.cs` | 在 Core 里加 `PlatformFeatures`（完整局域网、全部流量出口、远程控制、极端加密各一个布尔），界面按它禁用并显示原因；全条件测试排除不支持的步骤。之后每补齐一项就把对应开关改成 true | Mac/Linux 上勾不了完整局域网，旁边有说明；全条件测试不再出现必然失败的步骤 |
 | 6 | “仅游戏”出口拦截非默认路由 | `Transport/ExitPolicy.cs` `NonDefaultRoutes` | Linux 读 `/proc/net/route` 和 `/proc/net/ipv6_route`；macOS 用 `sysctl` `NET_RT_DUMP`（或者先解析 `netstat -rn -f inet` / `inet6`）。太宽的路由（IPv4 短于 /8、IPv6 短于 /16）照 Windows 的规则不拦 | 有 VPN 内网路由时，经出口连那个网段被拒绝；补单元测试（解析部分用样例文本） |

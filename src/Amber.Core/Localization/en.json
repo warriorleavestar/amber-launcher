@@ -1180,6 +1180,7 @@
   "home.status.in_game": "{0} is running · {1} min",
   "home.status.maybe_in_game": "{0} has probably reached the game · {1} min",
   "home.status.exiting": "Saving and quitting {0}…",
+  "home.status.exiting_signal": "Asked {0} to quit. The game window could not be found, so a termination signal was sent: newer versions save normally, older ones may not get to save.",
   "home.status.preparing_other": "Another instance is still getting ready. Try again once it has started.",
   "home.status.repairing": "Reinstalling the base version {0} it needs…",
   "home.multi.warning": "A game is already running ({0}). Launching again opens a second client.",

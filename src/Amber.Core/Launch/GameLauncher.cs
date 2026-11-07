@@ -43,12 +43,18 @@ public sealed record LaunchOptions
 public sealed class GameLauncher(GameDirectory dir)
 {
     /// <summary>请求游戏正常退出，让游戏自己保存世界。</summary>
-    public static bool RequestExit(Process game)
+    public static bool RequestExit(Process game) => RequestExitDetailed(game) != ExitRequest.NotSent;
+
+    /// <summary>
+    /// 请求游戏正常退出（像点窗口的关闭按钮）。Windows 关主窗口，macOS 发“退出”，
+    /// Linux 在 X11 下给游戏窗口发 WM_DELETE_WINDOW，找不到窗口（Wayland、还在加载）时发 SIGTERM（老版本可能来不及存档）。
+    /// </summary>
+    public static ExitRequest RequestExitDetailed(Process game)
     {
-        if (game.HasExited) return false;
-        if (OperatingSystem.IsMacOS()) return MacGameProcess.RequestExit(game.Id);
-        if (OperatingSystem.IsLinux()) return UnixGameProcess.RequestExit(game.Id);
-        return game.CloseMainWindow();
+        if (game.HasExited) return ExitRequest.NotSent;
+        if (OperatingSystem.IsMacOS()) return MacGameProcess.RequestExit(game.Id) ? ExitRequest.WindowClose : ExitRequest.NotSent;
+        if (OperatingSystem.IsLinux()) return LinuxGameProcess.RequestExit(game.Id);
+        return game.CloseMainWindow() ? ExitRequest.WindowClose : ExitRequest.NotSent;
     }
 
     public GameDirectory GameDir => dir;

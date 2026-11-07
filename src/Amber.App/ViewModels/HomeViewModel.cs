@@ -690,10 +690,12 @@ public sealed partial class HomeViewModel : PageViewModel
         run.Exiting = true;
         UpdateRunState();
         SetOwnedStatus(StatusMessage.Info("home.status.exiting", run.Id));
-        bool closed;
-        try { closed = GameLauncher.RequestExit(game); }
-        catch (InvalidOperationException) { closed = false; }
-        if (!closed)
+        ExitRequest request;
+        try { request = GameLauncher.RequestExitDetailed(game); }
+        catch (InvalidOperationException) { request = ExitRequest.NotSent; }
+        // Linux 上找不到能关的游戏窗口（Wayland）时发的是结束信号：新版本照常保存，老版本可能来不及。
+        if (request == ExitRequest.Signal) SetOwnedStatus(StatusMessage.Info("home.status.exiting_signal", run.Id));
+        if (request == ExitRequest.NotSent)
         {
             // 没有能关的主窗口（还在加载、或者是无窗口的老版本）：游戏没收到退出请求，还在正常运行，
             // “正在退出”撤回；直接给出这一局的强制结束。
