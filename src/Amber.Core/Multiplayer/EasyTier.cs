@@ -66,6 +66,11 @@ public sealed class EasyTierInstaller(Downloader downloader, string dataDir)
     public string InstallDir => Path.Combine(dataDir, "easytier", EasyTierRelease.Version, Asset.Platform);
     public string CorePath => Path.Combine(InstallDir, Asset.CoreName);
     public string CliPath => Path.Combine(InstallDir, Asset.CliName);
+    /// <summary>Mac/Linux 上记录正在运行的 easytier-core（崩溃后清理用，见 <see cref="EasyTierProcessGuard"/>）。</summary>
+    public string PidDir => Path.Combine(dataDir, "easytier", "pids");
+
+    /// <summary>结束上次 Jay 没收尾留下的 easytier-core（Mac/Linux）。Jay 启动时和每次开始联机前调用。返回结束了几个。</summary>
+    public int SweepOrphans() => EasyTierProcessGuard.Sweep(PidDir);
     /// <summary>WinDivert64.sys 是完整局域网模式转发游戏局域网广播要用的驱动文件，缺了也重新解压。</summary>
     public bool IsInstalled => File.Exists(CorePath) && File.Exists(CliPath) && (!OperatingSystem.IsWindows() || File.Exists(Path.Combine(InstallDir, "WinDivert64.sys")));
 
@@ -332,18 +337,20 @@ public sealed class EasyTierSession : IEasyTierSession
     private readonly string _cliPath;
     private readonly int _rpcPort;
     private readonly IDisposable? _job;
+    private readonly string? _pidFile;
     private readonly Queue<string> _output = new();
 
     public EasyTierOptions Options { get; }
     public bool HasExited => _process.HasExited;
     public event Action<string>? Output;
 
-    private EasyTierSession(Process process, string cliPath, EasyTierOptions options, ProcessJob? job)
+    private EasyTierSession(Process process, string cliPath, EasyTierOptions options, ProcessJob? job, string? pidFile)
     {
         _process = process;
         _cliPath = cliPath;
         _rpcPort = options.RpcPort;
         _job = job;
+        _pidFile = pidFile;
         Options = options;
     }
 
@@ -351,8 +358,8 @@ public sealed class EasyTierSession : IEasyTierSession
 
     public static EasyTierSession Start(EasyTierInstaller installer, EasyTierOptions options, string workDir)
     {
-        var (process, job) = Launch(installer.CorePath, EasyTierArgs.Build(options), EasyTierArgs.Environment(options), workDir);
-        var session = new EasyTierSession(process, installer.CliPath, options, job);
+        var (process, job, pidFile) = Launch(installer, EasyTierArgs.Build(options), EasyTierArgs.Environment(options), workDir);
+        var session = new EasyTierSession(process, installer.CliPath, options, job, pidFile);
         process.OutputDataReceived += (_, e) => session.OnLine(e.Data);
         process.ErrorDataReceived += (_, e) => session.OnLine(e.Data);
         process.BeginOutputReadLine();
@@ -360,11 +367,15 @@ public sealed class EasyTierSession : IEasyTierSession
         return session;
     }
 
-    /// <summary>启动 easytier-core（密钥经环境变量传）；Windows 上放进作业对象。输出要调用方开始读。</summary>
-    internal static (Process Process, ProcessJob? Job) Launch(string corePath, IEnumerable<string> args, IReadOnlyDictionary<string, string> environment, string workDir)
+    /// <summary>
+    /// 启动 easytier-core（密钥经环境变量传）；Windows 上放进作业对象，Mac/Linux 上经看门脚本启动并记 PID 文件，
+    /// Jay 崩溃或被强制结束后 easytier 不会留着。输出要调用方开始读。
+    /// </summary>
+    internal static (Process Process, ProcessJob? Job, string? PidFile) Launch(EasyTierInstaller installer, IEnumerable<string> args, IReadOnlyDictionary<string, string> environment, string workDir)
     {
         Directory.CreateDirectory(workDir);
-        var info = new ProcessStartInfo(corePath)
+        installer.SweepOrphans();
+        var info = new ProcessStartInfo(installer.CorePath)
         {
             WorkingDirectory = workDir,
             UseShellExecute = false,
@@ -374,7 +385,9 @@ public sealed class EasyTierSession : IEasyTierSession
         };
         foreach (var a in args) info.ArgumentList.Add(a);
         foreach (var (name, value) in environment) info.Environment[name] = value;
+        EasyTierProcessGuard.Wrap(info);
         var process = Process.Start(info) ?? throw new InvalidOperationException(L.T("core.mp.component.startfailed"));
+        var pidFile = EasyTierProcessGuard.Record(installer.PidDir, process);
         ProcessJob? job = null;
         if (OperatingSystem.IsWindows())
         {
@@ -389,7 +402,7 @@ public sealed class EasyTierSession : IEasyTierSession
                 job = null;
             }
         }
-        return (process, job);
+        return (process, job, pidFile);
     }
 
     private void OnLine(string? line)
@@ -478,6 +491,7 @@ public sealed class EasyTierSession : IEasyTierSession
         catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
         _process.Dispose();
         _job?.Dispose();
+        EasyTierProcessGuard.Forget(_pidFile);
     }
 }
 
@@ -536,6 +550,7 @@ public sealed class EasyTierLobby : IDisposable
 {
     private readonly Process _process;
     private readonly IDisposable? _job;
+    private readonly string? _pidFile;
     private readonly string _cliPath;
     private readonly Queue<string> _output = new();
 
@@ -543,10 +558,11 @@ public sealed class EasyTierLobby : IDisposable
     public bool HasExited => _process.HasExited;
     public event Action<string>? Output;
 
-    private EasyTierLobby(Process process, ProcessJob? job, string cliPath, LobbyOptions options)
+    private EasyTierLobby(Process process, ProcessJob? job, string? pidFile, string cliPath, LobbyOptions options)
     {
         _process = process;
         _job = job;
+        _pidFile = pidFile;
         _cliPath = cliPath;
         Options = options;
     }
@@ -555,8 +571,8 @@ public sealed class EasyTierLobby : IDisposable
 
     public static EasyTierLobby Start(EasyTierInstaller installer, LobbyOptions options, string workDir)
     {
-        var (process, job) = EasyTierSession.Launch(installer.CorePath, LobbyArgs.Build(options), LobbyArgs.Environment(options), workDir);
-        var lobby = new EasyTierLobby(process, job, installer.CliPath, options);
+        var (process, job, pidFile) = EasyTierSession.Launch(installer, LobbyArgs.Build(options), LobbyArgs.Environment(options), workDir);
+        var lobby = new EasyTierLobby(process, job, pidFile, installer.CliPath, options);
         process.OutputDataReceived += (_, e) => lobby.OnLine(e.Data);
         process.ErrorDataReceived += (_, e) => lobby.OnLine(e.Data);
         process.BeginOutputReadLine();
@@ -587,5 +603,6 @@ public sealed class EasyTierLobby : IDisposable
         catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
         _process.Dispose();
         _job?.Dispose();
+        EasyTierProcessGuard.Forget(_pidFile);
     }
 }
