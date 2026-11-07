@@ -26,12 +26,19 @@ public sealed class HostLobby : IAsyncDisposable
 
     /// <summary>大厅运行状态变了（开了 / 关了）。</summary>
     public event Action? StateChanged;
-    /// <summary>有人通过敲门进了房间（已批准、对方确认收到凭据）。</summary>
+    /// <summary>批准了一个人、发了他的钥匙（发出凭据前就触发，对方不确认也算进了房间）。</summary>
+    public event Action<KnockRequest, MemberEntry>? Issued;
+    /// <summary>对方确认收到了凭据。</summary>
     public event Action<KnockRequest>? Admitted;
+    /// <summary>凭据没发出去，钥匙撤回了。</summary>
+    public event Action<KnockRequest, MemberEntry>? Withdrawn;
     /// <summary>失败的敲门太多，暂停 60 秒。</summary>
     public event Action? Paused;
 
     public bool IsOpen => _lobby is not null;
+
+    /// <summary>直连房间：大厅 EasyTier 在本机回环的这个 UDP 端口上监听，直连桥把还没批准的加入方转发到这里。</summary>
+    public int? ListenUdpPort { get; init; }
 
     /// <param name="startLobby">启动大厅的 EasyTier（测试里可以换掉）。</param>
     /// <param name="startKnock">在本机开敲门服务（测试里换端口）。</param>
@@ -49,15 +56,16 @@ public sealed class HostLobby : IAsyncDisposable
 
     /// <summary>用真的 EasyTier 和 47660 端口的房主大厅。</summary>
     public static HostLobby Create(EasyTierInstaller installer, string workDir, Func<IReadOnlyList<string>> peers, X25519KeyPair identity,
-        Func<RoomCredentials> credentials, Func<byte[], bool> isTrusted, Func<KnockRequest, CancellationToken, Task<bool>> approve, Action<string>? log = null)
+        Func<RoomCredentials> credentials, Func<byte[], bool> isTrusted, Func<KnockRequest, CancellationToken, Task<bool>> approve, MemberTable members, Action<string>? log = null,
+        InviteBook? book = null, int? listenUdpPort = null)
     {
         HostLobby? lobby = null;
         lobby = new HostLobby(
             options => EasyTierLobby.Start(installer, options, workDir),
             peers,
             // 不建网卡时 EasyTier 把发往房主大厅地址 10.234.0.1:47660 的连接交给本机 127.0.0.1:47660。
-            book => new KnockServer(book, identity, credentials, isTrusted, approve, IPAddress.Loopback, KnockProtocol.Port, log),
-            log);
+            book => new KnockServer(book, identity, credentials, isTrusted, approve, IPAddress.Loopback, KnockProtocol.Port, log, members: members),
+            log, book) { ListenUdpPort = listenUdpPort };
         return lobby;
     }
 
@@ -83,10 +91,12 @@ public sealed class HostLobby : IAsyncDisposable
                 try
                 {
                     _knock = _startKnock(Book);
+                    _knock.Issued += (r, m) => Issued?.Invoke(r, m);
+                    _knock.Withdrawn += (r, m) => Withdrawn?.Invoke(r, m);
                     _knock.Admitted += r => Admitted?.Invoke(r);
                     _knock.Paused += () => Paused?.Invoke();
                     _knock.SessionEnded += () => _ = UpdateQuietlyAsync();
-                    _lobby = _startLobby(new LobbyOptions(lobby.Name, lobby.Secret, true, _peers(), EasyTierArgs.FreeTcpPort()));
+                    _lobby = _startLobby(new LobbyOptions(lobby.Name, lobby.Secret, true, _peers(), EasyTierArgs.FreeTcpPort(), ListenUdpPort: ListenUdpPort));
                     _openName = lobby.Name;
                     _log?.Invoke(L.T("core.mp.lobby.opened"));
                 }
@@ -153,14 +163,16 @@ public static class LobbyJoin
         var localPort = EasyTierArgs.FreeTcpPort();
         var options = new LobbyOptions(LobbyKeys.LobbyName(invite.LobbyKey), LobbyKeys.LobbySecret(invite.LobbyKey), false, peers, EasyTierArgs.FreeTcpPort(), localPort);
         using var lobby = EasyTierLobby.Start(installer, options, workDir);
-        if (log is not null) lobby.Output += line => log(line);
+        // 大厅 EasyTier 的输出里可能带着大厅的网络名和密钥（打印配置时）：先遮掉再记。
+        string[] lobbySecrets = [options.Secret, options.Name];
+        if (log is not null) lobby.Output += line => log(NetDiagnostics.Redact(line, lobbySecrets, includePublicIps: true));
         // 先等大厅里看到房主再敲：没连上时本机转发端口会接了又断，白白算作一次失败。
         using (var find = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
             find.CancelAfter(FindHostTimeout);
             while (true)
             {
-                if (lobby.HasExited) throw new IOException(L.F("core.mp.lobby.exited", lobby.RecentOutput.LastOrDefault() ?? ""));
+                if (lobby.HasExited) throw new IOException(L.F("core.mp.lobby.exited", NetDiagnostics.Redact(lobby.RecentOutput.LastOrDefault() ?? "", lobbySecrets, includePublicIps: true)));
                 var peersNow = await lobby.PeersAsync(find.Token);
                 if (peersNow.Any(p => p.Ip == LobbyArgs.HostIp && p.Cost != "Local")) break;
                 try { await Task.Delay(1000, find.Token); }

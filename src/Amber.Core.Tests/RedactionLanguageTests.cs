@@ -25,7 +25,7 @@ public class RedactionLanguageTests
             const string secret = "4HZP8RW2N6TC";
             const string configSecret = "0123abcd4567ef";
             var text = $"secret {secret} room AMB-K7Q2M9XD-{secret}-25565 wrapped AMB-T2D-K7Q2M9XD-{secret}-25565 " +
-                       $"code AMBDIRECT1-eyJhIjoxfQ reply AMBREPLY1-eyJiIjoyfQ args --network-secret {configSecret} " +
+                       $"code AMBDIRECT1-eyJhIjoxfQ reply AMBREPLY1-eyJiIjoyfQ new JAY2D-eyJjIjozfQ jay2r-eyJkIjo0fQ args --network-secret {configSecret} " +
                        $"config network_secret: \"{configSecret}\" other network_secret = Some(\"89abcdef0123\")";
             var redacted = NetDiagnostics.Redact(text, [secret], includePublicIps: false);
             Assert.DoesNotContain(secret, redacted);
@@ -33,6 +33,8 @@ public class RedactionLanguageTests
             Assert.DoesNotContain("89abcdef0123", redacted);
             Assert.DoesNotContain("eyJhIjoxfQ", redacted);
             Assert.DoesNotContain("eyJiIjoyfQ", redacted);
+            Assert.DoesNotContain("eyJjIjozfQ", redacted);
+            Assert.DoesNotContain("eyJkIjo0fQ", redacted);
             // 网络名和端口留着（排查问题要用）。
             Assert.Contains("K7Q2M9XD", redacted);
             Assert.Contains("25565", redacted);

@@ -156,14 +156,23 @@ public sealed class TunnelServer : IAsyncDisposable
         {
             Pump.Tune(client);
             Stream stream = client.GetStream();
+            CancellationTokenRegistration revocation = default;
             try
             {
                 TunnelService service;
                 if (_settings.Wraps)
                 {
-                    var accepted = await TunnelHandshake.AcceptAsync(stream, _room, _settings.Mode, _settings.Disguise, ct);
+                    var accepted = await TunnelHandshake.AcceptWithMemberAsync(stream, _room, _settings.Mode, _settings.Disguise, ct);
                     if (accepted is null) return;
-                    (stream, service) = accepted.Value;
+                    (stream, service, var member) = accepted.Value;
+                    // 邀请房间：这个成员的钥匙一作废（踢出、重新批准换了钥匙、房间结束）就断开这条连接。
+                    // 握手完之前已经作废的，Register 会立刻调用。
+                    if (member is not null)
+                        revocation = member.Revocation.Register(() =>
+                        {
+                            try { client.Client.LingerState = new LingerOption(true, 0); } catch (Exception e) when (e is SocketException or ObjectDisposedException) { }
+                            client.Dispose();
+                        });
                 }
                 else service = TunnelService.Socks;
                 var handler = _route(service);
@@ -185,6 +194,7 @@ public sealed class TunnelServer : IAsyncDisposable
             }
             finally
             {
+                await revocation.DisposeAsync();
                 await stream.DisposeAsync();
             }
         }

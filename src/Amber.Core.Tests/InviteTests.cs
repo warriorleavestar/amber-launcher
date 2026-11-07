@@ -115,7 +115,7 @@ public sealed class InviteTests
     [Fact]
     public void DiagnosticsRedactInvitesAndRoomSecrets()
     {
-        var credentials = RoomCredentials.Create(new byte[32], 25565, TunnelSettings.Default);
+        var credentials = RoomCredentials.Create(new byte[32], 25565, TunnelSettings.Default) with { Member = MemberKey.Create() };
         var room = credentials.ToRoom();
         var lobby = LobbyKeys.LobbyName(L);
         var text = $"发邀请 {Plain} / {Wrapped.ToLowerInvariant()} 大厅 {lobby} 房间 {room.EasyTierNetworkName} 密钥 {room.EasyTierSecret} " +

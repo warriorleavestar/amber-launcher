@@ -56,16 +56,21 @@ public abstract class PageViewModel : ObservableObject
         get => _isCurrent;
         set
         {
-            if (SetProperty(ref _isCurrent, value) && value)
+            if (!SetProperty(ref _isCurrent, value)) return;
+            if (value)
             {
                 Badge = 0;
                 OnBecameCurrent();
             }
+            else OnLeftCurrent();
         }
     }
 
     /// <summary>切到这一页时调用（每次）。</summary>
     protected virtual void OnBecameCurrent() { }
+
+    /// <summary>从这一页切走时调用（每次）。</summary>
+    protected virtual void OnLeftCurrent() { }
 
     /// <summary>页面第一次显示时调用一次。启动时不联网、不扫描，都放在这里。</summary>
     public void Activate()

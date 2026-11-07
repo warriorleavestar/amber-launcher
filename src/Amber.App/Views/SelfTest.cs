@@ -954,6 +954,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         main.CurrentPage = host;
         await Task.Delay(500);
         host.JoinCode = "JAY2-123";
+        await PasteBoxMaskedAsync(host);
         Check("联机：邀请码格式错误有提示", Press(await FindAsync<Button>(b => b.Content as string == "加入房间")) && host.Status.Contains("格式") || !host.IsComponentReady && host.Status.Contains("组件"), host.Status);
         if (host.IsComponentReady)
         {
@@ -1001,6 +1002,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         guest.TestPeers = [$"tcp://127.0.0.1:{relayPort}"];
         // 邀请两次：第一次要房主点批准，之后把对方加进信任列表，第二次重新加入时直接批准。
         var invite = await CreateInviteAsync(host, uses: 2, auto: false);
+        await CodeHygieneAsync(host, invite);
         guest.JoinCode = "朋友发来的：" + invite;
         var joining = guest.JoinCommand.ExecuteAsync(null);
         var asked = await WaitAsync(() => host.ApprovalCards.Count > 0, 90);
@@ -1011,6 +1013,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         Check("联机：批准后加入房间", guest.IsJoined && guest.JoinAddress.StartsWith("127.0.0.1:", StringComparison.Ordinal), guest.Status);
         Check("联机：加入方看到房主指纹", guest.HostFingerprint == host.Identity.Fingerprint, guest.HostFingerprint);
         Check("联机：房主的成员列表带指纹", await WaitAsync(() => host.Members.Count == 1, 10) && host.Members[0].Fingerprint == guest.Identity.Fingerprint, string.Join(" | ", host.Members.Select(m => m.Label)));
+        Check("联机：成员确认收到凭据后标“已确认”", await WaitAsync(() => host.Members.Count == 1 && host.Members[0].Confirmed, 10), string.Join(" | ", host.Members.Select(m => m.Label)));
 
         var connected = await WaitAsync(() => guest.Peers.Any(p => p.Peer.Ip == Amber.Core.Multiplayer.EasyTierArgs.HostIp), 60);
         Check("联机：加入方看到房主", connected, guest.Status);
@@ -1043,6 +1046,11 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         await host.SendChatCommand.ExecuteAsync(null);
         var chatOk = await WaitAsync(() => host.ChatLines.Any(l => l.Text == "你好，房主" && !l.Mine) && guest.ChatLines.Any(l => l.Text == "欢迎" && !l.Mine), 15);
         Check("联机：聊天消息双向送达", chatOk, string.Join(" | ", host.ChatLines.Select(l => l.Name + ":" + l.Text)));
+        // 每个成员到房主是自己的 Noise 通道；房主按成员表给消息盖上发送者的指纹（成员自己写的发送者不算数）。
+        var stamped = host.ChatLines.FirstOrDefault(l => l.Text == "你好，房主" && !l.Mine);
+        Check("联机：房主给聊天消息盖上发送者指纹", stamped?.Message.Fingerprint == guest.Identity.Fingerprint, stamped?.Message.Fingerprint ?? "没有消息");
+        var welcome = guest.ChatLines.FirstOrDefault(l => l.Text == "欢迎" && !l.Mine);
+        Check("联机：加入方看到房主的指纹", welcome?.Message.Fingerprint == host.Identity.Fingerprint, welcome?.Message.Fingerprint ?? "没有消息");
         Check("联机：进入房间通知", host.ChatLines.Any(l => l.Message.Kind == Amber.Core.Multiplayer.ChatKind.Join && !l.Mine));
         main.CurrentPage = Page<HomeViewModel>();
         guest.ChatInput = "看得到未读吗";
@@ -1074,6 +1082,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         guest.StopCommand.Execute(null);
         host.StopCommand.Execute(null);
 
+        await KickAndRekeyAsync(host, guest, gamePort, relayPort);
         await TransportRoomAsync(host, guest, gamePort, relayPort);
 
         stopServer.Cancel();
@@ -1083,6 +1092,64 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         Check("联机：结束后 easytier-core 都关掉了", left == 0, $"剩 {left} 个");
         host.TestListeners = null;
         host.TestPeers = null;
+    }
+
+    /// <summary>
+    /// 踢人和换网络：两个人经邀请进来，房主踢掉其中一个。被踢的人马上断开、进了禁入名单；
+    /// 房间换了网络（版本加一），留下的人自动换过去、聊天重连还能说话；被踢的人还在旧版本、收不到消息。最后解除禁止。
+    /// </summary>
+    private async Task KickAndRekeyAsync(MultiplayerViewModel host, MultiplayerViewModel stays, int gamePort, int relayPort)
+    {
+        await Task.Delay(1500);
+        host.SelectedTransport = host.TransportChoices.First(c => c.Mode == Amber.Core.Multiplayer.Transport.TransportMode.General);
+        host.DisguiseAsMinecraft = false;
+        host.ManualPort = gamePort.ToString();
+        await host.CreateRoomCommand.ExecuteAsync(null);
+        Check("踢人：创建房间", host.IsHosting, host.Status);
+        // 第二个成员要用不同的联机身份（同一个进程里），放在测试数据目录里。
+        var kicked = host.CreateTestPeer();
+        kicked.Activate();
+        kicked.TestPeers = [$"tcp://127.0.0.1:{relayPort}"];
+        kicked.UseTestIdentity(Path.Combine(AppSettingsDataDir(), "selftest-identity-kicked"));
+        // 三次的邀请，两个人进来后还剩一次：踢人时这张一起作废。
+        var invite = await CreateInviteAsync(host, uses: 3, auto: true);
+        stays.JoinCode = invite;
+        await stays.JoinCommand.ExecuteAsync(null);
+        kicked.JoinCode = invite;
+        await kicked.JoinCommand.ExecuteAsync(null);
+        Check("踢人：两个人都进了房间", stays.IsJoined && kicked.IsJoined, stays.Status + " / " + kicked.Status);
+        Check("踢人：两个人的指纹不同", stays.Identity.Fingerprint != kicked.Identity.Fingerprint);
+        var bothChat = await WaitAsync(() => host.ChatReady && stays.ChatReady && kicked.ChatReady, 60);
+        Check("踢人：三个人都连上聊天", bothChat, $"{stays.ChatStatus} / {kicked.ChatStatus}");
+        Check("踢人：房主的成员列表里有两个人", await WaitAsync(() => host.Members.Count == 2, 10), string.Join(" | ", host.Members.Select(m => m.Label)));
+
+        var target = host.Members.First(m => m.Fingerprint == kicked.Identity.Fingerprint);
+        await host.KickMemberCommand.ExecuteAsync(target);
+        Check("踢人：进了禁入名单、成员列表里没了", host.BannedPeople.Count == 1 && host.Members.All(m => m.Fingerprint != kicked.Identity.Fingerprint),
+            string.Join(" | ", host.BannedPeople.Select(b => b.Label)));
+        Check("踢人：房主换到新网络（版本 2）", host.RoomEpoch == 2, host.Status);
+        Check("踢人：他进来用的那张邀请作废了，并提示房主重新发", host.PendingInvites.Count == 0 && host.Status.Contains("作废"), host.Status);
+        Check("踢人：被踢的人聊天马上断开", await WaitAsync(() => !kicked.ChatReady, 10), kicked.ChatStatus);
+        Check("踢人：被踢的人看到“你已被移出房间”并停止联机", await WaitAsync(() => !kicked.IsJoined && kicked.Status.Contains("移出房间"), 10), kicked.Status);
+        Check("踢人：留下的人收到新网络并换过去", await WaitAsync(() => stays.RoomEpoch == 2, 15), stays.Status);
+        Check("踢人：被踢的人收不到新网络", kicked.RoomEpoch != 2, kicked.RoomEpoch.ToString());
+        await ShotAsync("联机踢人后");
+        Check("踢人：留下的人聊天重连", await WaitAsync(() => stays.ChatReady, 90), stays.ChatStatus);
+        stays.ChatInput = "换钥之后还在";
+        await stays.SendChatCommand.ExecuteAsync(null);
+        var after = await WaitAsync(() => host.ChatLines.Any(l => l.Text == "换钥之后还在" && !l.Mine && l.Message.Fingerprint == stays.Identity.Fingerprint), 20);
+        Check("踢人：换网络后留下的人还能聊天", after, string.Join(" | ", host.ChatLines.Select(l => l.Name + ":" + l.Text)));
+        host.ChatInput = "被踢的人看不到";
+        await host.SendChatCommand.ExecuteAsync(null);
+        Check("踢人：留下的人收到房主的新消息", await WaitAsync(() => stays.ChatLines.Any(l => l.Text == "被踢的人看不到"), 15));
+        await Task.Delay(1000);
+        Check("踢人：被踢的人收不到之后的消息", kicked.ChatLines.All(l => l.Text != "被踢的人看不到"));
+
+        host.UnbanCommand.Execute(host.BannedPeople[0]);
+        Check("踢人：解除禁止", host.BannedPeople.Count == 0);
+        kicked.StopCommand.Execute(null);
+        stays.StopCommand.Execute(null);
+        host.StopCommand.Execute(null);
     }
 
     /// <summary>
@@ -1128,6 +1195,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         guest.ChatInput = "封装后的聊天";
         await guest.SendChatCommand.ExecuteAsync(null);
         Check("封装：聊天经封装通道送达", chatUp && await WaitAsync(() => host.ChatLines.Any(l => l.Text == "封装后的聊天" && !l.Mine), 15), $"{host.ChatStatus} / {guest.ChatStatus}");
+        Check("封装：聊天发送者由房主按成员钥匙认出", host.ChatLines.FirstOrDefault(l => l.Text == "封装后的聊天" && !l.Mine)?.Message.Fingerprint == guest.Identity.Fingerprint);
 
         guest.SelectedExitPeer = guest.ExitCandidates.FirstOrDefault(p => p.Peer.Ip == Amber.Core.Multiplayer.EasyTierArgs.HostIp);
         await guest.UseGameProxyCommand.ExecuteAsync(null);
@@ -1208,17 +1276,33 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         host.DebugMode = true;
         host.ManualPort = gamePort.ToString();
         await host.CreateDirectRoomCommand.ExecuteAsync(null);
-        Check("直连：创建房间并生成邀请码", host.IsDirect && host.MyDirectCode.StartsWith("AMBDIRECT1-", StringComparison.Ordinal), host.Status);
+        Check("直连：创建房间并生成直连邀请码（JAY2D-）", host.IsDirect && host.MyDirectCode.StartsWith("JAY2D-", StringComparison.Ordinal), host.Status);
+        Check("直连：邀请码默认打码", host.MyDirectCodeDisplay.Contains('•') && !host.MyDirectCodeDisplay.Contains(host.MyDirectCode[6..^4]), host.MyDirectCodeDisplay);
+        var hostSecrets = host.RoomSecretsForTest;
+        Check("直连：邀请码里没有房间的网络名和密钥", hostSecrets.Count > 0 && hostSecrets.All(s => !DecodedDirect(host.MyDirectCode).Contains(s, StringComparison.OrdinalIgnoreCase)));
         await ShotAsync("直连房主");
 
         var guest = host.CreateTestPeer();
         guest.Activate();
         guest.DirectSimulate = true;
         guest.DirectUseNodes = false;
-        guest.DirectInviteInput = host.MyDirectCode;
+        guest.DirectInviteInput = "AMBDIRECT1-eyJhIjoxfQ";
         await guest.JoinDirectCommand.ExecuteAsync(null);
-        Check("直连：加入并打洞", guest.IsDirect && guest.IsJoined, guest.Status);
-        Check("直连：加入方生成回复码", guest.MyDirectCode.StartsWith("AMBREPLY1-", StringComparison.Ordinal));
+        Check("直连：旧版直连码不认，提示更新", guest.IsIdle && guest.Status.Contains("旧版本"), guest.Status);
+        guest.DirectInviteInput = host.MyDirectCode;
+        var joining = guest.JoinDirectCommand.ExecuteAsync(null);
+        // 打通后先经直连桥进大厅敲门：房主批准前，这条桥只到大厅。
+        var knocked = await WaitAsync(() => host.ApprovalCards.Count == 1, 90);
+        Check("直连：经直连桥敲门，房主看到批准卡片", knocked, guest.Status);
+        Check("直连：批准前加入方还没进房间、直连桥只到大厅", guest.DirectForTest?.HasRoom == false
+            && host.DirectForTest?.Bridge?.Peers is { Count: 1 } before && !before.First().Admitted, guest.Status);
+        Check("直连：加入方生成回复码（JAY2R-，默认打码）", guest.MyDirectCode.StartsWith("JAY2R-", StringComparison.Ordinal) && guest.MyDirectCodeDisplay.Contains('•'));
+        if (knocked) host.ApproveKnockCommand.Execute(host.ApprovalCards[0]);
+        await joining;
+        Check("直连：批准后加入房间", guest.IsDirect && guest.IsJoined, guest.Status);
+        Check("直连：证明了成员身份，直连桥接到房间", host.DirectForTest?.Bridge?.Peers is { Count: 1 } after && after.First().Admitted);
+        Check("直连：邀请用完后不再接新的直连", host.DirectForTest?.Bridge?.AcceptingNewPeers?.Invoke() == false && host.PendingInvites.Count == 0, host.PendingInvites.Count.ToString());
+        Check("直连：房主的成员列表里有这个人", await WaitAsync(() => host.Members.Count == 1, 10), string.Join(" | ", host.Members.Select(m => m.Label)));
 
         string? reply = null;
         for (var attempt = 0; attempt < 20 && reply is null; attempt++)
@@ -1260,8 +1344,15 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         var report = Path.Combine(reportDir, "direct-report.txt");
         host.ExportDiagnostics(report);
         var text = File.ReadAllText(report);
-        var secret = host.RoomCodeText.Split('-')[2];
-        Check("直连：诊断报告去掉了房间密钥", File.Exists(report) && !text.Contains(secret) && text.Contains("全条件测试结果"), $"{text.Length} 字");
+        Check("直连：诊断报告去掉了房间密钥和直连码", File.Exists(report) && host.RoomSecretsForTest.All(s => !text.Contains(s, StringComparison.OrdinalIgnoreCase))
+            && !text.Contains(host.MyDirectCode[6..]) && !text.Contains(guest.MyDirectCode[6..]) && text.Contains("全条件测试结果"), $"{text.Length} 字");
+
+        // 踢出直连成员：他的直连桥马上断开，他那边看到“你已被移出房间”并停止联机。
+        var member = host.Members.First();
+        await host.KickMemberCommand.ExecuteAsync(member);
+        Check("直连：踢出后断开他的直连桥", await WaitAsync(() => host.DirectForTest?.Bridge?.Peers.Count == 0, 10), host.Status);
+        Check("直连：被踢的人看到“你已被移出房间”并停止联机", await WaitAsync(() => !guest.IsJoined && guest.Status.Contains("移出房间"), 15), guest.Status);
+        Check("直连：房主换了网络（版本 2）", host.RoomEpoch == 2, host.Status);
 
         guest.StopCommand.Execute(null);
         host.StopCommand.Execute(null);
@@ -1276,6 +1367,14 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
     }
 
     private static string AppSettingsDataDir() => Amber.App.Services.AppSettings.DataDir;
+
+    /// <summary>直连码的正文（base64url 解开后的 JSON）。</summary>
+    private static string DecodedDirect(string code)
+    {
+        var b64 = code[6..].Replace('-', '+').Replace('_', '/');
+        b64 += new string('=', (4 - b64.Length % 4) % 4);
+        return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+    }
 
     /// <summary>房主开“邀请朋友”对话框、生成一张邀请；界面上默认打码，返回完整的码。</summary>
     private async Task<string> CreateInviteAsync(MultiplayerViewModel host, int uses, bool auto)

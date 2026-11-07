@@ -18,15 +18,30 @@ public sealed record RoomCode(string Network, string Secret, int Port)
 
     /// <summary>
     /// 邀请加入的房间：网络名（jay- + 16 位十六进制）和 256 位密钥都是房主随机生成、批准后在加密通道里发来的，直接就是 EasyTier 用的值，
-    /// 游戏、聊天、封装的密钥也从这个密钥派生。这种房间没有可以分享的码，ToString 不含任何值。
+    /// 只用来进 EasyTier 网络。游戏通道和聊天用每个成员自己的钥匙（Member / Members），不从房间密钥派生。
+    /// 这种房间没有可以分享的码，ToString 不含任何值。
     /// </summary>
     public bool FromInvite { get; private init; }
 
+    /// <summary>邀请房间里自己的成员钥匙（加入方是房主发来的；房主自己也有一把，给本机的聊天客户端用）。</summary>
+    public MemberKey? Member { get; init; }
+
+    /// <summary>邀请房间的网络是第几版：房主踢人后换网络名和密钥，版本加一。只接受比当前大的。</summary>
+    public int Epoch { get; init; } = 1;
+
+    /// <summary>换到房主发来的新网络（成员钥匙、成员表、封装方式都不变）。</summary>
+    public RoomCode Rekeyed(RoomRekey next) => FromInvite && next.Epoch > Epoch
+        ? this with { Network = next.Network, Secret = next.Secret, Epoch = next.Epoch }
+        : throw new InvalidOperationException("stale or non-invite rekey");
+
+    /// <summary>邀请房间的房主：成员表（编号 → psk），游戏通道和聊天按它认人。加入方是 null。</summary>
+    public MemberTable? Members { get; init; }
+
     /// <summary>按房主发来（或自己生成）的凭据建房间对象。</summary>
-    public static RoomCode FromCredentials(string network, string secret, int port, Transport.TunnelSettings tunnel)
+    public static RoomCode FromCredentials(string network, string secret, int port, Transport.TunnelSettings tunnel, MemberKey? member = null, MemberTable? members = null, int epoch = 1)
     {
         if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
-        return new RoomCode(network, secret, port) { Tunnel = tunnel, FromInvite = true };
+        return new RoomCode(network, secret, port) { Tunnel = tunnel, FromInvite = true, Member = member, Members = members, Epoch = epoch };
     }
 
     /// <summary>EasyTier 的网络名。加前缀避免和别人在公共节点上手动起的网络撞名。</summary>

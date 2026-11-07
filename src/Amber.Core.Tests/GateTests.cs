@@ -222,3 +222,14 @@ public sealed class GateTests : IAsyncLifetime
 
     private static byte[] Packet(byte[] body) => [(byte)body.Length, .. body];
 }
+
+/// <summary>JAYS1- 贴错输入框时能认出来，不和 JAY2 系列的前缀混淆。</summary>
+public sealed class GatePastedCodeTests
+{
+    [Theory]
+    [InlineData("JAYS1-04632E9J5RRKCE1E64Q34C", PastedCodeKind.JayServer)]
+    [InlineData("来玩：jays1-04632e9j5rrkce", PastedCodeKind.JayServer)]
+    [InlineData("JAY2-ABCDEF", PastedCodeKind.Invite)]
+    [InlineData("JAY2D-ABCDEF", PastedCodeKind.DirectInvite)]
+    public void Detects(string text, PastedCodeKind kind) => Assert.Equal(kind, PastedCode.Detect(text));
+}

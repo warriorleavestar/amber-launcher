@@ -16,9 +16,9 @@ public class DirectBridgeContinuityTests
         // 模拟有连接状态的 EasyTier：一直向第一次握手的 UDP 端点发送，不能用无状态回显掩盖端点变化。
         using var hostApp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
         using var guestApp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true,
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true,
             ((IPEndPoint)hostApp.Client.LocalEndPoint!).Port, _ => { });
-        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, false, null, _ => { });
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         Assert.NotNull(await guest.PunchAsync(Loopback(host), NatKind.Cone, TimeSpan.FromSeconds(2), limit.Token));
         var localGuest = new IPEndPoint(IPAddress.Loopback, guest.LocalPort);
@@ -49,8 +49,8 @@ public class DirectBridgeContinuityTests
     [Fact]
     public async Task RevalidatingAnAlreadyConnectedPeerCompletesOnItsProbeReply()
     {
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { });
-        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true, 1, _ => { });
+        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, false, null, _ => { });
         Assert.NotNull(await guest.PunchAsync(Loopback(host), NatKind.Cone, TimeSpan.FromSeconds(2)));
         // 对方可能已先完成握手；不能再要求 Count 增加才返回成功。
         Assert.NotNull(await host.PunchAsync(Loopback(guest), NatKind.Cone, TimeSpan.FromSeconds(2)));
@@ -62,9 +62,9 @@ public class DirectBridgeContinuityTests
     {
         using var hostApp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
         using var guestApp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true,
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true,
             ((IPEndPoint)hostApp.Client.LocalEndPoint!).Port, _ => { });
-        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, false, null, _ => { });
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(8));
         Assert.NotNull(await guest.PunchAsync(Loopback(host), NatKind.Cone, TimeSpan.FromSeconds(2), limit.Token));
         await guestApp.SendAsync("initial"u8.ToArray(), new IPEndPoint(IPAddress.Loopback, guest.LocalPort), limit.Token);
@@ -86,9 +86,9 @@ public class DirectBridgeContinuityTests
     [Fact]
     public async Task ExpiredPausedTransportIsReleased()
     {
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { })
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true, 1, _ => { })
             { PeerTimeout = TimeSpan.FromMilliseconds(100) };
-        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, false, null, _ => { });
         Assert.NotNull(await guest.PunchAsync(Loopback(host), NatKind.Cone, TimeSpan.FromSeconds(2)));
         var local = Assert.Single(host.Peers).Local!;
         host.DropPeers(preserveLocalTransport: true);
@@ -101,7 +101,7 @@ public class DirectBridgeContinuityTests
     [Fact]
     public async Task PausedTransportsCountTowardsHostLimitAndExistingPeerCanResume()
     {
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { });
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true, 1, _ => { });
         var clients = new List<UdpClient>();
         var target = new IPEndPoint(IPAddress.Loopback, host.SocketEndPoint.Port);
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));

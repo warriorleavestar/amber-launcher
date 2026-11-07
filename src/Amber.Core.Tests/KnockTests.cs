@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using Amber.Core.Multiplayer;
@@ -82,6 +82,13 @@ public sealed class KnockTests : IAsyncDisposable
         Assert.Equal("0.6.0", asked.Version);
         Assert.Equal(MemberIdentity.FingerprintOf(_guest.PublicKey), asked.Fingerprint);
         Assert.True(await WaitAsync(() => _admitted.Count == 1));
+        // 带着这个人自己的成员钥匙；房主的成员表里记着同一把，确认之后标“已确认”。
+        Assert.NotNull(c.Member);
+        Assert.True(Server().Members.TryGet(c.Member.Id, out var entry));
+        Assert.Equal(c.Member.CopyPsk(), entry.Key.CopyPsk());
+        Assert.Equal(MemberIdentity.FingerprintOf(_guest.PublicKey), entry.Fingerprint);
+        Assert.Equal("Steve", entry.Name);
+        Assert.True(await WaitAsync(() => entry.Confirmed));
         // 凭据建出的房间：EasyTier 用的就是这两个值；打印出来不含它们。
         var room = c.ToRoom();
         Assert.Equal(c.Network, room.EasyTierNetworkName);
@@ -149,7 +156,8 @@ public sealed class KnockTests : IAsyncDisposable
         await client.ConnectAsync(IPAddress.Loopback, server.Port);
         var stream = client.GetStream();
         var wrongPsk = LobbyKeys.KnockPsk(RandomNumberGenerator.GetBytes(16));
-        using var handshake = new NoiseHandshake(NoisePattern.XXpsk0, true, KnockProtocol.Prologue(LobbyKeys.LobbyName(real.Invite.LobbyKey)), wrongPsk, _guest);
+        var id = LobbyKeys.InviteId(real.Invite.Token);
+        using var handshake = new NoiseHandshake(NoisePattern.XXpsk0, true, KnockProtocol.Prologue(LobbyKeys.LobbyName(real.Invite.LobbyKey), id), wrongPsk, _guest);
         await KnockProtocol.WriteFrameAsync(stream, LobbyKeys.InviteId(real.Invite.Token), default);
         await KnockProtocol.WriteFrameAsync(stream, handshake.WriteMessage([]), default);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -223,11 +231,19 @@ public sealed class KnockTests : IAsyncDisposable
         var server = Server();
         var paused = false;
         server.Paused += () => paused = true;
-        var forged = invite.Invite with { Token = RandomNumberGenerator.GetBytes(16) };
+        // 真的握手失败才算：编号对、psk 不对（乱报的编号见 UnknownInviteIdsDoNotPauseTheLobby）。
         for (var i = 0; i < 10; i++)
         {
-            try { await KnockAsync(forged); }
-            catch (Exception e) when (e is IOException or SocketException) { }
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, server.Port);
+            var stream = client.GetStream();
+            var id = LobbyKeys.InviteId(invite.Invite.Token);
+            using var handshake = new NoiseHandshake(NoisePattern.XXpsk0, true, KnockProtocol.Prologue(LobbyKeys.LobbyName(invite.Invite.LobbyKey), id),
+                LobbyKeys.KnockPsk(RandomNumberGenerator.GetBytes(16)), _guest);
+            await KnockProtocol.WriteFrameAsync(stream, id, default);
+            await KnockProtocol.WriteFrameAsync(stream, handshake.WriteMessage([]), default);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await ReadToEndAsync(stream, timeout.Token);
         }
         Assert.True(await WaitAsync(() => paused));
         Assert.True(server.IsPaused);
@@ -237,6 +253,229 @@ public sealed class KnockTests : IAsyncDisposable
         _now += TimeSpan.FromSeconds(61);
         Assert.False(server.IsPaused);
         Assert.True((await KnockAsync(invite.Invite)).Approved);
+    }
+
+    /// <summary>批准了、钥匙也发了，回复却写不出去（对方已经断开）：钥匙撤回，成员表里不留一个永远连不上的人。</summary>
+    [Fact]
+    public async Task FailedReplyWithdrawsTheIssuedKey()
+    {
+        var invite = Invite(auto: true);
+        // 房主那边第二次写（加密的凭据回复）失败：第一次是握手消息 2。
+        await using var server = new KnockServer(_book, _host, () => _credentials, _ => false, (_, _) => Task.FromResult(true), IPAddress.Loopback, 0, limits: Fast)
+        {
+            StreamForTest = s => new FailingWrites(s, okWrites: 1),
+        };
+        var issued = 0;
+        var withdrawn = 0;
+        server.Issued += (_, _) => Interlocked.Increment(ref issued);
+        server.Withdrawn += (_, _) => Interlocked.Increment(ref withdrawn);
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, server.Port);
+        await Assert.ThrowsAnyAsync<Exception>(() => KnockClient.KnockAsync(client.GetStream(), invite.Invite, _guest, "Gone", "0.6.0", decisionTimeout: TimeSpan.FromSeconds(5)));
+        Assert.True(await WaitAsync(() => server.Active == 0));
+        Assert.Equal(1, issued);
+        Assert.Equal(1, withdrawn);
+        Assert.Null(server.Members.FindGuest(_guest.PublicKey));
+        Assert.Empty(server.Members.All);
+    }
+
+    /// <summary>前几次写照常，之后的写抛 IOException。</summary>
+    private sealed class FailingWrites(Stream inner, int okWrites) : Stream
+    {
+        private int _writes;
+        public override bool CanRead => true;
+        public override bool CanWrite => true;
+        public override bool CanSeek => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken ct) => inner.FlushAsync(ct);
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) => inner.ReadAsync(buffer, ct);
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) =>
+            Interlocked.Increment(ref _writes) > okWrites ? throw new IOException("write failed (test)") : inner.WriteAsync(buffer, ct);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
+    /// <summary>本房间踢出的人拿着有效的新邀请再来敲门：不问房主、不回任何东西直接断开，也不用掉邀请。</summary>
+    [Fact]
+    public async Task BannedKeyCannotKnockAgain()
+    {
+        Assert.True((await KnockAsync(Invite().Invite)).Approved);
+        var server = Server();
+        var member = server.Members.FindGuest(_guest.PublicKey)!;
+        server.Members.Ban(_guest.PublicKey, "Steve");
+        server.Members.Remove(member);
+        var fresh = Invite(auto: true);
+        await Assert.ThrowsAnyAsync<IOException>(() => KnockAsync(fresh.Invite));
+        Assert.Equal(1, fresh.UsesLeft);
+        Assert.Single(_asked);
+        Assert.Null(server.Members.FindGuest(_guest.PublicKey));
+        Assert.False(server.IsPaused);
+        // 解除之后可以再进。
+        server.Members.Unban(_guest.PublicKey);
+        Assert.True((await KnockAsync(fresh.Invite)).Approved);
+    }
+
+    private async Task<KnockOutcome> KnockAsAsync(X25519KeyPair who, JayInvite invite, string name)
+    {
+        var server = Server();
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, server.Port);
+        return await KnockClient.KnockAsync(client.GetStream(), invite, who, name, "0.6.0", decisionTimeout: TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>
+    /// 踢出时作废他进来用的那张邀请：禁入名单按公钥记，换一个身份拿同一张（还剩次数、自动批准）不能再进来。
+    /// </summary>
+    [Fact]
+    public async Task KickVoidsTheInviteTheyCameInWith()
+    {
+        var invite = Invite(uses: 2, auto: true);
+        Assert.True((await KnockAsync(invite.Invite, "Steve")).Approved);
+        var server = Server();
+        var member = server.Members.FindGuest(_guest.PublicKey)!;
+        Assert.Same(invite, member.Invite);
+        Assert.True(server.Members.Kick(member, _book));
+        Assert.True(invite.Revoked);
+        using var reset = X25519KeyPair.Generate();
+        var again = await Record.ExceptionAsync(async () => Assert.False((await KnockAsAsync(reset, invite.Invite, "Steve")).Approved));
+        Assert.True(again is null or IOException, again?.ToString());
+        Assert.Null(server.Members.FindGuest(reset.PublicKey));
+        Assert.Empty(server.Members.All);
+    }
+
+    /// <summary>作废的只是那一张：另一张不相干的邀请照样能用。</summary>
+    [Fact]
+    public async Task KickLeavesOtherInvitesWorking()
+    {
+        var used = Invite(uses: 2, auto: true);
+        var other = Invite(auto: true);
+        Assert.True((await KnockAsync(used.Invite, "Steve")).Approved);
+        var server = Server();
+        Assert.True(server.Members.Kick(server.Members.FindGuest(_guest.PublicKey)!, _book));
+        using var reset = X25519KeyPair.Generate();
+        // 同一张：被拒（回“过期”或者直接断开都算）。
+        var again = await Record.ExceptionAsync(async () => Assert.False((await KnockAsAsync(reset, used.Invite, "Steve")).Approved));
+        Assert.True(again is null or IOException, again?.ToString());
+        using var alex = X25519KeyPair.Generate();
+        Assert.True((await KnockAsAsync(alex, other.Invite, "Alex")).Approved);
+        Assert.NotNull(server.Members.FindGuest(alex.PublicKey));
+        Assert.Null(server.Members.FindGuest(reset.PublicKey));
+    }
+
+    /// <summary>那张邀请本来就用完了：踢出时不提示“作废”。</summary>
+    [Fact]
+    public async Task KickOfAUsedUpInviteReportsNothingLeft()
+    {
+        var invite = Invite(auto: true);
+        Assert.True((await KnockAsync(invite.Invite)).Approved);
+        var server = Server();
+        Assert.False(server.Members.Kick(server.Members.FindGuest(_guest.PublicKey)!, _book));
+    }
+
+    /// <summary>两个人用同一张两次的邀请进来：各自一把不同的钥匙。</summary>
+    [Fact]
+    public async Task EachGuestGetsTheirOwnMemberKey()
+    {
+        var invite = Invite(uses: 2);
+        var first = await KnockAsync(invite.Invite, "Steve");
+        using var other = X25519KeyPair.Generate();
+        var server = Server();
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, server.Port);
+        var second = await KnockClient.KnockAsync(client.GetStream(), invite.Invite, other, "Alex", "0.6.0", decisionTimeout: TimeSpan.FromSeconds(5));
+        Assert.NotEqual(first.Credentials!.Member!.Id, second.Credentials!.Member!.Id);
+        Assert.False(first.Credentials.Member.CopyPsk().AsSpan().SequenceEqual(second.Credentials.Member.CopyPsk()));
+        // 房间级的部分（EasyTier 网络）是同一个。
+        Assert.Equal(first.Credentials.Secret, second.Credentials.Secret);
+        Assert.Equal(2, server.Members.All.Count);
+    }
+
+    /// <summary>
+    /// 对方拿到凭据却不回确认（或者确认在路上丢了）：照样能用这把钥匙进房间，所以房主那边发出凭据时就要记上这个人。
+    /// </summary>
+    [Fact]
+    public async Task GuestWhoNeverAcksStillShowsUpAsMember()
+    {
+        var invite = Invite(auto: true);
+        var server = Server();
+        var issued = new List<(KnockRequest Request, MemberEntry Member)>();
+        server.Issued += (r, m) => { lock (issued) issued.Add((r, m)); };
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, server.Port);
+        var stream = client.GetStream();
+        var id = LobbyKeys.InviteId(invite.Invite.Token);
+        var psk = LobbyKeys.KnockPsk(invite.Invite.Token);
+        using var handshake = new NoiseHandshake(NoisePattern.XXpsk0, true, KnockProtocol.Prologue(LobbyKeys.LobbyName(invite.Invite.LobbyKey), id), psk, _guest);
+        await KnockProtocol.WriteFrameAsync(stream, id, default);
+        await KnockProtocol.WriteFrameAsync(stream, handshake.WriteMessage([]), default);
+        handshake.ReadMessage(await KnockProtocol.ReadFrameAsync(stream, default));
+        await KnockProtocol.WriteFrameAsync(stream, handshake.WriteMessage("{\"v\":1,\"name\":\"Ghost\",\"ver\":\"0.6.0\"}"u8.ToArray()), default);
+        var (send, receive) = handshake.Split();
+        using (send)
+        using (receive)
+        {
+            var sealedReply = await KnockProtocol.ReadFrameAsync(stream, default);
+            var reply = KnockProtocol.ParseJson(receive.DecryptWithAd([], sealedReply));
+            var credentials = RoomCredentials.FromJson(reply);
+            // 不回确认，直接走。
+            client.Dispose();
+            Assert.True(await WaitAsync(() => { lock (issued) return issued.Count == 1; }));
+            var (request, member) = issued[0];
+            Assert.Equal("Ghost", request.Name);
+            Assert.False(member.Confirmed);
+            Assert.True(server.Members.TryGet(credentials.Member!.Id, out var entry));
+            Assert.Same(member, entry);
+            Assert.True(await WaitAsync(() => server.Active == 0));
+            Assert.Empty(_admitted);
+        }
+    }
+
+    /// <summary>乱报的邀请编号直接断开，不算失败次数：拿着大厅密钥的人或者本机别的程序不能借此让敲门一直暂停。</summary>
+    [Fact]
+    public async Task UnknownInviteIdsDoNotPauseTheLobby()
+    {
+        var invite = Invite();
+        var server = Server();
+        var paused = false;
+        server.Paused += () => paused = true;
+        for (var i = 0; i < 25; i++)
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, server.Port);
+            var stream = client.GetStream();
+            await KnockProtocol.WriteFrameAsync(stream, RandomNumberGenerator.GetBytes(KnockProtocol.IdLength), default);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, await ReadToEndAsync(stream, timeout.Token));
+        }
+        Assert.False(paused);
+        Assert.False(server.IsPaused);
+        Assert.True((await KnockAsync(invite.Invite)).Approved);
+    }
+
+    /// <summary>prologue 里带着邀请编号：报的是这张邀请的编号、握手却按另一个编号做，第一条消息就失败。</summary>
+    [Fact]
+    public async Task PrologueBindsTheInviteId()
+    {
+        var invite = Invite();
+        var server = Server();
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, server.Port);
+        var stream = client.GetStream();
+        var psk = LobbyKeys.KnockPsk(invite.Invite.Token);
+        using var handshake = new NoiseHandshake(NoisePattern.XXpsk0, true,
+            KnockProtocol.Prologue(LobbyKeys.LobbyName(invite.Invite.LobbyKey), RandomNumberGenerator.GetBytes(KnockProtocol.IdLength)), psk, _guest);
+        await KnockProtocol.WriteFrameAsync(stream, LobbyKeys.InviteId(invite.Invite.Token), default);
+        await KnockProtocol.WriteFrameAsync(stream, handshake.WriteMessage([]), default);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, await ReadToEndAsync(stream, timeout.Token));
+        Assert.Empty(_asked);
+        Assert.Equal(1, invite.UsesLeft);
+        // 两边按同一个编号做的照常通过。
+        Assert.Equal((byte[])[.. "JAY-KNOCK-1x"u8, 1, 2], KnockProtocol.Prologue("x", [1, 2]));
     }
 
     [Fact]
@@ -293,11 +532,12 @@ public sealed class KnockTests : IAsyncDisposable
     [Fact]
     public void CredentialsJsonRejectsBadValues()
     {
-        var json = _credentials.ToJson();
+        var withKey = _credentials with { Member = MemberKey.Create() };
+        var json = withKey.ToJson();
         Assert.Equal(_credentials.Secret, RoomCredentials.FromJson(json).Secret);
         foreach (var (key, value) in new (string, System.Text.Json.Nodes.JsonNode)[] { ("net", "amber-x"), ("secret", "abc"), ("hostPub", "00"), ("epoch", 0) })
         {
-            var bad = _credentials.ToJson();
+            var bad = withKey.ToJson();
             bad[key] = value;
             Assert.Throws<InvalidDataException>(() => RoomCredentials.FromJson(bad));
         }

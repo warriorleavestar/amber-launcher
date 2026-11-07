@@ -6,45 +6,6 @@ using Amber.Core.Multiplayer;
 
 namespace Amber.Core.Tests;
 
-public class DirectCodeTests
-{
-    private static readonly RoomCode Room = new("K7Q2M9XD", "4HZP8RW2N6TC", 25565);
-
-    [Fact]
-    public void RoundTripInviteAndReply()
-    {
-        var invite = new DirectCode(false, Room, "abcdef0123456789", NatKind.Cone,
-        [
-            new Candidate(PathKind.IPv6, IPEndPoint.Parse("[2408:8000::1]:40000")),
-            new Candidate(PathKind.Punch, IPEndPoint.Parse("203.0.113.5:51234")),
-            new Candidate(PathKind.Lan, IPEndPoint.Parse("192.168.1.5:40000")),
-        ]);
-        var text = invite.Encode();
-        Assert.StartsWith("AMBDIRECT1-", text);
-        Assert.True(DirectCode.TryParse("朋友发来：" + text + " 快来", out var parsed, out _));
-        Assert.Equal(invite.Room, parsed.Room);
-        Assert.Equal(invite.Candidates, parsed.Candidates);
-        Assert.False(parsed.IsReply);
-        Assert.True(parsed.DirectlyReachable);
-
-        var reply = invite with { IsReply = true, Candidates = [new Candidate(PathKind.Punch, IPEndPoint.Parse("198.51.100.7:40001"))], Nat = NatKind.Symmetric };
-        Assert.True(DirectCode.TryParse(reply.Encode(), out var r, out _));
-        Assert.True(r.IsReply);
-        Assert.False(r.DirectlyReachable);
-        Assert.Equal(NatKind.Symmetric, r.Nat);
-    }
-
-    [Theory]
-    [InlineData("AMBDIRECT2-eyJ9", "第 2 版")]
-    [InlineData("AMBDIRECT1-!!!!", "损坏")]
-    [InlineData("hello", "没认出")]
-    public void RejectsBadCodes(string text, string reason)
-    {
-        Assert.False(DirectCode.TryParse(text, out _, out var error));
-        Assert.Contains(reason, error);
-    }
-}
-
 public class StunParseTests
 {
     [Fact]
@@ -122,8 +83,8 @@ public class DirectBridgeTests
         });
 
         var logs = new List<string>();
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, echoPort, l => { lock (logs) logs.Add("H " + l); });
-        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, l => { lock (logs) logs.Add("G " + l); });
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true, echoPort, l => { lock (logs) logs.Add("H " + l); });
+        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, false, null, l => { lock (logs) logs.Add("G " + l); });
 
         var hostWait = host.WaitForPeerAsync(TimeSpan.FromSeconds(10));
         var peer = await guest.PunchAsync(Loopback(host), NatKind.Cone, TimeSpan.FromSeconds(10));
@@ -151,8 +112,8 @@ public class DirectBridgeTests
     [Fact]
     public async Task DisabledPathIsNotUsed()
     {
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { });
-        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true, 1, _ => { });
+        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, false, null, _ => { });
         // 模拟“局域网路径被禁用”：两边都只允许 IPv6，本机回环地址连不上。
         host.AllowedPaths.Clear();
         host.AllowedPaths.Add(PathKind.IPv6);
@@ -165,8 +126,8 @@ public class DirectBridgeTests
     [Fact]
     public async Task WrongRoomKeyIsIgnored()
     {
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { });
-        await using var intruder = new DirectBridge(DirectBridge.CreateSocket(), Room with { Secret = "000000000000" }, false, null, _ => { });
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true, 1, _ => { });
+        await using var intruder = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.OtherBridge, false, null, _ => { });
         Assert.Null(await intruder.PunchAsync(Loopback(host), NatKind.Cone, TimeSpan.FromSeconds(2)));
         Assert.Empty(host.Peers);
     }

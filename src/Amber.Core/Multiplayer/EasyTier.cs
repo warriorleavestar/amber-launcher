@@ -477,7 +477,8 @@ public sealed class EasyTierSession : IEasyTierSession
 }
 
 /// <summary>大厅的参数：只为敲门存在的第二个 EasyTier 网络（名字和密钥从邀请码里的大厅密钥派生）。</summary>
-public sealed record LobbyOptions(string Name, string Secret, bool IsHost, IReadOnlyList<string> Peers, int RpcPort, int? LocalKnockPort = null)
+/// <param name="ListenUdpPort">房主：在本机回环的这个 UDP 端口上监听（直连桥把还没批准的加入方转发到这里）。不设时不监听。</param>
+public sealed record LobbyOptions(string Name, string Secret, bool IsHost, IReadOnlyList<string> Peers, int RpcPort, int? LocalKnockPort = null, int? ListenUdpPort = null)
 {
     public override string ToString() => "LobbyOptions";
 }
@@ -505,11 +506,14 @@ public static class LobbyArgs
             // 和房间的实例用不同的机器标识，免得在节点上互相顶掉。
             "--machine-id", Guid.NewGuid().ToString(),
             "--no-tun",
-            "--no-listener",
             "--latency-first",
         };
+        // 直连房间的房主：只在本机回环上监听，给直连桥用；其他情况不监听。
+        if (o.IsHost && o.ListenUdpPort is { } listen) args.AddRange(["--listeners", $"udp://127.0.0.1:{listen.ToString(System.Globalization.CultureInfo.InvariantCulture)}"]);
+        else args.Add("--no-listener");
         foreach (var peer in o.Peers.Where(p => !string.IsNullOrWhiteSpace(p))) args.AddRange(["--peers", peer.Trim()]);
-        if (o.Peers.Any(p => Uri.TryCreate(p.Trim(), UriKind.Absolute, out var u) && (u.IsLoopback || u.Host == "localhost"))) args.AddRange(["--bind-device", "false"]);
+        if ((o.IsHost && o.ListenUdpPort is not null) || o.Peers.Any(p => Uri.TryCreate(p.Trim(), UriKind.Absolute, out var u) && (u.IsLoopback || u.Host == "localhost")))
+            args.AddRange(["--bind-device", "false"]);
         args.AddRange(["--tcp-whitelist", o.IsHost ? KnockProtocol.Port.ToString(System.Globalization.CultureInfo.InvariantCulture) : "1"]);
         args.AddRange(["--udp-whitelist", "1"]);
         args.AddRange(["--rpc-portal-whitelist", "127.0.0.1/32"]);

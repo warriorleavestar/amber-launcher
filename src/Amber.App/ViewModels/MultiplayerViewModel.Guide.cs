@@ -108,6 +108,15 @@ public sealed partial class MultiplayerViewModel
             case PastedCodeKind.DirectReply:
                 SetStatus(StatusMessage.Warning("multiplayer.code.reply_misplaced"));
                 return true;
+            case PastedCodeKind.OldDirect:
+                SetStatus(StatusMessage.Warning("multiplayer.direct.old_code"));
+                return true;
+            case PastedCodeKind.JayServer:
+                // Jay 服务器邀请：交给“Jay 服务器”卡片加入（只能用一次，所以直接用掉，不留在原来的框里）。
+                clearSource();
+                JayServers.InviteText = text;
+                JayServers.JoinCommand.Execute(null);
+                return true;
             default:
                 return false;
         }
