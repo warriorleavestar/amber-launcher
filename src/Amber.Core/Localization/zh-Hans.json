@@ -853,7 +853,7 @@
   "multiplayer.component.exited": "联机组件意外退出：{0}",
   "multiplayer.component.license": "联机由开源项目 EasyTier 实现（{0}，{1}）。不经过 Jay 的服务器；连不上直连时，数据经你添加的联机节点转发（用房间密钥加密）。默认模式不需要管理员权限，也不安装驱动。",
   "multiplayer.component.ready": "EasyTier {0} 已就绪",
-  "multiplayer.component.required": "联机需要先下载 EasyTier {0}（约 {1} MB，来自 GitHub 官方发布页，下载后校验 SHA-256）",
+  "multiplayer.component.required": "联机需要 EasyTier {0}（约 {1} MB）。会依次尝试 GitHub 官方发布页和几个下载镜像，下载后校验 SHA-256",
   "multiplayer.diagnostics.debug_mode": "调试模式",
   "multiplayer.diagnostics.debug_tooltip": "显示详细日志（包括 EasyTier 自己的日志），可以导出诊断报告",
   "multiplayer.diagnostics.export": "导出诊断报告…",
@@ -1550,5 +1550,18 @@
   "core.gate.log.breaker_open": "隐私++ 熔断：不可用的节点 {0}；断开了 {1} 条连接，暂停接受新连接",
   "core.gate.log.breaker_closed": "隐私++ 熔断解除：节点恢复，重新接受连接",
   "core.gate.admin.bad_rotation": "轮换设置不对：时间窗 30 秒到 1 天，端口范围在 1024–65535 之间且至少 100 个端口",
-  "core.gate.log.listen_failed": "开不了端口 {0}"
+  "core.gate.log.listen_failed": "开不了端口 {0}",
+  "core.mp.component.source.bundled": "发布包自带",
+  "core.mp.component.sourcefailed": "· {0}：{1}",
+  "core.mp.component.allfailed": "所有来源都没能装上 EasyTier：\n{0}\n可以换个网络再试，或者用浏览器下载 {1}，再点“从文件导入”。",
+  "core.mp.component.wrongpackage": "不是需要的安装包：应为 {0}（{1} 字节），这个文件是 {2} 字节",
+  "core.mp.component.httpstatus": "服务器返回 HTTP {0}",
+  "core.net.download.timeout": "下载超时，服务器长时间没有响应：{0}",
+  "multiplayer.component.import": "从文件导入",
+  "multiplayer.component.import_picker": "选择 EasyTier 安装包 {0}",
+  "multiplayer.component.import_filetype": "EasyTier 安装包",
+  "multiplayer.component.imported": "已导入 EasyTier 并校验通过",
+  "multiplayer.component.import_failed": "导入失败：{0}",
+  "multiplayer.component.downloading_from": "正在从 {0} 下载 EasyTier……",
+  "multiplayer.component.manual_hint": "下载不了时：用浏览器下载 {0}（官方地址 {1}），再点“从文件导入”。导入的文件同样要通过 SHA-256 校验。"
 }

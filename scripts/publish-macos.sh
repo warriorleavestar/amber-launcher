@@ -41,6 +41,7 @@ cat > "$bundle/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 plutil -lint "$bundle/Contents/Info.plist"
+"$root/scripts/bundle-easytier.sh" "$rid" "$bundle/Contents/Resources/easytier"
 codesign --force --sign - "$bundle"
 codesign --verify --deep --strict "$bundle"
 mkdir -p "$output"

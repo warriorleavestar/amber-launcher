@@ -879,7 +879,7 @@
   "multiplayer.component.exited": "Multiplayer component exited unexpectedly: {0}",
   "multiplayer.component.license": "Multiplayer rooms use the open-source project EasyTier ({0}, {1}). Traffic does not pass through Jay servers. If a direct connection fails, your added relay nodes forward the data, encrypted with the room key. The default mode needs no administrator access and installs no drivers.",
   "multiplayer.component.ready": "EasyTier {0} ready",
-  "multiplayer.component.required": "Multiplayer rooms require EasyTier {0} (about {1} MB, from the official GitHub releases page; SHA-256 verified after download)",
+  "multiplayer.component.required": "Multiplayer rooms require EasyTier {0} (about {1} MB). Jay tries the official GitHub releases page and several download mirrors, then verifies SHA-256",
   "multiplayer.diagnostics.debug_mode": "Debug mode",
   "multiplayer.diagnostics.debug_tooltip": "Show detailed logs (including EasyTier logs) and enable diagnostic report export",
   "multiplayer.diagnostics.export": "Export diagnostic report…",
@@ -1581,5 +1581,18 @@
   "core.gate.log.breaker_open": "Privacy++ breaker open: unavailable relays {0}; dropped {1} connections and paused new ones",
   "core.gate.log.breaker_closed": "Privacy++ breaker closed: relays recovered, accepting connections again",
   "core.gate.admin.bad_rotation": "Invalid rotation settings: the window must be 30 seconds to 1 day and the port range within 1024–65535 with at least 100 ports",
-  "core.gate.log.listen_failed": "Couldn't open port {0}"
+  "core.gate.log.listen_failed": "Couldn't open port {0}",
+  "core.mp.component.source.bundled": "Bundled package",
+  "core.mp.component.sourcefailed": "· {0}: {1}",
+  "core.mp.component.allfailed": "Could not install EasyTier from any source:\n{0}\nTry another network, or download {1} in a browser and choose \"Import from file\".",
+  "core.mp.component.wrongpackage": "Not the expected package: need {0} ({1} bytes), this file is {2} bytes",
+  "core.mp.component.httpstatus": "Server returned HTTP {0}",
+  "core.net.download.timeout": "Download timed out; the server did not respond: {0}",
+  "multiplayer.component.import": "Import from file",
+  "multiplayer.component.import_picker": "Choose the EasyTier package {0}",
+  "multiplayer.component.import_filetype": "EasyTier package",
+  "multiplayer.component.imported": "EasyTier imported and verified",
+  "multiplayer.component.import_failed": "Import failed: {0}",
+  "multiplayer.component.downloading_from": "Downloading EasyTier from {0}…",
+  "multiplayer.component.manual_hint": "If the download fails: get {0} in a browser (official link {1}), then choose \"Import from file\". Imported files are SHA-256 verified too."
 }

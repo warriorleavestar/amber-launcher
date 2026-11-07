@@ -85,6 +85,11 @@ jobs:
           -p:DebugType=none
           -o ../out/server-${{ matrix.rid }}
 
+      # 发布包自带 EasyTier 官方安装包（校验固定的 SHA-256），网络不好也能直接用联机。
+      - name: Bundle EasyTier
+        shell: bash
+        run: bash ../scripts/bundle-easytier.sh ${{ matrix.rid }} ../out/${{ matrix.rid }}/easytier
+
       - name: Package Windows
         if: matrix.archive == 'zip'
         shell: pwsh
@@ -113,6 +118,7 @@ jobs:
         run: |
           dotnet publish Amber.App -c Release -r win-x64 -p:PublishAot=true -p:DebugType=none -o ../out/win-x64-aot
           Get-ChildItem ../out/win-x64-aot -Recurse -Filter *.pdb | Remove-Item
+          Copy-Item -Recurse ../out/win-x64/easytier ../out/win-x64-aot/easytier
           Compress-Archive -Path ../out/win-x64-aot/* -DestinationPath ../packages/Jay-win-x64-aot.zip
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
