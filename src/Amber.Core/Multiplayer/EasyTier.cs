@@ -364,7 +364,7 @@ public sealed class EasyTierSession : IEasyTierSession
     internal static (Process Process, ProcessJob? Job) Launch(string corePath, IEnumerable<string> args, IReadOnlyDictionary<string, string> environment, string workDir)
     {
         Directory.CreateDirectory(workDir);
-        EasyTierProcessTracker.Cleanup(workDir, corePath);
+        EasyTierProcessTracker.Cleanup(workDir, corePath, EasyTierProcessGuard.WatcherExecutable);
         var info = new ProcessStartInfo(corePath)
         {
             WorkingDirectory = workDir,
@@ -375,8 +375,11 @@ public sealed class EasyTierSession : IEasyTierSession
         };
         foreach (var a in args) info.ArgumentList.Add(a);
         foreach (var (name, value) in environment) info.Environment[name] = value;
+        // Mac/Linux：经看门脚本启动，Jay 崩溃或被 kill -9 后一两秒内 easytier-core 跟着结束（不用等下次开房间时清理）。
+        EasyTierProcessGuard.Wrap(info);
         var process = Process.Start(info) ?? throw new InvalidOperationException(L.T("core.mp.component.startfailed"));
-        EasyTierProcessTracker.Track(process, workDir, corePath);
+        // 记录的是实际启动的程序（套了看门脚本时是 sh），清理时按它核对，结束整棵进程树。
+        EasyTierProcessTracker.Track(process, workDir, EasyTierProcessGuard.TrackedExecutable(info));
         ProcessJob? job = null;
         if (OperatingSystem.IsWindows())
         {

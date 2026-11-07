@@ -9,10 +9,11 @@ internal static class EasyTierProcessTracker
 {
     private const string Prefix = ".jay-easytier-";
 
-    public static void Cleanup(string workDir, string corePath)
+    /// <param name="executables">认得的程序：easytier-core 本身，以及套了看门脚本时的 sh。</param>
+    public static void Cleanup(string workDir, params string[] executables)
     {
         if (OperatingSystem.IsWindows() || !Directory.Exists(workDir)) return;
-        var expected = Path.GetFullPath(corePath);
+        var expected = executables.Select(Path.GetFullPath).ToHashSet(StringComparer.Ordinal);
         foreach (var record in Directory.EnumerateFiles(workDir, Prefix + "*.pid"))
         {
             try
@@ -35,7 +36,7 @@ internal static class EasyTierProcessTracker
                     continue;
                 }
                 if (runningPath is null) continue;
-                if (Path.GetFullPath(runningPath).Equals(expected, StringComparison.Ordinal))
+                if (expected.Contains(Path.GetFullPath(runningPath)))
                 {
                     process.Kill(entireProcessTree: true);
                     process.WaitForExit(5000);

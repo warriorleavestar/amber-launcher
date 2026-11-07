@@ -75,7 +75,7 @@
 | 回收站（可撤销删除） | ✅ 隐藏目录 | ✅ 目录不隐藏 | ✅ | `Content/TrashService.cs` |
 | 下载器 | ✅ | ✅ 打开了 Network.framework TLS | ✅ | `src/Directory.Build.targets` |
 | 联机：EasyTier 下载和运行 | ✅ | 🟡 | 🟡 | `Multiplayer/EasyTier.cs` |
-| 联机：EasyTier 进程随 Jay 退出 | ✅ 作业对象 | 🪟 Jay 崩溃会留下孤儿进程 | 🪟 同左 | `Multiplayer/ProcessJob.cs` |
+| 联机：EasyTier 进程随 Jay 退出 | ✅ 作业对象 | ✅ 看门脚本 + 开始联机前按记录清理 | ✅ 同左 | `Multiplayer/ProcessJob.cs`、`Multiplayer/EasyTierProcessGuard.cs`、`Multiplayer/EasyTierProcessTracker.cs` |
 | 联机：邀请、敲门、成员钥匙、踢人【实验】 | ✅ | 🟡 | 🟡 | 纯托管代码 |
 | 联机：封装模式（MC 专用、高加密） | ✅ | 🟡 | 🟡 | `Multiplayer/Transport/` |
 | 联机：极端加密（ML-KEM 混合） | ✅ Win11 新版 | 🪟 .NET 在 macOS 上没有 ML-KEM | 🟡 需要 OpenSSL 3.5+ | `Multiplayer/Transport/Noise.cs` `HybridSupported` |
@@ -188,7 +188,7 @@ EasyTier（组网，P2P 或经节点中继）
 - `Multiplayer/EasyTier.cs`：固定版本 2.6.4，第一次用联机时从 EasyTier 的 GitHub 发布页下载对应平台的 zip，校验 SHA-256 和大小后解压到数据目录。七个平台都有哈希：windows x86_64 / arm64 / i686，macos x86_64 / aarch64，linux x86_64 / aarch64。Windows 另外要 `WinDivert64.sys`（完整局域网模式转发广播用）。非 Windows 解压后加执行权限。
 - 默认用 `--no-tun`（不建虚拟网卡），所以不需要管理员也不装驱动。加入方用 `--port-forward` 把本机端口转到房主的虚拟地址；房主只放行本次提供服务的 TCP 端口（`--tcp-whitelist`），UDP 全拦。
 - 房间密钥经环境变量 `ET_NETWORK_SECRET` 传，不放命令行。
-- 进程管理：Windows 上 easytier-core 放进作业对象（`ProcessJob.cs`），Jay 崩溃或被结束时系统会一起结束它。**Mac/Linux 没有对应实现**，Jay 崩溃会留下 easytier-core。适配做法：Linux 用 `prctl(PR_SET_PDEATHSIG)`（要在子进程里调，可以经一个小的包装程序，或者 easytier 自己支持的话用它的参数），或者让 Jay 启动时清理上次留下的进程（记录 PID 和启动时间）；macOS 可以用 kqueue 的 `NOTE_EXIT` 在包装进程里监视父进程。
+- 进程管理：Windows 上 easytier-core 放进作业对象（`ProcessJob.cs`），Jay 崩溃或被结束时系统会一起结束它。Mac/Linux 两层：`EasyTierProcessGuard.cs` 让 easytier-core 经一个 `/bin/sh` 看门脚本启动，脚本每秒看一次 Jay 的 PID，Jay 没了（包括 `kill -9`）就结束 core；`EasyTierProcessTracker.cs` 在工作目录里记录进程（PID、启动时间、可执行文件），下次在同一目录开始联机前清理对得上的旧进程，兜住看门进程也被单独结束的情况。没用 `PR_SET_PDEATHSIG`：它跟的是父线程，.NET 线程池线程退出就会误杀。
 - macOS 上从网络下载的程序没有隔离属性（.NET 的 HttpClient 不加 `com.apple.quarantine`），未签名的 easytier-core 可以直接运行。如果以后改用别的下载方式要注意这一点。
 
 #### 邀请、敲门和成员钥匙【实验】🟡
@@ -386,7 +386,7 @@ CI 的单元测试只在 `windows-latest` 上跑。有一些测试本身按 `Ope
 | 1 | Jay 服务器访问密钥加密 | `Gate/JayServers.cs` `Protect`/`Unprotect` | 先改成和 `Auth/Accounts.cs` 一样的 AES-GCM + 本机密钥（新前缀，比如 `aesgcm:`），旧的 `plain:` 能读，下次保存自动迁移；第二批再接钥匙串 | Mac/Linux 上 `jay-servers.json` 里看不到明文密钥；旧文件升级后还能进服；补单元测试 |
 | 2 | 老版本（1.6 以前）家目录 | `Launch/AsciiPaths.cs` `LegacyHome`、`GameLauncher.cs` 第 310 行附近 | 在数据目录下建 `legacyhome/<哈希>/`，里面放指向实例的符号链接（Linux：`.minecraft`；macOS：`Library/Application Support/minecraft`），启动时加 `-Duser.home=<该目录>`；符号链接用 `Directory.CreateSymbolicLink` | 在测试目录里启动 1.5.2 + 老 Forge，用户真实的 minecraft 目录没有新文件 |
 | 3 | 正常关闭游戏（Linux） | `GameLauncher.RequestExit` | X11：找到游戏进程的窗口（`_NET_WM_PID`）发 `WM_DELETE_WINDOW`；Wayland 或找不到窗口时发 SIGTERM，并在界面上提示“可能来不及存档” | X11 下点“关闭游戏”，世界正常保存（看 `latest.log` 的 Saving 行） |
-| 4 | EasyTier 不残留 | `Multiplayer/EasyTier.cs` `Launch` | 每次启动把 PID + 进程启动时间写进 `easytier/run/*.pid`；Jay 启动和开房间前清理“PID 还在、启动时间对得上”的旧进程。Linux 额外可以用 `prctl(PR_SET_PDEATHSIG, SIGTERM)`（需要一个小包装进程，因为 .NET 的 `Process.Start` 不能在 fork 后插代码） | `kill -9` 掉 Jay 后重新打开，没有 easytier-core 残留 |
+| 4 | ✅ EasyTier 不残留 | `Multiplayer/EasyTier.cs` `Launch` | 每次启动把 PID + 进程启动时间写进 `easytier/run/*.pid`；Jay 启动和开房间前清理“PID 还在、启动时间对得上”的旧进程。Linux 额外可以用 `prctl(PR_SET_PDEATHSIG, SIGTERM)`（需要一个小包装进程，因为 .NET 的 `Process.Start` 不能在 fork 后插代码） | `kill -9` 掉 Jay 后重新打开，没有 easytier-core 残留 |
 | 5 | 不支持的选项先说明 | `Views/MultiplayerPage.axaml`、`MultiplayerViewModel.cs`、`TestMatrix.cs` | 在 Core 里加 `PlatformFeatures`（完整局域网、全部流量出口、远程控制、极端加密各一个布尔），界面按它禁用并显示原因；全条件测试排除不支持的步骤。之后每补齐一项就把对应开关改成 true | Mac/Linux 上勾不了完整局域网，旁边有说明；全条件测试不再出现必然失败的步骤 |
 | 6 | “仅游戏”出口拦截非默认路由 | `Transport/ExitPolicy.cs` `NonDefaultRoutes` | Linux 读 `/proc/net/route` 和 `/proc/net/ipv6_route`；macOS 用 `sysctl` `NET_RT_DUMP`（或者先解析 `netstat -rn -f inet` / `inet6`）。太宽的路由（IPv4 短于 /8、IPv6 短于 /16）照 Windows 的规则不拦 | 有 VPN 内网路由时，经出口连那个网段被拒绝；补单元测试（解析部分用样例文本） |
 | 7 | 进服时查 SRV | `Transport/JoinTarget.cs` | 自己实现一个最小 DNS 客户端：读系统 DNS（Linux `/etc/resolv.conf`，macOS `scutil --dns` 或 `/etc/resolv.conf`），UDP 53 发 SRV 查询，解析应答；或者 P/Invoke libresolv 的 `res_query` | 输入不带端口的服务器域名，经出口时按 SRV 的主机和端口连 |
