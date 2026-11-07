@@ -1150,6 +1150,7 @@
   "home.status.in_game": "{0} 运行中 · 已 {1} 分钟",
   "home.status.maybe_in_game": "{0} 可能已进入游戏 · 已 {1} 分钟",
   "home.status.exiting": "正在保存并退出 {0}…",
+  "home.status.exiting_signal": "已请求 {0} 退出。找不到游戏窗口，发的是结束信号：新版本会正常存档，较老的版本可能来不及存档。",
   "home.status.preparing_other": "另一个实例正在准备启动，等它起来后再试。",
   "home.status.repairing": "正在补装它依赖的原版 {0}…",
   "home.multi.warning": "已有游戏在运行（{0}）。再启动会同时开两个客户端。",
