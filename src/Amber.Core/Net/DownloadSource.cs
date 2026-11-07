@@ -86,10 +86,12 @@ public sealed class SourceChain(IReadOnlyList<IDownloadSource> sources)
     /// 默认顺序：系统时区为中国时优先镜像，否则优先官方。
     /// 只用于挑默认值，不联网查 IP，也不据此禁用任何功能。
     /// </summary>
-    public static SourceChain Default()
+    public static SourceChain Default() => PrefersMirrors() ? MirrorFirst : OfficialFirst;
+
+    /// <summary>系统时区是中国时默认先用镜像。只用于排顺序，不联网查 IP。</summary>
+    public static bool PrefersMirrors()
     {
         var tz = TimeZoneInfo.Local.Id;
-        var china = tz is "China Standard Time" or "Asia/Shanghai" or "Asia/Chongqing" or "Asia/Urumqi";
-        return china ? MirrorFirst : OfficialFirst;
+        return tz is "China Standard Time" or "Asia/Shanghai" or "Asia/Chongqing" or "Asia/Urumqi";
     }
 }

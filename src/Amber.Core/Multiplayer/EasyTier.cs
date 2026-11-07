@@ -12,7 +12,8 @@ namespace Amber.Core.Multiplayer;
 
 /// <summary>
 /// 联机用的 EasyTier（开源组网工具，LGPL-3.0，https://github.com/EasyTier/EasyTier）。
-/// Amber 不内置它：第一次用联机时从 GitHub 官方发布页下载固定版本，校验 SHA-256 后解压到数据目录。
+/// 发布包里自带固定版本的官方安装包；单独拿到主程序时，第一次用联机再从 GitHub 或下载镜像下载。
+/// 无论哪种来源，都校验固定的大小和 SHA-256 后才解压到数据目录。
 /// </summary>
 public static class EasyTierRelease
 {
@@ -41,6 +42,25 @@ public static class EasyTierRelease
         _ => throw new PlatformNotSupportedException(L.F("core.mp.component.unsupportedplatform", os, arch)),
     };
 
+    /// <summary>
+    /// GitHub 下载加速镜像：把完整的 GitHub 地址接在前缀后面。它们都是第三方公益服务，只用来搬运文件，
+    /// 内容由固定的 SHA-256 把关，被改过的包装不上。
+    /// </summary>
+    public static readonly IReadOnlyList<(string Name, string Prefix)> Mirrors =
+    [
+        ("ghfast.top", "https://ghfast.top/"),
+        ("gh-proxy.com", "https://gh-proxy.com/"),
+        ("ghproxy.net", "https://ghproxy.net/"),
+    ];
+
+    /// <summary>下载来源（名称、地址），mirrorsFirst 为真时镜像排在官方前面。</summary>
+    public static IReadOnlyList<(string Name, string Url)> Sources(Asset asset, bool mirrorsFirst)
+    {
+        var official = ("GitHub", asset.Url);
+        var mirrors = Mirrors.Select(m => (m.Name, m.Prefix + asset.Url)).ToList();
+        return mirrorsFirst ? [.. mirrors, official] : [official, .. mirrors];
+    }
+
     private static Asset ForCurrentPlatform()
     {
         var os = OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : OperatingSystem.IsLinux() ? "linux" : "unknown";
@@ -60,39 +80,150 @@ public static class EasyTierRelease
     public static readonly string[] DefaultPeers = [];
 }
 
-public sealed class EasyTierInstaller(Downloader downloader, string dataDir)
+/// <summary>一个安装来源失败的原因，用来在界面上逐个说明。</summary>
+public sealed record EasyTierSourceFailure(string Source, string Reason);
+
+/// <summary>所有来源都没装上：消息里列出每个来源的失败原因，并提示可以手动导入安装包。</summary>
+public sealed class EasyTierInstallException(string message, IReadOnlyList<EasyTierSourceFailure> failures) : IOException(message)
 {
-    private EasyTierRelease.Asset Asset => EasyTierRelease.Current;
-    public string InstallDir => Path.Combine(dataDir, "easytier", EasyTierRelease.Version, Asset.Platform);
+    public IReadOnlyList<EasyTierSourceFailure> Failures { get; } = failures;
+}
+
+/// <summary>
+/// 安装顺序：发布包里自带的安装包 → 官方 GitHub 和几个 GitHub 下载加速镜像（时区为中国时镜像在前）。
+/// 不管文件从哪来，都要和固定的大小、SHA-256 完全一致才解压，镜像改不了内容。
+/// 下载中断的进度保留在数据目录里，换源或下次再点下载时接着下。
+/// </summary>
+public sealed class EasyTierInstaller
+{
+    private readonly Downloader _downloader;
+    private readonly string _dataDir;
+    private readonly string _bundledDir;
+    private readonly EasyTierRelease.Asset? _asset;
+    private readonly IReadOnlyList<(string Name, string Url)>? _sources;
+
+    public EasyTierInstaller(Downloader downloader, string dataDir) : this(downloader, dataDir, null, null, null) { }
+
+    /// <summary>测试用：指定自带安装包的目录、安装包和下载来源。</summary>
+    internal EasyTierInstaller(Downloader downloader, string dataDir, string? bundledDir, EasyTierRelease.Asset? asset, IReadOnlyList<(string Name, string Url)>? sources)
+    {
+        _downloader = downloader;
+        _dataDir = dataDir;
+        _bundledDir = bundledDir ?? DefaultBundledDir();
+        _asset = asset;
+        _sources = sources;
+    }
+
+    /// <summary>主程序旁边的 easytier 文件夹；macOS 的 .app 里放在 Contents/Resources/easytier。</summary>
+    private static string DefaultBundledDir()
+    {
+        var beside = Path.Combine(AppContext.BaseDirectory, "easytier");
+        if (OperatingSystem.IsMacOS())
+        {
+            var resources = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Resources", "easytier"));
+            if (Directory.Exists(resources)) return resources;
+        }
+        return beside;
+    }
+
+    private EasyTierRelease.Asset Asset => _asset ?? EasyTierRelease.Current;
+    public string InstallDir => Path.Combine(_dataDir, "easytier", EasyTierRelease.Version, Asset.Platform);
     public string CorePath => Path.Combine(InstallDir, Asset.CoreName);
     public string CliPath => Path.Combine(InstallDir, Asset.CliName);
+    /// <summary>发布包里随程序附带的安装包（和 Jay 主程序同目录下的 easytier 文件夹）。</summary>
+    public string BundledPath => Path.Combine(_bundledDir, Asset.Name);
+    /// <summary>手动导入时需要的文件名。</summary>
+    public string ExpectedFileName => Asset.Name;
     /// <summary>WinDivert64.sys 是完整局域网模式转发游戏局域网广播要用的驱动文件，缺了也重新解压。</summary>
     public bool IsInstalled => File.Exists(CorePath) && File.Exists(CliPath) && (!OperatingSystem.IsWindows() || File.Exists(Path.Combine(InstallDir, "WinDivert64.sys")));
 
+    /// <summary>下载来源，按尝试顺序排列。</summary>
+    public IReadOnlyList<(string Name, string Url)> Sources => _sources ?? EasyTierRelease.Sources(Asset, SourceChain.PrefersMirrors());
+
+    /// <summary>progress 的 CurrentFile 是正在尝试的来源名。</summary>
     public async Task EnsureAsync(IProgress<DownloadProgress>? progress = null, CancellationToken ct = default)
     {
         if (IsInstalled) return;
-        var work = Path.Combine(dataDir, "easytier", "download-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(work);
-        try
+        var failures = new List<EasyTierSourceFailure>();
+
+        if (File.Exists(BundledPath))
         {
-            var zip = Path.Combine(work, Asset.Name);
-            await downloader.DownloadAllAsync([new DownloadItem(Asset.Url, zip, null, Asset.Size)], progress, ct);
-            await using (var stream = File.OpenRead(zip))
+            progress?.Report(new DownloadProgress(0, 1, 0, L.T("core.mp.component.source.bundled")));
+            try
             {
-                var hash = Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, ct));
-                if (hash != Asset.Sha256)
-                    throw new InvalidDataException(L.F("core.mp.component.hashfailed", hash));
+                await InstallFromZipAsync(BundledPath, ct);
+                return;
             }
-            Extract(zip, InstallDir, Asset);
-            MakeExecutable(CorePath);
-            MakeExecutable(CliPath);
-            if (!IsInstalled) throw new InvalidDataException(L.T("core.mp.component.missingexecutable"));
+            catch (Exception e) when (!ct.IsCancellationRequested && e is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                failures.Add(new(L.T("core.mp.component.source.bundled"), Describe(e)));
+            }
         }
-        finally
+
+        // 固定的下载位置：中断后 .part 留着，换源、重试或下次打开都能接着下。
+        var zip = Path.Combine(_dataDir, "easytier", "download", Asset.Name);
+        foreach (var (name, url) in Sources)
         {
-            try { Directory.Delete(work, true); } catch (IOException) { }
+            ct.ThrowIfCancellationRequested();
+            progress?.Report(new DownloadProgress(0, 1, 0, name));
+            try
+            {
+                await _downloader.DownloadOneAsync(new DownloadItem(url, zip, null, Asset.Size),
+                    new Progress<long>(b => progress?.Report(new DownloadProgress(0, 1, b, name))), ct);
+                await InstallFromZipAsync(zip, ct);
+                TryDelete(zip);
+                return;
+            }
+            catch (Exception e) when (!ct.IsCancellationRequested)
+            {
+                failures.Add(new(name, Describe(e)));
+                // 内容不对就整个丢掉，不能拿坏数据给下一个源续传。
+                if (e is InvalidDataException)
+                {
+                    TryDelete(zip);
+                    TryDelete(zip + ".part");
+                    TryDelete(zip + ".part.state");
+                }
+            }
         }
+
+        var lines = string.Join(Environment.NewLine, failures.Select(f => L.F("core.mp.component.sourcefailed", f.Source, f.Reason)));
+        throw new EasyTierInstallException(L.F("core.mp.component.allfailed", lines, Asset.Name), failures);
+    }
+
+    /// <summary>用户手动选的安装包：同样要求大小和 SHA-256 与固定值一致。</summary>
+    public Task ImportAsync(string zipPath, CancellationToken ct = default) => InstallFromZipAsync(zipPath, ct);
+
+    private async Task InstallFromZipAsync(string zip, CancellationToken ct)
+    {
+        var length = new FileInfo(zip).Length;
+        if (length != Asset.Size)
+            throw new InvalidDataException(L.F("core.mp.component.wrongpackage", Asset.Name, Asset.Size, length));
+        await using (var stream = File.OpenRead(zip))
+        {
+            var hash = Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, ct));
+            if (hash != Asset.Sha256)
+                throw new InvalidDataException(L.F("core.mp.component.hashfailed", hash));
+        }
+        Extract(zip, InstallDir, Asset);
+        MakeExecutable(CorePath);
+        MakeExecutable(CliPath);
+        if (!IsInstalled) throw new InvalidDataException(L.T("core.mp.component.missingexecutable"));
+    }
+
+    /// <summary>把异常说成人话：超时不要显示成“操作已取消”。</summary>
+    public static string Describe(Exception e) => e switch
+    {
+        OperationCanceledException or TimeoutException => L.T("common.request_timeout"),
+        HttpRequestException { StatusCode: { } status } => L.F("core.mp.component.httpstatus", (int)status),
+        HttpRequestException { InnerException: { } inner } => inner.Message,
+        IOException { InnerException: OperationCanceledException or TimeoutException } => L.T("common.request_timeout"),
+        _ => e.Message,
+    };
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
     /// <summary>安装包里文件放在一层子文件夹下，拍平到安装目录。</summary>

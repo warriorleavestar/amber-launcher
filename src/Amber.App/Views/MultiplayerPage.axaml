@@ -18,10 +18,12 @@
               <TextBlock Text="{Binding ComponentText}" TextWrapping="Wrap" VerticalAlignment="Center" />
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="12,0,0,0" IsVisible="{Binding !IsComponentReady}">
                 <Button Classes="primary" Content="{l:T multiplayer.component.download}" Command="{Binding DownloadComponentCommand}" IsVisible="{Binding !IsDownloading}" />
+                <Button Content="{l:T multiplayer.component.import}" Click="ImportComponent_Click" IsVisible="{Binding !IsDownloading}" />
                 <Button Content="{l:T common.cancel}" Command="{Binding CancelDownloadCommand}" IsVisible="{Binding IsDownloading}" />
               </StackPanel>
             </Grid>
             <ProgressBar Value="{Binding DownloadPercent}" Maximum="100" IsVisible="{Binding IsDownloading}" />
+            <SelectableTextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding ManualHintText}" IsVisible="{Binding !IsComponentReady}" />
             <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding LicenseText}" />
           </StackPanel>
         </Border>

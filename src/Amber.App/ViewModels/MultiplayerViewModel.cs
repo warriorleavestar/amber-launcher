@@ -267,6 +267,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     protected override void OnFirstActivated()
     {
         IsComponentReady = _service.EasyTier.IsInstalled;
+        // 发布包自带安装包时直接装好，不用联网，也不用用户点。
+        if (!IsComponentReady && File.Exists(_service.EasyTier.BundledPath)) _ = DownloadComponentAsync();
         LoadNodes();
         RefreshInstances();
         RefreshTrusted();
@@ -332,8 +334,14 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         try
         {
             SetStatus(StatusMessage.Info("multiplayer.component.downloading"));
+            string? source = null;
             await _service.EasyTier.EnsureAsync(new Progress<DownloadProgress>(p =>
             {
+                if (p.CurrentFile is { } name && name != source)
+                {
+                    source = name;
+                    SetStatus(StatusMessage.Info("multiplayer.component.downloading_from", name));
+                }
                 DownloadPercent = Math.Min(100, 100.0 * p.BytesDownloaded / EasyTierRelease.Current.Size);
             }), _downloadCts.Token);
             IsComponentReady = true;
@@ -345,7 +353,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
         catch (Exception e)
         {
-            SetStatus(StatusMessage.Failure("multiplayer.component.download_failed", e, e is OperationCanceledException ? L.T("common.request_timeout") : e.Message));
+            SetStatus(StatusMessage.Failure("multiplayer.component.download_failed", e, e is EasyTierInstallException ? e.Message : EasyTierInstaller.Describe(e)));
         }
         finally
         {
@@ -353,6 +361,31 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             DownloadPercent = 0;
         }
     }
+
+    /// <summary>手动导入用户自己下载的官方安装包；大小和 SHA-256 不对就拒绝。</summary>
+    public async Task ImportComponentAsync(string path)
+    {
+        if (IsDownloading) return;
+        IsDownloading = true;
+        try
+        {
+            await _service.EasyTier.ImportAsync(path);
+            IsComponentReady = true;
+            SetStatus(StatusMessage.Success("multiplayer.component.imported"));
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            SetStatus(StatusMessage.Failure("multiplayer.component.import_failed", e, e.Message));
+        }
+        finally
+        {
+            IsDownloading = false;
+        }
+    }
+
+    public string ComponentFileName => _service.EasyTier.ExpectedFileName;
+
+    public string ManualHintText => L.F("multiplayer.component.manual_hint", EasyTierRelease.Current.Name, EasyTierRelease.Current.Url);
 
     [RelayCommand]
     private void CancelDownload() => _downloadCts?.Cancel();

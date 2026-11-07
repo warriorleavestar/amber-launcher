@@ -337,7 +337,8 @@ public sealed class Downloader
                 }
                 catch (Exception e) when (!ct.IsCancellationRequested)
                 {
-                    last = e;
+                    // 没取消却收到“已取消”，是等响应头或分块超时了；换成超时的说法，不然界面上会显示“操作已取消”。
+                    last = e is OperationCanceledException ? new TimeoutException(L.F("core.net.download.timeout", url), e) : e;
                     NoteFailure(url);
                     // 校验失败说明这份数据是坏的；换的源不支持分块时旧断点也接不上。
                     if (e is InvalidDataException or RangeNotSupportedException)

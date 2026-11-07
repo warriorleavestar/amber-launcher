@@ -853,7 +853,7 @@
   "multiplayer.component.exited": "マルチプレイ用コンポーネントが予期せず終了しました：{0}",
   "multiplayer.component.license": "マルチプレイにはオープンソースの EasyTier を使用します（{0}、{1}）。Jay のサーバーは経由しません。直接接続できない場合は、追加したノードがルームキーで暗号化されたデータを転送します。既定のモードでは管理者権限は不要で、ドライバーもインストールしません。",
   "multiplayer.component.ready": "EasyTier {0} 準備完了",
-  "multiplayer.component.required": "マルチプレイには EasyTier {0} のダウンロードが必要です（約 {1} MB、GitHub の公式リリースページから取得し、ダウンロード後に SHA-256 を検証します）",
+  "multiplayer.component.required": "マルチプレイには EasyTier {0}（約 {1} MB）が必要です。GitHub の公式リリースページといくつかのミラーを順に試し、ダウンロード後に SHA-256 を検証します",
   "multiplayer.diagnostics.debug_mode": "デバッグモード",
   "multiplayer.diagnostics.debug_tooltip": "詳細ログ（EasyTier 自体のログを含む）を表示し、診断レポートをエクスポートできます",
   "multiplayer.diagnostics.export": "診断レポートをエクスポート…",
@@ -1550,5 +1550,18 @@
   "core.gate.log.breaker_open": "プライバシー++ ブレーカー作動：利用不可の中継ノード {0}。{1} 接続を切断し、新規接続を停止しました",
   "core.gate.log.breaker_closed": "プライバシー++ ブレーカー解除：中継ノードが復旧し、接続を再開しました",
   "core.gate.admin.bad_rotation": "ローテーション設定が正しくありません。時間枠は 30 秒〜1 日、ポート範囲は 1024–65535 の中で 100 ポート以上にしてください",
-  "core.gate.log.listen_failed": "ポートを開けません：{0}"
+  "core.gate.log.listen_failed": "ポートを開けません：{0}",
+  "core.mp.component.source.bundled": "同梱パッケージ",
+  "core.mp.component.sourcefailed": "・{0}：{1}",
+  "core.mp.component.allfailed": "どの取得元からも EasyTier をインストールできませんでした。別のネットワークで再試行するか、ブラウザーで {1} をダウンロードして「ファイルから読み込む」を選んでください。取得元ごとの理由：\n{0}",
+  "core.mp.component.wrongpackage": "必要なパッケージではありません：{0}（{1} バイト）が必要ですが、このファイルは {2} バイトです",
+  "core.mp.component.httpstatus": "サーバーが HTTP {0} を返しました",
+  "core.net.download.timeout": "ダウンロードがタイムアウトしました。サーバーが応答しません：{0}",
+  "multiplayer.component.import": "ファイルから読み込む",
+  "multiplayer.component.import_picker": "EasyTier パッケージ {0} を選択",
+  "multiplayer.component.import_filetype": "EasyTier パッケージ",
+  "multiplayer.component.imported": "EasyTier を読み込み、検証しました",
+  "multiplayer.component.import_failed": "読み込みに失敗しました：{0}",
+  "multiplayer.component.downloading_from": "{0} から EasyTier をダウンロードしています…",
+  "multiplayer.component.manual_hint": "ダウンロードできない場合：ブラウザーで {0} を取得し（公式 URL {1}）、「ファイルから読み込む」を選んでください。読み込んだファイルも SHA-256 で検証します。"
 }
