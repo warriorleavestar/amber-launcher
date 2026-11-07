@@ -13,10 +13,13 @@ public partial class StatusBar : UserControl
     public static readonly StyledProperty<StatusMessage?> MessageProperty =
         AvaloniaProperty.Register<StatusBar, StatusMessage?>(nameof(Message));
 
-    /// <summary>成功消息多久之后淡成中性色。</summary>
-    public static readonly TimeSpan SettleAfter = TimeSpan.FromSeconds(4);
+    /// <summary>成功消息显示多久后自动消失。</summary>
+    public static readonly TimeSpan SuccessDismissAfter = TimeSpan.FromSeconds(5);
 
-    private readonly DispatcherTimer _settle = new() { Interval = SettleAfter };
+    /// <summary>警告多留一会儿再自动消失，给人看清楚的时间。</summary>
+    public static readonly TimeSpan WarningDismissAfter = TimeSpan.FromSeconds(10);
+
+    private readonly DispatcherTimer _autoDismiss = new();
     private StatusMessage? _dismissed;
     private bool _isShowing;
 
@@ -43,16 +46,11 @@ public partial class StatusBar : UserControl
     public StatusBar()
     {
         InitializeComponent();
-        _settle.Tick += (_, _) =>
-        {
-            _settle.Stop();
-            Bar.Classes.Set("settled", true);
-        };
-        CloseButton.Click += (_, _) =>
-        {
-            _dismissed = Message;
-            Render();
-        };
+        _autoDismiss.Tick += (_, _) => OnAutoDismissTick();
+        // 鼠标停在条上（正在看、正要点详情或 ✕）时不自动关，移开后重新计时。
+        Bar.PointerEntered += (_, _) => _autoDismiss.Stop();
+        Bar.PointerExited += (_, _) => RestartAutoDismiss();
+        CloseButton.Click += (_, _) => Dismiss();
         CopyButton.Click += async (_, _) =>
         {
             if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard && Message?.Detail is { } detail)
@@ -88,7 +86,7 @@ public partial class StatusBar : UserControl
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         L.Changed -= OnLanguageChanged;
-        _settle.Stop();
+        _autoDismiss.Stop();
         base.OnDetachedFromVisualTree(e);
     }
 
@@ -116,6 +114,42 @@ public partial class StatusBar : UserControl
         CopyButton.Content = L.T(key);
     }
 
+    /// <summary>关掉当前这条（同一条消息不会再显示，新消息来了照常显示）。</summary>
+    private void Dismiss()
+    {
+        _dismissed = Message;
+        Render();
+    }
+
+    private void OnAutoDismissTick()
+    {
+        // 这一条不该自动关（计时已停）；详情还开着或鼠标还在条上：先不关，等下一轮。
+        if (!_autoDismiss.IsEnabled || DetailButton.Flyout is { IsOpen: true } || Bar.IsPointerOver) return;
+        Dismiss();
+    }
+
+    /// <summary>这一级的消息多久后自动消失；null 是不自动消失（错误要人看到；信息多是“正在……”这类进行中的状态）。</summary>
+    internal static TimeSpan? AutoDismissDelay(StatusKind kind) => kind switch
+    {
+        StatusKind.Success => SuccessDismissAfter,
+        StatusKind.Warning => WarningDismissAfter,
+        _ => null,
+    };
+
+    private void RestartAutoDismiss()
+    {
+        _autoDismiss.Stop();
+        if (!IsShowing || Message is not { } m || AutoDismissDelay(m.Kind) is not { } delay) return;
+        _autoDismiss.Interval = delay;
+        _autoDismiss.Start();
+    }
+
+    /// <summary>自动消失的计时是不是在走（测试用）。</summary>
+    internal bool AutoDismissPending => _autoDismiss.IsEnabled;
+
+    /// <summary>当作计时到了（测试用，不用真等几秒）。</summary>
+    internal void ElapseAutoDismissForTest() => OnAutoDismissTick();
+
     /// <summary>复制按钮现在的状态键（测试用）。</summary>
     internal string CopyStateKey => _copyKey;
 
@@ -127,7 +161,7 @@ public partial class StatusBar : UserControl
         IsShowing = visible;
         if (!visible)
         {
-            _settle.Stop();
+            _autoDismiss.Stop();
             return;
         }
         var text = m!.Format();
@@ -147,13 +181,6 @@ public partial class StatusBar : UserControl
         Bar.Classes.Set("error", m.Kind == StatusKind.Error);
         DetailButton.IsVisible = !string.IsNullOrEmpty(m.Detail);
         DetailText.Text = m.Detail;
-        // 只有错误要手动关；警告、信息、成功下一条消息来了就换掉。
-        CloseButton.IsVisible = m.Kind == StatusKind.Error;
-        if (restartTimer)
-        {
-            Bar.Classes.Set("settled", false);
-            _settle.Stop();
-            if (m.Kind == StatusKind.Success) _settle.Start();
-        }
+        if (restartTimer) RestartAutoDismiss();
     }
 }
