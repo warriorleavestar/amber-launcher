@@ -125,7 +125,10 @@ public sealed partial class MultiplayerViewModel
     public partial bool InviteShown { get; set; }
 
     public bool HasInvite => _lastInvite is not null;
-    public string InviteDisplay => _lastInvite is not { } invite ? "" : InviteShown ? invite.ToString() : invite.Masked;
+    /// <summary>直连房间的房主发的是直连邀请码（JAY2D-，带着这张邀请和本机地址）；其他时候是普通邀请码。默认打码。</summary>
+    public string InviteDisplay => _lastInvite is not { } invite ? ""
+        : IsDirect && MyDirectCode.Length > 0 ? (InviteShown ? MyDirectCode : MyDirectCode[..6] + new string('•', 8) + MyDirectCode[^4..])
+        : InviteShown ? invite.ToString() : invite.Masked;
 
     /// <summary>加入方：正在进大厅 / 敲门 / 等房主批准。</summary>
     [ObservableProperty] public partial bool IsKnocking { get; set; }
@@ -160,13 +163,16 @@ public sealed partial class MultiplayerViewModel
         [.. (host ? TestListeners ?? [] : []), .. TestPeers ?? _service.MultiplayerPeers];
 
     /// <summary>房间开好之后：准备大厅（有邀请时才真的启动）。</summary>
-    private void StartHostLobby(RoomCredentials credentials, MemberTable members)
+    /// <param name="book">直连房间：大厅密钥不换的邀请簿。</param>
+    /// <param name="listenUdpPort">直连房间：大厅 EasyTier 在本机回环上监听的 UDP 端口（直连桥把没批准的加入方转发到这里）。</param>
+    /// <param name="peers">大厅连哪些节点；直连房间只用直连的备用节点（可以没有），默认是房间的节点。</param>
+    private void StartHostLobby(RoomCredentials credentials, MemberTable members, InviteBook? book = null, int? listenUdpPort = null, Func<IReadOnlyList<string>>? peers = null)
     {
         _credentials = credentials;
         _members = members;
-        var lobby = HostLobby.Create(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier", "lobby"), () => LobbyPeers(host: true),
+        var lobby = HostLobby.Create(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier", "lobby"), peers ?? (() => LobbyPeers(host: true)),
             Identity.KeyPair, () => _credentials ?? throw new InvalidOperationException(), pub => Trusted.IsTrusted(pub), AskApprovalAsync, members,
-            line => _diag.Add(L.T("multiplayer.invite.diagnostics_category"), line));
+            line => _diag.Add(L.T("multiplayer.invite.diagnostics_category"), line), book, listenUdpPort);
         lobby.Book.Changed += () => Dispatcher.UIThread.Post(RefreshInvites);
         lobby.StateChanged += () => Dispatcher.UIThread.Post(RefreshInvites);
         lobby.Paused += () => Dispatcher.UIThread.Post(() => SetStatus(StatusMessage.Warning("multiplayer.invite.paused")));
@@ -237,7 +243,12 @@ public sealed partial class MultiplayerViewModel
         {
             // 连他进来用的那张邀请一起作废（禁入名单按公钥记，换个身份就能拿同一张再进来）。
             var inviteRevoked = false;
-            if (members.FindGuest(item.PublicKey) is { } entry) inviteRevoked = members.Kick(entry, _lobby?.Book);
+            if (members.FindGuest(item.PublicKey) is { } entry)
+            {
+                // 先告诉他“你已被移出房间”（他那边停止联机），再作废钥匙断开。
+                await hub.NotifyKickedAsync(entry);
+                inviteRevoked = members.Kick(entry, _lobby?.Book);
+            }
             else members.Ban(item.PublicKey, item.Name);
             Members.Remove(item);
             RefreshInvites();
@@ -278,7 +289,15 @@ public sealed partial class MultiplayerViewModel
     /// </summary>
     private bool SwitchNetwork(RoomCode next)
     {
-        if (_session is not { } old || _direct is not null) return false;
+        if (_direct is { } direct)
+        {
+            // 直连房间：直连桥不动（钥匙和房间无关），只让直连会话换上新房间重启 EasyTier。
+            _room = next;
+            _ = SwitchDirectRoomAsync(direct, next);
+            AfterNetworkSwitch();
+            return true;
+        }
+        if (_session is not { } old) return false;
         var options = old.Options with { Room = next };
         StopTransport();
         old.Dispose();
@@ -304,6 +323,26 @@ public sealed partial class MultiplayerViewModel
             return false;
         }
         _room = next;
+        AfterNetworkSwitch();
+        return true;
+    }
+
+    private async Task SwitchDirectRoomAsync(DirectSession direct, RoomCode next)
+    {
+        try
+        {
+            await direct.SwitchRoomAsync(next);
+            if (_direct == direct) _session = direct.EasyTier;
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException or InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException)
+        {
+            if (_direct == direct) SetStatus(StatusMessage.Failure("multiplayer.room.start_failed", e, ErrorText.Of(e)));
+        }
+    }
+
+    /// <summary>换了网络之后：加入方的聊天连接经旧网络，丢掉重连。</summary>
+    private void AfterNetworkSwitch()
+    {
         if (IsJoined)
         {
             var chat = _chat;
@@ -313,7 +352,14 @@ public sealed partial class MultiplayerViewModel
             if (chat is not null) _ = chat.DisposeAsync().AsTask();
             MarkJoinStarted(newRoom: true);
         }
-        return true;
+    }
+
+    /// <summary>加入方：被房主踢出：停止联机（关掉 EasyTier 和聊天），告诉用户。</summary>
+    private void OnKicked(ChatClient client)
+    {
+        if (_chat != client || !IsJoined || _room is not { FromInvite: true }) return;
+        StopSession();
+        SetStatus(StatusMessage.Warning("multiplayer.kick.you_were_kicked"));
     }
 
     /// <summary>加入方：房主换了网络（有人被踢）。经自己的成员通道收到、版本比当前大才换。</summary>
@@ -360,27 +406,41 @@ public sealed partial class MultiplayerViewModel
     [RelayCommand]
     private async Task CreateInviteAsync()
     {
-        if (_lobby is not { } lobby || _credentials is not { } credentials) return;
         var uses = (int)Math.Clamp(InviteUses ?? 1, 1, 20);
-        var invite = lobby.Book.Create(uses, (SelectedInviteExpiry ?? InviteExpiryChoices[0]).Lifetime, InviteAutoApprove, credentials.Tunnel);
+        if (await IssueInviteAsync(uses, (SelectedInviteExpiry ?? InviteExpiryChoices[0]).Lifetime, InviteAutoApprove) is not null)
+            SetStatus(StatusMessage.Success(IsDirect ? "multiplayer.direct.invite_created" : "multiplayer.invite.created"));
+    }
+
+    /// <summary>
+    /// 发一张邀请、确保大厅开着。直连房间的房主同时生成直连邀请码（这张邀请 + 本机地址）。
+    /// 大厅开不起来时撤掉这张邀请、显示原因，返回 null。
+    /// </summary>
+    private async Task<PendingInvite?> IssueInviteAsync(int uses, TimeSpan? lifetime, bool autoApprove)
+    {
+        if (_lobby is not { } lobby || _credentials is not { } credentials) return null;
+        var invite = lobby.Book.Create(uses, lifetime, autoApprove, credentials.Tunnel);
         _lastInvite = invite.Invite;
+        if (_direct is { IsHost: true } direct) MyDirectCode = direct.InviteCode(invite.Invite).Encode();
         InviteShown = false;
+        DirectCodeShown = false;
         OnPropertyChanged(nameof(InviteDisplay));
         OnPropertyChanged(nameof(HasInvite));
         RefreshInvites();
         try
         {
             await lobby.UpdateAsync();
-            SetStatus(StatusMessage.Success("multiplayer.invite.created"));
+            return invite;
         }
         catch (Exception e) when (e is System.Net.Sockets.SocketException or IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             // 敲门端口被占（比如另一个 Amber 正在当房主）：这张邀请没法用，撤掉。
             lobby.Book.Revoke(invite);
             _lastInvite = null;
+            if (_direct is { IsHost: true }) MyDirectCode = "";
             OnPropertyChanged(nameof(InviteDisplay));
             OnPropertyChanged(nameof(HasInvite));
             SetStatus(StatusMessage.Failure("multiplayer.invite.lobby_failed", e, KnockProtocol.Port, ErrorText.Of(e)));
+            return null;
         }
     }
 
@@ -393,7 +453,7 @@ public sealed partial class MultiplayerViewModel
         if (_lastInvite is not { } invite) return;
         if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
         {
-            await clipboard.SetTextAsync(invite.ToString());
+            await clipboard.SetTextAsync(IsDirect && MyDirectCode.Length > 0 ? MyDirectCode : invite.ToString());
             SetStatus(StatusMessage.Success("multiplayer.invite.copied"));
         }
     }
@@ -407,6 +467,7 @@ public sealed partial class MultiplayerViewModel
         if (_lastInvite == item.Invite.Invite)
         {
             _lastInvite = null;
+            if (_direct is { IsHost: true }) MyDirectCode = "";
             OnPropertyChanged(nameof(InviteDisplay));
             OnPropertyChanged(nameof(HasInvite));
         }

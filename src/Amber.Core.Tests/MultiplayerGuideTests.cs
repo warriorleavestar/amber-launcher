@@ -108,10 +108,28 @@ public sealed class MultiplayerGuideTests
     {
         var (service, vm, _) = Create();
         using var __ = service;
-        vm.DirectInviteInput = "AMBREPLY1-eyJhIjoxfQ";
+        vm.DirectInviteInput = "JAY2R-eyJ2IjoxfQ";
         vm.JoinDirectCommand.Execute(null);
-        Assert.Equal("AMBREPLY1-eyJhIjoxfQ", vm.DirectInviteInput);
+        Assert.Equal("JAY2R-eyJ2IjoxfQ", vm.DirectInviteInput);
         Assert.Equal(L.T("multiplayer.code.reply_misplaced"), vm.Status);
+        Assert.True(vm.IsIdle);
+    });
+
+    /// <summary>旧版本的直连码（里面是完整的房间码）：不接受，提示对方更新。</summary>
+    [Theory]
+    [InlineData("AMBDIRECT1-eyJhIjoxfQ")]
+    [InlineData("AMBREPLY1-eyJhIjoxfQ")]
+    public void OldDirectCodeShowsTheUpdateHint(string code) => UiTestThread.Run(() =>
+    {
+        var (service, vm, _) = Create();
+        using var __ = service;
+        vm.DirectInviteInput = code;
+        vm.JoinDirectCommand.Execute(null);
+        Assert.Equal(L.T("multiplayer.direct.old_code"), vm.Status);
+        Assert.True(vm.IsIdle);
+        vm.JoinCode = code;
+        vm.JoinCommand.Execute(null);
+        Assert.Equal(L.T("multiplayer.direct.old_code"), vm.Status);
         Assert.True(vm.IsIdle);
     });
 
@@ -120,7 +138,7 @@ public sealed class MultiplayerGuideTests
     {
         var (service, vm, _) = Create();
         using var __ = service;
-        const string code = "AMBDIRECT1-eyJhIjoxfQ";
+        const string code = "JAY2D-eyJ2IjoxfQ";
         vm.JoinCode = code;
         vm.JoinCommand.Execute(null);
         Assert.Equal("", vm.JoinCode);

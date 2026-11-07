@@ -37,6 +37,9 @@ public sealed class HostLobby : IAsyncDisposable
 
     public bool IsOpen => _lobby is not null;
 
+    /// <summary>直连房间：大厅 EasyTier 在本机回环的这个 UDP 端口上监听，直连桥把还没批准的加入方转发到这里。</summary>
+    public int? ListenUdpPort { get; init; }
+
     /// <param name="startLobby">启动大厅的 EasyTier（测试里可以换掉）。</param>
     /// <param name="startKnock">在本机开敲门服务（测试里换端口）。</param>
     public HostLobby(Func<LobbyOptions, IDisposable> startLobby, Func<IReadOnlyList<string>> peers, Func<InviteBook, KnockServer> startKnock,
@@ -53,7 +56,8 @@ public sealed class HostLobby : IAsyncDisposable
 
     /// <summary>用真的 EasyTier 和 47660 端口的房主大厅。</summary>
     public static HostLobby Create(EasyTierInstaller installer, string workDir, Func<IReadOnlyList<string>> peers, X25519KeyPair identity,
-        Func<RoomCredentials> credentials, Func<byte[], bool> isTrusted, Func<KnockRequest, CancellationToken, Task<bool>> approve, MemberTable members, Action<string>? log = null)
+        Func<RoomCredentials> credentials, Func<byte[], bool> isTrusted, Func<KnockRequest, CancellationToken, Task<bool>> approve, MemberTable members, Action<string>? log = null,
+        InviteBook? book = null, int? listenUdpPort = null)
     {
         HostLobby? lobby = null;
         lobby = new HostLobby(
@@ -61,7 +65,7 @@ public sealed class HostLobby : IAsyncDisposable
             peers,
             // 不建网卡时 EasyTier 把发往房主大厅地址 10.234.0.1:47660 的连接交给本机 127.0.0.1:47660。
             book => new KnockServer(book, identity, credentials, isTrusted, approve, IPAddress.Loopback, KnockProtocol.Port, log, members: members),
-            log);
+            log, book) { ListenUdpPort = listenUdpPort };
         return lobby;
     }
 
@@ -92,7 +96,7 @@ public sealed class HostLobby : IAsyncDisposable
                     _knock.Admitted += r => Admitted?.Invoke(r);
                     _knock.Paused += () => Paused?.Invoke();
                     _knock.SessionEnded += () => _ = UpdateQuietlyAsync();
-                    _lobby = _startLobby(new LobbyOptions(lobby.Name, lobby.Secret, true, _peers(), EasyTierArgs.FreeTcpPort()));
+                    _lobby = _startLobby(new LobbyOptions(lobby.Name, lobby.Secret, true, _peers(), EasyTierArgs.FreeTcpPort(), ListenUdpPort: ListenUdpPort));
                     _openName = lobby.Name;
                     _log?.Invoke(L.T("core.mp.lobby.opened"));
                 }

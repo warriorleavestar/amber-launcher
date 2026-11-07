@@ -279,6 +279,18 @@ public sealed class InviteBook(Func<DateTimeOffset>? clock = null)
     /// <summary>邀请增减、用掉、过期或大厅密钥换了的时候。</summary>
     public event Action? Changed;
 
+    /// <summary>
+    /// 直连房间：大厅密钥 L 在整个房间期间不换（直连桥的 HMAC 钥匙由它派生，换了就连不上已经连着的桥）。
+    /// 邀请都用完时大厅照样关掉；旧邀请里的令牌已经用过，拿着 L 也只能碰到关着的大厅或被拒的敲门。房间结束（Clear）时丢掉。
+    /// </summary>
+    public bool KeepLobbyKey { get; init; }
+
+    /// <summary>直连房间：现在的大厅密钥 L 的副本（没有时生成一把）。</summary>
+    public byte[] LobbyKeyCopy()
+    {
+        lock (_gate) return (byte[])(_lobbyKey ??= RandomNumberGenerator.GetBytes(JayInvite.KeyLength)).Clone();
+    }
+
     public PendingInvite Create(int uses, TimeSpan? lifetime, bool autoApprove, TunnelSettings tunnel)
     {
         if (uses is < 1 or > 20) throw new ArgumentOutOfRangeException(nameof(uses));
@@ -349,9 +361,9 @@ public sealed class InviteBook(Func<DateTimeOffset>? clock = null)
     {
         var now = _now();
         if (_invites.Any(i => i.IsUsable(now))) return false;
-        var had = _lobbyKey is not null || _invites.Count > 0;
+        var had = (_lobbyKey is not null && !KeepLobbyKey) || _invites.Count > 0;
         _invites.Clear();
-        DropKeyLocked();
+        if (!KeepLobbyKey) DropKeyLocked();
         return had;
     }
 

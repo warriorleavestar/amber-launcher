@@ -79,7 +79,7 @@ public static partial class NetDiagnostics
     [GeneratedRegex(@"AMB-((?:T[1-3]D?-)?[0-9A-Z]{8})-[0-9A-Z]{12}-(\d{1,5})", RegexOptions.IgnoreCase)]
     private static partial Regex RoomCodePattern();
 
-    [GeneratedRegex(@"(AMBDIRECT\d+|AMBREPLY\d+)-[A-Za-z0-9_-]+")]
+    [GeneratedRegex(@"(AMBDIRECT\d+|AMBREPLY\d+|JAY2D|JAY2R)-[A-Za-z0-9_-]+", RegexOptions.IgnoreCase)]
     private static partial Regex DirectCodePattern();
 
     [GeneratedRegex(@"JAY2-(?:T[1-3]D?-)?[0-9A-Z]{26}-[0-9A-Z]{26}(?:-[0-9A-Z*~$=])?", RegexOptions.IgnoreCase)]

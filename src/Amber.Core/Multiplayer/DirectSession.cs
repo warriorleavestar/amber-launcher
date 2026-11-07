@@ -86,7 +86,31 @@ public sealed class DirectSession : IAsyncDisposable
     /// <summary>加入方：测试结束（或请求被撤回），界面收起确认。</summary>
     public event Action<string?>? TestEnded;
 
-    public RoomCode Room { get; }
+    private RoomCode? _room;
+    private byte[]? _bridgeKey;
+
+    /// <summary>
+    /// 房间。房主一开始就有；加入方要等经直连桥敲门、房主批准后才拿到（之前读它会抛异常，见 <see cref="HasRoom"/>）。
+    /// 房主踢人换网络后换成新的（<see cref="SwitchRoomAsync"/>）。
+    /// </summary>
+    public RoomCode Room => _room ?? throw new InvalidOperationException("no room yet");
+    public bool HasRoom => _room is not null;
+
+    /// <summary>直连桥探测和控制包的 HMAC 钥匙（<see cref="DirectKeys.Bridge"/>，由邀请里的大厅密钥 L 派生）。PrepareAsync 之前设好。</summary>
+    public byte[] BridgeKey
+    {
+        init => _bridgeKey = value.Length == 32 ? (byte[])value.Clone() : throw new ArgumentException(null, nameof(BridgeKey));
+    }
+
+    /// <summary>
+    /// 房主（邀请房间）：本机大厅 EasyTier 监听的 UDP 端口。新连上的直连桥先只转发到这里（只能敲门），批准后才接到房间。
+    /// </summary>
+    public int? LobbyUdpPort { get; }
+
+    /// <summary>加入方：证明自己是批准过的成员最多等这么久。</summary>
+    internal static TimeSpan AdmitTimeout { get; set; } = TimeSpan.FromSeconds(20);
+    private TaskCompletionSource<byte[]>? _challenge;
+    private TaskCompletionSource<bool>? _admitReply;
     public bool IsHost { get; }
     public DirectOptions Options { get; private set; }
     public DirectCode? LocalCode { get; private set; }
@@ -103,12 +127,15 @@ public sealed class DirectSession : IAsyncDisposable
     /// <summary>加入方：测试矩阵的一步交给界面执行（聊天探测要用界面那边的连接）。为空时用内置的探测。</summary>
     public event Action? StateChanged;
 
-    public DirectSession(EasyTierInstaller installer, string workDir, RoomCode room, bool isHost, DirectOptions options, DiagnosticLog log)
+    /// <param name="room">房主的房间；加入方传 null（批准后才拿到）。</param>
+    public DirectSession(EasyTierInstaller installer, string workDir, RoomCode? room, bool isHost, DirectOptions options, DiagnosticLog log)
     {
+        if (isHost && room is null) throw new ArgumentNullException(nameof(room));
         _installer = installer;
         _workDir = workDir;
-        Room = room;
+        _room = room;
         IsHost = isHost;
+        if (isHost && room!.FromInvite) LobbyUdpPort = FreeUdpPort();
         Options = options;
         _log = log;
     }
@@ -118,6 +145,7 @@ public sealed class DirectSession : IAsyncDisposable
     /// <summary>收集地址，建好直连桥，生成自己的码（房主是邀请码，加入方是回复码）。房主同时启动 EasyTier。</summary>
     public async Task<DirectCode> PrepareAsync(CancellationToken ct = default)
     {
+        var key = _bridgeKey ?? throw new InvalidOperationException("no bridge key");
         var socket = DirectBridge.CreateSocket();
         Log(L.F("core.mp.session.socket", ((IPEndPoint)socket.LocalEndPoint!).Port));
         if (Options.Simulated)
@@ -135,7 +163,7 @@ public sealed class DirectSession : IAsyncDisposable
         if (IsHost)
         {
             _easyTierUdpPort = FreeUdpPort();
-            Bridge = new DirectBridge(socket, Room, true, _easyTierUdpPort, Log);
+            Bridge = new DirectBridge(socket, key, true, _easyTierUdpPort, Log, LobbyUdpPort);
             Bridge.Connected += OnConnected;
             Bridge.ControlReceived += OnControl;
             _speed = new SpeedTestServer(SpeedTestPortForTest);
@@ -143,13 +171,36 @@ public sealed class DirectSession : IAsyncDisposable
         }
         else
         {
-            Bridge = new DirectBridge(socket, Room, false, null, Log);
+            Bridge = new DirectBridge(socket, key, false, null, Log);
             Bridge.Connected += OnConnected;
             Bridge.ControlReceived += OnControl;
         }
         var session = IsHost ? Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8)) : _remote?.Session ?? "";
-        LocalCode = new DirectCode(!IsHost, Room, session.Length >= 8 ? session : "0000000000000000", _gathered.Nat, _gathered.Candidates);
+        LocalCode = new DirectCode(!IsHost, session.Length >= 8 ? session : "0000000000000000", _gathered.Nat, _gathered.Candidates);
         return LocalCode;
+    }
+
+    /// <summary>房主：给一张邀请配上本机地址，生成直连邀请码（JAY2D-）。</summary>
+    public DirectCode InviteCode(JayInvite invite) =>
+        (LocalCode ?? throw new InvalidOperationException("not prepared")) with { IsReply = false, Invite = invite };
+
+    /// <summary>
+    /// 换到新的房间网络（房主踢人之后）：按现在的参数换上新房间重启 EasyTier。直连桥不动（它的钥匙和房间无关）。
+    /// </summary>
+    public async Task SwitchRoomAsync(RoomCode next, CancellationToken ct = default)
+    {
+        await _startLock.WaitAsync(ct);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _room = next;
+            if ((EasyTier?.Options ?? _currentOptions) is { } current) await StartEasyTierLockedAsync(current with { Room = next }, ct, force: true);
+        }
+        finally
+        {
+            _startLock.Release();
+            StateChanged?.Invoke();
+        }
     }
 
     private static int FreeUdpPort()
@@ -237,7 +288,7 @@ public sealed class DirectSession : IAsyncDisposable
         ct.ThrowIfCancellationRequested();
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!force && EasyTier is { HasExited: false } running && SameConfig(running.Options, options)) return;
-        Log(L.T("core.mp.session.start") + string.Join(' ', EasyTierArgs.Build(options).Select(a => Room.Secrets.Contains(a) ? L.T("core.mp.diagnostics.secret") : a)));
+        Log(L.T("core.mp.session.start") + string.Join(' ', EasyTierArgs.Build(options).Select(a => options.Room.Secrets.Contains(a) ? L.T("core.mp.diagnostics.secret") : a)));
         try
         {
             if (StartForTest is { } start)
@@ -318,35 +369,110 @@ public sealed class DirectSession : IAsyncDisposable
         && (a.ExitNode is null || (a.DirectUnderlayAddresses.SequenceEqual(b.DirectUnderlayAddresses)
             && a.DirectUnderlayUsesIpv6 == b.DirectUnderlayUsesIpv6));
 
-    /// <summary>加入方：按邀请码打洞。房主能直接连到时很快通；否则要等房主贴回复码，所以等得久一点。</summary>
-    public async Task<bool> JoinAsync(DirectCode invite, CancellationToken ct = default)
+    /// <summary>
+    /// 加入方：按直连邀请码打洞；打通后经直连桥（打不通又配置了联机节点时经节点）进大厅敲门，房主批准后拿到房间，
+    /// 再在桥上证明自己是批准过的成员，房主才把这条桥接到房间的 EasyTier。
+    /// 房主能直接连到时很快通；否则要等房主贴回复码，所以等得久一点。
+    /// </summary>
+    /// <param name="knock">经给定的大厅 peers 敲门；拿到房间返回它，被拒返回 null（原因由调用方显示）。</param>
+    /// <returns>进了房间返回 true；被拒返回 false。</returns>
+    public async Task<bool> JoinAsync(DirectCode invite, Func<IReadOnlyList<string>, CancellationToken, Task<RoomCode?>> knock, CancellationToken ct = default)
     {
+        if (invite.IsReply) throw new ArgumentException(null, nameof(invite));
         _remote = invite;
         if (LocalCode is { } code) LocalCode = code with { Session = invite.Session };
         Bridge!.SetRemoteCandidates(invite.Candidates);
         Log(L.F("core.mp.session.hostnat", DirectText.Nat(invite.Nat), string.Join(L.T("core.mp.format.listseparator"), invite.Candidates)));
         var peer = await Bridge.PunchAsync(invite.Candidates, invite.Nat, TimeSpan.FromSeconds(invite.DirectlyReachable ? 20 : 90), ct);
-        if (peer is not null)
+        IReadOnlyList<string> lobbyPeers;
+        if (peer is not null) lobbyPeers = [$"udp://127.0.0.1:{Bridge.LocalPort}"];
+        else
         {
-            await StartEasyTierAsync(GuestOptions(true, Options.FullLan, null), ct);
-            return true;
-        }
-        var reason = FailureReason(invite.Nat, LocalNat, invite.Candidates, _gathered?.Candidates ?? []);
-        Log(L.T("core.mp.session.failed") + reason);
-        if (Options.FallbackNodes.Count > 0)
-        {
+            var reason = FailureReason(invite.Nat, LocalNat, invite.Candidates, _gathered?.Candidates ?? []);
+            Log(L.T("core.mp.session.failed") + reason);
+            if (Options.FallbackNodes.Count == 0) throw new DirectFailedException(reason);
             Log(L.T("core.mp.session.fallback") + string.Join(L.T("core.mp.format.listseparator"), Options.FallbackNodes));
             UsingFallbackNode = true;
-            await StartEasyTierAsync(GuestOptions(false, Options.FullLan, null), ct);
-            return true;
+            lobbyPeers = Options.FallbackNodes;
         }
-        throw new DirectFailedException(reason);
+        if (await knock(lobbyPeers, ct) is not { } room) return false;
+        _room = room;
+        if (peer is not null && room.FromInvite) await AdmitAsync(room.Member ?? throw new InvalidOperationException("no member key"), ct);
+        await StartEasyTierAsync(GuestOptions(peer is not null, Options.FullLan, null), ct);
+        return true;
+    }
+
+    /// <summary>
+    /// 加入方：向房主证明自己是批准过的成员（要一个挑战，再用成员钥匙对它做 HMAC）。UDP 会丢包，每秒重发，最多 <see cref="AdmitTimeout"/>。
+    /// 控制消息里只有成员编号和 HMAC，没有密钥。
+    /// </summary>
+    internal async Task AdmitAsync(MemberKey member, CancellationToken ct)
+    {
+        if (Bridge?.Peers.FirstOrDefault() is not { } peer || _remote is not { } invite) throw new DirectFailedException(L.T("core.mp.direct.admit_timeout"));
+        var challenge = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reply = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _challenge = challenge;
+        _admitReply = reply;
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(AdmitTimeout);
+        try
+        {
+            byte[] nonce;
+            while (true)
+            {
+                await Bridge.SendControlAsync(peer, new JsonObject { ["op"] = "admit-start" });
+                try { nonce = await challenge.Task.WaitAsync(TimeSpan.FromSeconds(1), limit.Token); break; }
+                catch (TimeoutException) { }
+            }
+            var proof = DirectKeys.AdmitProof(member, invite.Session, nonce);
+            var message = new JsonObject { ["op"] = "admit", ["id"] = member.IdHex, ["mac"] = Convert.ToBase64String(proof) };
+            bool ok;
+            while (true)
+            {
+                await Bridge.SendControlAsync(peer, message);
+                try { ok = await reply.Task.WaitAsync(TimeSpan.FromSeconds(1), limit.Token); break; }
+                catch (TimeoutException) { }
+            }
+            if (!ok) throw new DirectFailedException(L.T("core.mp.direct.admit_refused"));
+            Log(L.T("core.mp.direct.admit_ok"));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new DirectFailedException(L.T("core.mp.direct.admit_timeout"));
+        }
+        finally
+        {
+            _challenge = null;
+            _admitReply = null;
+        }
+    }
+
+    /// <summary>房主：加入方报上成员编号和对挑战的 HMAC。对得上（批准过、没作废）就把这条桥接到房间。</summary>
+    internal bool TryAdmit(DirectPeer peer, JsonObject message)
+    {
+        if (Bridge is not { } bridge || !HasRoom || Room.Members is not { } members || LocalCode is not { } local || peer.Challenge is not { } challenge) return false;
+        if (Str(message, "id") is not { Length: MemberKey.IdLength * 2 } idHex || Str(message, "mac") is not { } macText) return false;
+        byte[] id, mac;
+        try
+        {
+            id = Convert.FromHexString(idHex);
+            mac = Convert.FromBase64String(macText);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+        if (mac.Length != 32 || !members.TryGet(id, out var entry) || entry.IsHost || entry.Revoked) return false;
+        var expected = DirectKeys.AdmitProof(entry.Key, local.Session, challenge);
+        if (!CryptographicOperations.FixedTimeEquals(expected, mac)) return false;
+        return bridge.Admit(peer, entry);
     }
 
     /// <summary>房主：加入方的回复码到了，往它的地址打洞。</summary>
     public async Task<bool> AddReplyAsync(DirectCode reply, CancellationToken ct = default)
     {
-        if (reply.Room != Room) throw new DirectFailedException(L.T("core.mp.code.wrongroom"));
+        if (!reply.IsReply || LocalCode is not { } local || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(reply.Session), Encoding.UTF8.GetBytes(local.Session)))
+            throw new DirectFailedException(L.T("core.mp.code.wrongroom"));
         _guestCandidates = reply.Candidates;
         _guestNat = reply.Nat;
         Bridge!.SetRemoteCandidates(reply.Candidates);
@@ -378,7 +504,7 @@ public sealed class DirectSession : IAsyncDisposable
 
     /// <summary>
     /// 加入方连上后发给房主的 hello：只有会话 id、NAT 类型和地址。
-    /// 直连通道的控制消息只认证不加密，所以不带房间码；能通过 HMAC 校验本身就说明对方知道房间密钥。
+    /// 直连通道的控制消息只认证不加密，所以不带任何密钥；能通过 HMAC 校验只说明对方拿到过邀请（知道大厅密钥），还不能进房间。
     /// </summary>
     internal static JsonObject Hello(DirectCode code)
     {
@@ -417,6 +543,28 @@ public sealed class DirectSession : IAsyncDisposable
                     _guestNat = nat;
                     Log(L.T("core.mp.session.guestaddresses") + string.Join(L.T("core.mp.format.listseparator"), candidates));
                 }
+                break;
+            case "admit-start" when IsHost && Bridge is { } challengeBridge:
+                _ = challengeBridge.SendControlAsync(peer, new JsonObject { ["op"] = "challenge", ["n"] = Convert.ToBase64String(challengeBridge.ChallengeFor(peer)) });
+                break;
+            case "admit" when IsHost:
+                var admitted = TryAdmit(peer, message);
+                if (!admitted) Log(L.F("core.mp.direct.admit_rejected", peer.Remote));
+                _ = Bridge!.SendControlAsync(peer, new JsonObject { ["op"] = "admit-result", ["ok"] = admitted });
+                if (admitted) StateChanged?.Invoke();
+                break;
+            case "challenge" when !IsHost:
+                if (Str(message, "n") is { } n && _challenge is { } waiting)
+                {
+                    try
+                    {
+                        if (Convert.FromBase64String(n) is { Length: 16 } nonce) waiting.TrySetResult(nonce);
+                    }
+                    catch (FormatException) { }
+                }
+                break;
+            case "admit-result" when !IsHost:
+                if (Bool(message, "ok") is { } ok) _admitReply?.TrySetResult(ok);
                 break;
             case "test-request" when !IsHost:
                 if (Str(message, "run") is not { Length: >= 8 and <= 64 } requestRun) break;
@@ -1029,6 +1177,7 @@ public sealed class DirectSession : IAsyncDisposable
         Try(() => EasyTier?.Dispose());
         if (_speed is not null) await TryAsync(() => _speed.DisposeAsync().AsTask());
         if (Bridge is not null) await TryAsync(() => Bridge.DisposeAsync().AsTask());
+        if (_bridgeKey is { } bridgeKey) CryptographicOperations.ZeroMemory(bridgeKey);
         if (_gathered?.Mapping?.Remove is { } remove)
         {
             try

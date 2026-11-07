@@ -2,6 +2,7 @@ using Amber.Core.Localization;
 using System.Collections.ObjectModel;
 using Amber.App.Services;
 using Amber.Core.Multiplayer;
+using Amber.Core.Multiplayer.Transport;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -26,7 +27,13 @@ public sealed partial class MultiplayerViewModel
     [ObservableProperty] public partial string StunText { get; set; } = string.Join(", ", Stun.DefaultServers);
     [ObservableProperty] public partial string DirectInviteInput { get; set; } = "";
     [ObservableProperty] public partial string DirectReplyInput { get; set; } = "";
-    [ObservableProperty] public partial string MyDirectCode { get; set; } = "";
+    /// <summary>自己的直连码（完整的，复制用）。界面默认显示打码后的 <see cref="MyDirectCodeDisplay"/>。</summary>
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(MyDirectCodeDisplay), nameof(InviteDisplay), nameof(HasInvite))] public partial string MyDirectCode { get; set; } = "";
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(MyDirectCodeDisplay))] public partial bool DirectCodeShown { get; set; }
+    public string MyDirectCodeDisplay => DirectCodeShown || MyDirectCode.Length <= 12 ? MyDirectCode : MyDirectCode[..6] + new string('•', 8) + MyDirectCode[^4..];
+
+    [RelayCommand]
+    private void ToggleDirectCodeShown() => DirectCodeShown = !DirectCodeShown;
     [ObservableProperty] public partial string DirectHint { get; set; } = "";
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(CurrentPathText))] public partial string PathText { get; set; } = "";
     public string CurrentPathText => L.F("multiplayer.direct.current_path", PathText);
@@ -60,6 +67,12 @@ public sealed partial class MultiplayerViewModel
     public partial bool IsDirect { get; set; }
 
     public bool IsDirectHost => IsDirect && IsHosting;
+
+    /// <summary>测试用：现在的直连会话。</summary>
+    internal DirectSession? DirectForTest => _direct;
+
+    /// <summary>测试用：现在房间的密钥（检查诊断报告里没有它们）。</summary>
+    internal IReadOnlyList<string> RoomSecretsForTest => _room is { } room ? [.. room.Secrets] : [];
 
     private void InitDirect()
     {
@@ -119,7 +132,10 @@ public sealed partial class MultiplayerViewModel
         }
     }
 
-    /// <summary>房主：创建直连房间，生成邀请码。</summary>
+    /// <summary>
+    /// 房主：创建直连房间。和经节点的房间一样是邀请房间：随机的房间凭据、成员表、大厅和敲门；
+    /// 大厅密钥 L 在整个房间期间不换（直连桥的 HMAC 钥匙由它派生）。马上发第一张邀请（一次、要房主批准），生成直连邀请码。
+    /// </summary>
     [RelayCommand]
     private async Task CreateDirectRoomAsync()
     {
@@ -135,25 +151,36 @@ public sealed partial class MultiplayerViewModel
             SetStatus(StatusMessage.Warning("multiplayer.lan.port_required"));
             return;
         }
-        var room = RoomCode.Create(port.Value);
+        var credentials = NewCredentials(port.Value, TunnelSettings.Default);
+        var members = new MemberTable();
+        var room = credentials.ToHostRoom(members, ChatName);
+        var book = new InviteBook { KeepLobbyKey = true };
+        var lobbyKey = book.LobbyKeyCopy();
+        var bridgeKey = DirectKeys.Bridge(lobbyKey);
+        System.Security.Cryptography.CryptographicOperations.ZeroMemory(lobbyKey);
         SetStatus(StatusMessage.Info("multiplayer.direct.gathering_host"));
-        var direct = new DirectSession(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier"), room, true, MakeDirectOptions(), _diag);
+        var direct = new DirectSession(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier"), room, true, MakeDirectOptions(), _diag) { BridgeKey = bridgeKey };
+        System.Security.Cryptography.CryptographicOperations.ZeroMemory(bridgeKey);
         try
         {
             var code = await direct.PrepareAsync();
             AttachDirect(direct, room);
             Mode = "host";
-            RoomCodeText = room.ToString();
-            MyDirectCode = code.Encode();
+            RoomCodeText = "";
+            RestoreChatHistory(room);
+            StartHub(room);
+            var fallback = direct.Options.FallbackNodes;
+            StartHostLobby(credentials, members, book, direct.LobbyUdpPort, () => fallback);
             DirectHint = code.DirectlyReachable
                 ? L.T("multiplayer.direct.host_reachable")
                 : L.F("multiplayer.direct.host_reply_hint", DirectText.Nat(code.Nat));
-            StartHub(room);
+            if (await IssueInviteAsync(1, InviteExpiryChoices[0].Lifetime, false) is null) return;
             SetStatus(StatusMessage.Success("multiplayer.direct.created"));
         }
         catch (Exception e) when (e is OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException)
         {
-            await direct.DisposeAsync();
+            if (_direct == direct) StopSession();
+            else await direct.DisposeAsync();
             SetStatus(StatusMessage.Failure("multiplayer.direct.create_failed", e, ErrorText.Of(e)));
         }
     }
@@ -180,23 +207,34 @@ public sealed partial class MultiplayerViewModel
         }
     }
 
-    /// <summary>加入方：贴上邀请码，生成回复码并开始打洞。</summary>
+    /// <summary>
+    /// 加入方：贴上直连邀请码，生成回复码并开始打洞；打通后经直连桥进大厅敲门，房主批准后拿到房间凭据，
+    /// 再在桥上证明自己是批准过的成员，房主才把这条桥接到房间。
+    /// </summary>
     [RelayCommand]
     private async Task JoinDirectAsync()
     {
-        if (!IsIdle) return;
+        if (!IsIdle || IsKnocking) return;
         if (RouteMisplacedCode(DirectInviteInput, PastedCodeKind.DirectInvite, () => DirectInviteInput = "")) return;
         if (!IsComponentReady)
         {
             SetStatus(StatusMessage.Warning("multiplayer.component.download_required"));
             return;
         }
-        if (!DirectCode.TryParse(DirectInviteInput, out var invite, out var error) || invite.IsReply)
+        if (!DirectCode.TryParse(DirectInviteInput, out var invite, out var error) || invite.IsReply || invite.Invite is not { } jay)
         {
-            Status = error ?? L.T("multiplayer.direct.invalid_invite");
+            if (DirectCode.LooksLikeOldCode(DirectInviteInput)) SetStatus(StatusMessage.Warning("multiplayer.direct.old_code"));
+            else Status = error ?? L.T("multiplayer.direct.invalid_invite");
             return;
         }
-        var direct = new DirectSession(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier"), invite.Room, false, MakeDirectOptions(), _diag);
+        if (jay.Tunnel.Mode == TransportMode.Extreme && !NoiseHandshake.HybridSupported)
+        {
+            SetStatus(StatusMessage.Warning("multiplayer.room.extreme_unsupported"));
+            return;
+        }
+        var bridgeKey = DirectKeys.Bridge(jay.LobbyKey);
+        var direct = new DirectSession(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier"), null, false, MakeDirectOptions(), _diag) { BridgeKey = bridgeKey };
+        System.Security.Cryptography.CryptographicOperations.ZeroMemory(bridgeKey);
         // 先订阅再加入：打通后房主可能马上发来测试请求。只认当前这个会话的事件（结束或换了会话就不管）。
         direct.TestRequested += request => Dispatcher.UIThread.Post(() =>
         {
@@ -221,33 +259,95 @@ public sealed partial class MultiplayerViewModel
             Mode = "join";
             IsDirect = true;
             _direct = direct;
-            _room = invite.Room;
-            RoomCodeText = invite.Room.ToString();
+            RoomCodeText = "";
             MyDirectCode = (code with { Session = invite.Session }).Encode();
+            DirectCodeShown = false;
             DirectHint = invite.DirectlyReachable
                 ? L.T("multiplayer.direct.guest_reachable")
                 : L.T("multiplayer.direct.guest_reply_hint");
             SetStatus(StatusMessage.Info("multiplayer.direct.punching"));
-            await direct.JoinAsync(invite);
-            AttachDirect(direct, invite.Room);
-            JoinAddress = FullLanMode ? $"{EasyTierArgs.HostIp}:{invite.Room.Port}" : $"127.0.0.1:{direct.LocalGamePort}";
+            if (!await direct.JoinAsync(invite, (peers, ct) => DirectKnockAsync(jay, peers, ct)))
+            {
+                // 被拒、过期：原因已经显示了。
+                await LeaveFailedDirectAsync(direct);
+                return;
+            }
+            var room = direct.Room;
+            AttachDirect(direct, room);
+            JoinAddress = FullLanMode ? $"{EasyTierArgs.HostIp}:{room.Port}" : $"127.0.0.1:{direct.LocalGamePort}";
             _localChatPort = FullLanMode ? null : direct.LocalChatPort;
-            RestoreChatHistory(invite.Room);
+            RestoreChatHistory(room);
             ChatStatus = L.T("multiplayer.chat.awaiting_host");
             Status = direct.UsingFallbackNode ? L.T("multiplayer.direct.fallback") : L.T("multiplayer.direct.connected");
             direct.GuestChatProbe = ChatProbeAsync;
             // 万一请求在界面订阅前就到了（或者事件被错过）：按会话里记着的待确认请求补上。
             if (direct.TestConsent.Pending is { } pending && !TestRequestPending) ShowTestRequest(pending);
         }
-        catch (Exception e) when (e is DirectFailedException or OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException)
+        catch (TimeoutException e)
         {
-            await direct.DisposeAsync();
-            _direct = null;
-            IsDirect = false;
-            Mode = "";
-            // 打洞期间可能已经收到测试请求：一起收起。
-            ResetGuestTest();
+            await LeaveFailedDirectAsync(direct);
+            SetStatus(new StatusMessage("common.raw", [e.Message], StatusKind.Warning));
+        }
+        catch (Exception e) when (e is DirectFailedException or OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException
+            or System.ComponentModel.Win32Exception or PlatformNotSupportedException or System.Security.Cryptography.CryptographicException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            await LeaveFailedDirectAsync(direct);
             SetStatus(StatusMessage.Failure("multiplayer.direct.connect_failed", e, ErrorText.Of(e)));
+        }
+    }
+
+    private async Task LeaveFailedDirectAsync(DirectSession direct)
+    {
+        await direct.DisposeAsync();
+        if (_direct != direct) return;
+        _direct = null;
+        IsDirect = false;
+        Mode = "";
+        MyDirectCode = "";
+        // 打洞期间可能已经收到测试请求：一起收起。
+        ResetGuestTest();
+    }
+
+    /// <summary>加入方：经直连桥（或者节点）进大厅敲门、等批准。拿到房间凭据返回房间；被拒、过期返回 null（原因已经显示）。</summary>
+    private async Task<RoomCode?> DirectKnockAsync(JayInvite invite, IReadOnlyList<string> peers, CancellationToken ct)
+    {
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            IsKnocking = true;
+            SetStatus(StatusMessage.Info("multiplayer.invite.entering_lobby"));
+        });
+        try
+        {
+            var me = Identity.KeyPair;
+            var name = ChatName;
+            var outcome = await Task.Run(() => LobbyJoin.KnockAsync(_service.EasyTier, Path.Combine(AppSettings.DataDir, "easytier", "lobby-join"), peers, invite,
+                me, name, Amber.Core.Launch.UpdateChecker.CurrentVersion, line => _diag.Add(L.T("multiplayer.invite.diagnostics_category"), line),
+                () => Dispatcher.UIThread.Post(() => SetStatus(StatusMessage.Info("multiplayer.invite.waiting_approval"))), ct));
+            return await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (outcome.Credentials is not { } credentials)
+                {
+                    SetStatus(StatusMessage.Warning(outcome.Reason switch
+                    {
+                        "expired" => "multiplayer.invite.reason.expired",
+                        "full" => "multiplayer.invite.reason.full",
+                        _ => "multiplayer.invite.reason.denied",
+                    }));
+                    return null;
+                }
+                if (credentials.Tunnel.Mode == TransportMode.Extreme && !NoiseHandshake.HybridSupported)
+                {
+                    SetStatus(StatusMessage.Warning("multiplayer.room.extreme_unsupported"));
+                    return null;
+                }
+                HostFingerprint = outcome.HostFingerprint;
+                SetStatus(StatusMessage.Info("multiplayer.direct.admitting"));
+                return (RoomCode?)credentials.ToRoom();
+            });
+        }
+        finally
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => IsKnocking = false);
         }
     }
 
@@ -480,6 +580,7 @@ public sealed partial class MultiplayerViewModel
         }
         IsDirect = false;
         MyDirectCode = "";
+        DirectCodeShown = false;
         DirectHint = "";
         PathText = "";
     }

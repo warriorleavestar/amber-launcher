@@ -557,7 +557,8 @@ public sealed class ChatHub : IAsyncDisposable
         var waits = new List<Task>();
         foreach (var member in _members.Values)
         {
-            if (!member.Authenticated || member.IsHost || member.Entry is not { IsHost: false } entry) continue;
+            // 已经作废的钥匙（刚被踢、被换掉）不发：他不该拿到新网络。
+            if (!member.Authenticated || member.IsHost || member.Entry is not { IsHost: false, Revoked: false } entry) continue;
             var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _rekeyAcks[entry.Id] = ack;
             if (!member.Outbox.Writer.TryWrite(frame))
@@ -572,6 +573,20 @@ public sealed class ChatHub : IAsyncDisposable
         catch (TimeoutException) { }
         var acked = sent.Where(e => _rekeyAcks.TryGetValue(e.Id, out var a) && a.Task.IsCompletedSuccessfully).ToList();
         return (sent, acked);
+    }
+
+    /// <summary>
+    /// 踢人之前：经这个成员自己的通道告诉他“你已被移出房间”（他那边收到后停止联机）。只是通知，真正断开靠钥匙作废。
+    /// 发出后等一小会儿让这一帧写出去。不在线时什么都不做。
+    /// </summary>
+    public async Task NotifyKickedAsync(MemberEntry entry, CancellationToken ct = default)
+    {
+        if (_table is null) return;
+        var frame = KnockProtocol.Json(new JsonObject { ["ctl"] = "kicked" });
+        var sent = false;
+        foreach (var member in _members.Values)
+            if (member.Authenticated && !member.IsHost && ReferenceEquals(member.Entry, entry)) sent |= member.Outbox.Writer.TryWrite(frame);
+        if (sent) await Task.Delay(300, ct);
     }
 
     private void OnRekeyAck(MemberEntry who, int epoch)
@@ -786,6 +801,9 @@ public sealed class ChatClient : IAsyncDisposable
     /// <summary>邀请房间：房主换了网络（踢人之后），发来新的网络名、密钥和版本。只认房主这条腿上来的、版本比当前大的，只认一次；已经回过确认。</summary>
     public event Action<RoomRekey>? Rekeyed;
 
+    /// <summary>邀请房间：房主踢出了自己（经房主这条腿上来的通知）。</summary>
+    public event Action? Kicked;
+
     public ChatClient(RoomCode room, string name)
     {
         _epoch = room.Epoch;
@@ -889,6 +907,7 @@ public sealed class ChatClient : IAsyncDisposable
                         catch (Exception e) when (e is IOException or OperationCanceledException or ObjectDisposedException or InvalidOperationException or SocketException or CryptographicException) { }
                         Rekeyed?.Invoke(next);
                     }
+                    else if (ctl == "kicked") Kicked?.Invoke();
                     continue;
                 }
                 if ((_cipher is not null ? _cipher.Open(frame) : ChatWire.ParseRelay(frame)) is not { } message) continue;

@@ -355,10 +355,19 @@
               <TextBlock Text="{l:T multiplayer.direct.invite_label}" FontWeight="SemiBold" TextWrapping="Wrap" IsVisible="{Binding IsDirectHost}" />
               <TextBlock Text="{l:T multiplayer.direct.reply_label}" FontWeight="SemiBold" TextWrapping="Wrap" IsVisible="{Binding !IsDirectHost}" />
             </StackPanel>
-            <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding MyDirectCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-              <TextBox Text="{Binding MyDirectCode}" IsReadOnly="True" FontFamily="Consolas,monospace" FontSize="{StaticResource FontCaption}" TextWrapping="Wrap" MaxHeight="70" />
-              <Button Grid.Column="1" Content="{l:T common.copy}" Command="{Binding CopyDirectCodeCommand}" Margin="6,0,0,0" VerticalAlignment="Top" />
+            <!-- 直连码默认打码；两种码都带着本机的公网地址 -->
+            <Grid ColumnDefinitions="*,Auto,Auto" IsVisible="{Binding MyDirectCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+              <TextBox Text="{Binding MyDirectCodeDisplay}" IsReadOnly="True" FontFamily="Consolas,monospace" FontSize="{StaticResource FontCaption}" TextWrapping="Wrap" MaxHeight="70" />
+              <Button Grid.Column="1" Command="{Binding ToggleDirectCodeShownCommand}" Margin="6,0,0,0" VerticalAlignment="Top">
+                <Panel>
+                  <TextBlock Text="{l:T multiplayer.invite.show}" IsVisible="{Binding !DirectCodeShown}" />
+                  <TextBlock Text="{l:T multiplayer.invite.hide}" IsVisible="{Binding DirectCodeShown}" />
+                </Panel>
+              </Button>
+              <Button Grid.Column="2" Content="{l:T common.copy}" Command="{Binding CopyDirectCodeCommand}" Margin="6,0,0,0" VerticalAlignment="Top" />
             </Grid>
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.direct.ip_warning}"
+                       IsVisible="{Binding MyDirectCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsDirectHost}">
               <TextBox Text="{Binding DirectReplyInput}" PlaceholderText="{l:T multiplayer.direct.reply_placeholder}" />
               <Button Grid.Column="1" Content="{l:T multiplayer.direct.connect}" Command="{Binding AddDirectReplyCommand}" Margin="6,0,0,0" />

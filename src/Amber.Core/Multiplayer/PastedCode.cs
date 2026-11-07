@@ -8,10 +8,12 @@ public enum PastedCodeKind
     Room,
     /// <summary>邀请码 JAY2-…：经联机节点的房间（先敲门、房主批准）。</summary>
     Invite,
-    /// <summary>直连邀请码 AMBDIRECT1-…：房主发给朋友。</summary>
+    /// <summary>直连邀请码 JAY2D-…：房主发给朋友。</summary>
     DirectInvite,
-    /// <summary>直连回复码 AMBREPLY1-…：朋友发回房主。</summary>
+    /// <summary>直连回复码 JAY2R-…：朋友发回房主。</summary>
     DirectReply,
+    /// <summary>旧版本的直连码 AMBDIRECT1- / AMBREPLY1-（里面是完整的房间码）：不再接受，提示对方更新。</summary>
+    OldDirect,
     /// <summary>节点分享码 AMBNODE-…。</summary>
     NodeShare,
 }
@@ -44,8 +46,10 @@ public static class PastedCode
 
     private static readonly (string Prefix, PastedCodeKind Kind)[] Prefixes =
     [
-        ("AMBDIRECT", PastedCodeKind.DirectInvite),
-        ("AMBREPLY", PastedCodeKind.DirectReply),
+        ("JAY2D-", PastedCodeKind.DirectInvite),
+        ("JAY2R-", PastedCodeKind.DirectReply),
+        ("AMBDIRECT", PastedCodeKind.OldDirect),
+        ("AMBREPLY", PastedCodeKind.OldDirect),
         ("AMBNODE-", PastedCodeKind.NodeShare),
         ("JAY2-", PastedCodeKind.Invite),
     ];

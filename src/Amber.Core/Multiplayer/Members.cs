@@ -169,7 +169,6 @@ public sealed class MemberTable
         return true;
     }
 
-    /// <summary>加进这个房间的禁入名单：以后这把公钥敲门一律不理。</summary>
     /// <summary>
     /// 踢出：记进禁入名单、移出成员表（钥匙作废，现有连接马上断开），并作废他进来用的那张邀请——
     /// 禁入名单按公钥记，换一个身份就能绕过，所以那张邀请也不能再用。
@@ -185,6 +184,7 @@ public sealed class MemberTable
         return hadUses;
     }
 
+    /// <summary>加进这个房间的禁入名单：以后这把公钥敲门一律不理。</summary>
     public void Ban(ReadOnlySpan<byte> publicKey, string name)
     {
         var pub = publicKey.ToArray();

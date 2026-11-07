@@ -108,6 +108,9 @@ public sealed partial class MultiplayerViewModel
             case PastedCodeKind.DirectReply:
                 SetStatus(StatusMessage.Warning("multiplayer.code.reply_misplaced"));
                 return true;
+            case PastedCodeKind.OldDirect:
+                SetStatus(StatusMessage.Warning("multiplayer.direct.old_code"));
+                return true;
             default:
                 return false;
         }

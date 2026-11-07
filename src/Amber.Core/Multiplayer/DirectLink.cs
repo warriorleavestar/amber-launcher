@@ -53,29 +53,48 @@ public static class DirectText
 }
 
 /// <summary>
-/// 直连邀请码 / 回复码：AMBDIRECT1-… / AMBREPLY1-…（base64url 编码的 JSON）。
-/// 里面有房间码（含密钥）、本次会话 id、NAT 类型和能连到自己的地址。只发给要一起玩的人。
+/// 直连邀请码 / 回复码：JAY2D-… / JAY2R-…（base64url 编码的 JSON）。
+/// 邀请码里是本次会话 id、NAT 类型、能连到房主的地址，和一张普通的 JAY2 邀请（大厅密钥 L + 一次性令牌 K）：
+/// 拿着它只能经直连桥进大厅敲门，房主批准后才在加密通道里拿到房间的凭据。里面没有房间的网络名、密钥和成员钥匙。
+/// 回复码只有会话 id、NAT 类型和地址，没有任何密钥。两种码都含公网 IP，只发给要一起玩的人。
 /// </summary>
-public sealed record DirectCode(bool IsReply, RoomCode Room, string Session, NatKind Nat, IReadOnlyList<Candidate> Candidates)
+public sealed record DirectCode(bool IsReply, string Session, NatKind Nat, IReadOnlyList<Candidate> Candidates, JayInvite? Invite = null)
 {
     public const int Version = 1;
-    private const string InvitePrefix = "AMBDIRECT";
-    private const string ReplyPrefix = "AMBREPLY";
+    public const string InvitePrefix = "JAY2D-";
+    public const string ReplyPrefix = "JAY2R-";
+    private const string OldInvitePrefix = "AMBDIRECT";
+    private const string OldReplyPrefix = "AMBREPLY";
 
     /// <summary>对方地址里有 IPv6、映射端口或者对方有公网地址：加入方直接连得上，不用再发回复码。</summary>
     public bool DirectlyReachable => Nat == NatKind.Open || Candidates.Any(c => c.Kind is PathKind.IPv6 or PathKind.Mapped);
 
     public string Encode()
     {
+        if (!IsReply && Invite is null) throw new InvalidOperationException("direct invite needs a JAY2 invite");
+        if (IsReply && Invite is not null) throw new InvalidOperationException("reply codes carry no invite");
         var json = Addresses();
-        json["r"] = Room.ToString();
+        json["v"] = Version;
+        if (Invite is { } invite) json["i"] = invite.ToString();
         var body = Convert.ToBase64String(Encoding.UTF8.GetBytes(json.ToJsonString())).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        return $"{(IsReply ? ReplyPrefix : InvitePrefix)}{Version}-{body}";
+        return (IsReply ? ReplyPrefix : InvitePrefix) + body;
     }
 
+    /// <summary>打码后的样子（界面默认显示这个）：只露出前缀和最后 4 位。</summary>
+    public string Masked
+    {
+        get
+        {
+            var text = Encode();
+            return text[..InvitePrefix.Length] + new string('•', 8) + text[^4..];
+        }
+    }
+
+    public override string ToString() => IsReply ? "DirectCode(reply)" : "DirectCode(invite)";
+
     /// <summary>
-    /// 只有会话 id、NAT 类型和地址，没有房间码：经直连通道发的 hello 用它。
-    /// 直连通道的控制消息只有 HMAC 认证、没有加密，路上的人看得到内容，所以绝不能带房间码（所有密钥都由它派生）。
+    /// 只有会话 id、NAT 类型和地址：回复码和经直连通道发的 hello 用它。
+    /// 直连通道的控制消息只有 HMAC 认证、没有加密，路上的人看得到内容，所以绝不能带任何密钥。
     /// </summary>
     public JsonObject Addresses() => new()
     {
@@ -84,7 +103,7 @@ public sealed record DirectCode(bool IsReply, RoomCode Room, string Session, Nat
         ["c"] = new JsonArray(Candidates.Select(c => (JsonNode?)new JsonArray(c.Kind.ToString(), c.EndPoint.ToString())).ToArray()),
     };
 
-    /// <summary>解析 <see cref="Addresses"/> 的内容（对方的 hello）。会话 id 长度不对时返回 false。</summary>
+    /// <summary>解析 <see cref="Addresses"/> 的内容（对方的 hello、码里的地址）。会话 id 长度不对时返回 false。</summary>
     public static bool TryParseAddresses(JsonObject? json, out string session, out NatKind nat, out List<Candidate> candidates)
     {
         session = "";
@@ -94,7 +113,7 @@ public sealed record DirectCode(bool IsReply, RoomCode Room, string Session, Nat
         try
         {
             session = (json["s"] as JsonValue)?.TryGetValue<string>(out var s) == true ? s : "";
-            if (session.Length is < 8 or > 64) return false;
+            if (session.Length is < 8 or > 64 || !session.All(char.IsAsciiLetterOrDigit)) return false;
             nat = (json["n"] as JsonValue)?.TryGetValue<string>(out var n) == true && Enum.TryParse<NatKind>(n, out var kind) && Enum.IsDefined(kind) ? kind : NatKind.Unknown;
             foreach (var item in json["c"] as JsonArray ?? [])
             {
@@ -111,7 +130,11 @@ public sealed record DirectCode(bool IsReply, RoomCode Room, string Session, Nat
         }
     }
 
-    /// <summary>解析粘贴的文字。版本不对时 error 说明原因。</summary>
+    /// <summary>旧版本的直连码（AMBDIRECT1- / AMBREPLY1-，里面是完整的房间码）：不再接受，提示对方更新。</summary>
+    public static bool LooksLikeOldCode(string? text) =>
+        text is not null && (text.Contains(OldInvitePrefix, StringComparison.OrdinalIgnoreCase) || text.Contains(OldReplyPrefix, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>解析粘贴的文字（容忍前后多余的文字）。认不出、旧版本、内容坏了时 error 说明原因。</summary>
     public static bool TryParse(string? text, out DirectCode code, out string? error)
     {
         code = null!;
@@ -120,52 +143,88 @@ public sealed record DirectCode(bool IsReply, RoomCode Room, string Session, Nat
         var upper = text.ToUpperInvariant();
         var start = upper.IndexOf(InvitePrefix, StringComparison.Ordinal);
         var isReply = false;
-        if (start < 0)
+        var reply = upper.IndexOf(ReplyPrefix, StringComparison.Ordinal);
+        if (reply >= 0 && (start < 0 || reply < start))
         {
-            start = upper.IndexOf(ReplyPrefix, StringComparison.Ordinal);
-            isReply = start >= 0;
+            start = reply;
+            isReply = true;
         }
         if (start < 0)
         {
-            error = L.T("core.mp.code.unrecognized");
+            error = L.T(LooksLikeOldCode(text) ? "core.mp.code.old_direct" : "core.mp.code.unrecognized");
             return false;
         }
-        var rest = text[(start + (isReply ? ReplyPrefix : InvitePrefix).Length)..];
-        var dash = rest.IndexOf('-');
-        if (dash <= 0 || !int.TryParse(rest[..dash], out var version))
-        {
-            error = L.T("core.mp.code.incomplete");
-            return false;
-        }
-        if (version != Version)
-        {
-            error = L.F("core.mp.code.version", version, Version);
-            return false;
-        }
-        var body = new string(rest[(dash + 1)..].TakeWhile(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_').ToArray());
+        var body = new string(text[(start + InvitePrefix.Length)..].TakeWhile(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_').ToArray());
         try
         {
             var b64 = body.Replace('-', '+').Replace('_', '/');
             b64 += new string('=', (4 - b64.Length % 4) % 4);
-            var json = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(b64)))!.AsObject();
-            if (!RoomCode.TryParse(json["r"]?.GetValue<string>(), out var room)) throw new FormatException();
-            var candidates = new List<Candidate>();
-            foreach (var item in json["c"] as JsonArray ?? [])
+            if (JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(b64))) is not JsonObject json) throw new FormatException();
+            var version = (json["v"] as JsonValue)?.TryGetValue<int>(out var v) == true ? v : 0;
+            if (version != Version)
             {
-                if (item is not JsonArray pair || pair.Count != 2) continue;
-                if (Enum.TryParse<PathKind>(pair[0]?.GetValue<string>(), out var kind) && IPEndPoint.TryParse(pair[1]?.GetValue<string>() ?? "", out var ep) && ep.Port > 0)
-                    candidates.Add(new Candidate(kind, ep));
+                error = L.F("core.mp.code.version", version, Version);
+                return false;
             }
-            var nat = Enum.TryParse<NatKind>(json["n"]?.GetValue<string>(), out var n) ? n : NatKind.Unknown;
-            var session = json["s"]?.GetValue<string>() ?? "";
-            if (session.Length is < 8 or > 64) throw new FormatException();
-            code = new DirectCode(isReply, room, session, nat, candidates);
+            if (!TryParseAddresses(json, out var session, out var nat, out var candidates)) throw new FormatException();
+            JayInvite? invite = null;
+            if (json["i"] is JsonValue iv && iv.TryGetValue<string>(out var inviteText))
+            {
+                if (isReply || !JayInvite.TryParse(inviteText, out var parsed)) throw new FormatException();
+                invite = parsed;
+            }
+            if (!isReply && invite is null) throw new FormatException();
+            // 只认这几个字段：码里多出来的东西（比如塞进去的密钥）不当成合法的码。
+            if (json.Any(p => p.Key is not ("v" or "s" or "n" or "c" or "i"))) throw new FormatException();
+            code = new DirectCode(isReply, session, nat, candidates, invite);
             return true;
         }
-        catch (Exception e) when (e is FormatException or JsonException or InvalidOperationException or NullReferenceException)
+        catch (Exception e) when (e is FormatException or JsonException or InvalidOperationException or ArgumentException)
         {
             error = L.T("core.mp.code.corrupted");
             return false;
+        }
+    }
+}
+
+/// <summary>
+/// 直连用的两种钥匙，都用 HKDF-SHA256（salt = "jay-direct-v1"）派生，和房间密钥无关：
+/// 桥的探测 / 控制包 HMAC 钥匙来自邀请里的大厅密钥 L；批准后的“这条桥是我的”证明来自这个成员自己的 psk。
+/// </summary>
+public static class DirectKeys
+{
+    private static readonly byte[] Salt = "jay-direct-v1"u8.ToArray();
+
+    private static byte[] Derive(ReadOnlySpan<byte> key, string info)
+    {
+        var output = new byte[32];
+        HKDF.DeriveKey(HashAlgorithmName.SHA256, key, output, Salt, Encoding.ASCII.GetBytes(info));
+        return output;
+    }
+
+    /// <summary>直连桥探测、心跳、控制包的 HMAC 钥匙。</summary>
+    public static byte[] Bridge(ReadOnlySpan<byte> lobbyKey) => Derive(lobbyKey, "bridge");
+
+    /// <summary>
+    /// 批准后的证明：加入方用自己成员钥匙的 psk 对房主这条桥上发来的随机挑战做 HMAC（带上会话 id 和成员编号），
+    /// 房主据此把这条桥接到房间的 EasyTier。挑战每条桥一个，路上的人抄下来也用不到别的桥上。
+    /// </summary>
+    public static byte[] AdmitProof(MemberKey member, string session, ReadOnlySpan<byte> challenge)
+    {
+        var psk = member.CopyPsk();
+        var key = Derive(psk, "admit");
+        try
+        {
+            var data = new List<byte>();
+            data.AddRange("jay-direct-admit-v1|"u8.ToArray());
+            data.AddRange(Encoding.ASCII.GetBytes(session + "|" + member.IdHex + "|"));
+            data.AddRange(challenge.ToArray());
+            return HMACSHA256.HashData(key, data.ToArray());
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(psk);
+            CryptographicOperations.ZeroMemory(key);
         }
     }
 }
@@ -223,6 +282,15 @@ public sealed class DirectPeer
     internal Socket? Local { get; set; }
     internal IPEndPoint? LocalClient { get; set; }
     internal readonly ConcurrentDictionary<uint, long> PendingPings = new();
+    /// <summary>房主：这条桥的数据转发到本机哪个 EasyTier（批准前是大厅，批准后是房间）。</summary>
+    internal int TargetPort;
+    /// <summary>房主：已经证明了自己是批准过的成员，数据转发到房间的 EasyTier。</summary>
+    public bool Admitted { get; internal set; }
+    /// <summary>房主：这条桥上是哪个成员（批准后才有）。踢出时断开这条桥。</summary>
+    public MemberEntry? Member { get; internal set; }
+    /// <summary>房主：发给这条桥的随机挑战（批准后的证明要对它做 HMAC）。</summary>
+    internal byte[]? Challenge;
+    internal CancellationTokenRegistration Revocation;
     internal int PingsSent;
     internal int PongsReceived;
     public double? RttMs { get; internal set; }
@@ -234,8 +302,9 @@ public sealed class DirectPeer
 
 /// <summary>
 /// 直连桥：Amber 自己用一个 UDP 套接字打洞（所有路径共用这一个套接字），打通后在两边的 EasyTier 之间转发数据包。
-/// EasyTier 只在本机回环上收发，数据本身仍是 EasyTier 加密过的；打洞探测包用房间密钥派生的 HMAC 认证，
+/// EasyTier 只在本机回环上收发，数据本身仍是 EasyTier 加密过的；打洞探测包用邀请里大厅密钥派生的 HMAC 认证（见 <see cref="DirectKeys"/>），
 /// 不认识的地址发来的数据一律丢掉。房主可以同时连多个加入方，加入方之间由 EasyTier 经房主中转或者再自己打洞。
+/// 房主开了大厅端口时（邀请房间），新连上的桥只转发到大厅的 EasyTier（只能敲门）；加入方证明自己是批准过的成员后才改接房间的 EasyTier。
 /// </summary>
 public sealed class DirectBridge : IAsyncDisposable
 {
@@ -254,11 +323,16 @@ public sealed class DirectBridge : IAsyncDisposable
     private readonly ConcurrentBag<Task> _loops = [];
     private readonly ConcurrentDictionary<int, TaskCompletionSource<DirectPeer>> _punches = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    /// <summary>房主：踢出的人的地址，之后它的探测包不再接。</summary>
+    private readonly HashSet<IPEndPoint> _blocked = [];
     private Socket? _guestLocal;
     private int _probeRound;
 
-    /// <summary>房主：本机 EasyTier 的 UDP 监听端口；加入方：给本机 EasyTier 连的端口。</summary>
+    /// <summary>房主：本机房间 EasyTier 的 UDP 监听端口；加入方：给本机 EasyTier 连的端口。</summary>
     public int LocalPort { get; private set; }
+
+    /// <summary>房主：本机大厅 EasyTier 的 UDP 监听端口。设了它，新连上的桥先只能到大厅，批准后才接到房间。</summary>
+    public int? LobbyPort { get; }
     public IPEndPoint SocketEndPoint => (IPEndPoint)_socket.LocalEndPoint!;
     public IReadOnlyCollection<DirectPeer> Peers => _peers.Values.ToList();
     public HashSet<PathKind> AllowedPaths { get; } = [.. Enum.GetValues<PathKind>()];
@@ -278,13 +352,17 @@ public sealed class DirectBridge : IAsyncDisposable
         return socket;
     }
 
-    /// <param name="easyTierPort">房主：本机 EasyTier 监听的 UDP 端口。加入方传 null，桥会开一个本机端口给 EasyTier 连。</param>
-    public DirectBridge(Socket socket, RoomCode room, bool isHost, int? easyTierPort, Action<string> log)
+    /// <param name="key">探测和控制包的 HMAC 钥匙（<see cref="DirectKeys.Bridge"/>）。</param>
+    /// <param name="easyTierPort">房主：本机房间 EasyTier 监听的 UDP 端口。加入方传 null，桥会开一个本机端口给 EasyTier 连。</param>
+    /// <param name="lobbyPort">房主：本机大厅 EasyTier 监听的 UDP 端口（邀请房间）。批准前的桥只转发到这里。</param>
+    public DirectBridge(Socket socket, byte[] key, bool isHost, int? easyTierPort, Action<string> log, int? lobbyPort = null)
     {
+        if (key.Length != 32) throw new ArgumentException(null, nameof(key));
         _socket = socket;
         _isHost = isHost;
         _log = log;
-        _key = DeriveKey(room);
+        _key = (byte[])key.Clone();
+        LobbyPort = isHost ? lobbyPort : null;
         if (isHost)
         {
             LocalPort = easyTierPort ?? throw new ArgumentNullException(nameof(easyTierPort));
@@ -300,9 +378,6 @@ public sealed class DirectBridge : IAsyncDisposable
         _loops.Add(ReceiveLoopAsync());
         _loops.Add(PingLoopAsync());
     }
-
-    internal static byte[] DeriveKey(RoomCode room) =>
-        HKDF.DeriveKey(HashAlgorithmName.SHA256, Encoding.UTF8.GetBytes(room.Secret), 32, Encoding.UTF8.GetBytes(room.NetworkName), "amber-direct-v1"u8.ToArray());
 
     private byte[] Tag(ReadOnlySpan<byte> data) => HMACSHA256.HashData(_key, data)[..TagLength];
 
@@ -530,6 +605,7 @@ public sealed class DirectBridge : IAsyncDisposable
             return true;
         }
         if (!_isHost && !_peers.IsEmpty) return false;
+        if (_blocked.Contains(from)) return false;
         var path = Classify(from);
         if (!AllowedPaths.Contains(path) && !(path == PathKind.Punch && AllowedPaths.Contains(PathKind.PunchSpray)))
         {
@@ -555,7 +631,7 @@ public sealed class DirectBridge : IAsyncDisposable
             // 加入方只保留一个房主；真正换地址后不再保留旧路径状态。
             _pausedPeers.Clear();
         }
-        var peer = new DirectPeer { Remote = from, Path = path, ConnectedMs = _clock.ElapsedMilliseconds };
+        var peer = new DirectPeer { Remote = from, Path = path, ConnectedMs = _clock.ElapsedMilliseconds, TargetPort = LobbyPort ?? LocalPort, Admitted = LobbyPort is null };
         if (_isHost)
         {
             // 每个加入方一个本机套接字，去连本机 EasyTier 的监听端口。先建好再登记：建不了就不接这个加入方，
@@ -579,7 +655,7 @@ public sealed class DirectBridge : IAsyncDisposable
                 local.Dispose();
                 return true;
             }
-            _loops.Add(HostLocalLoopAsync(peer));
+            _loops.Add(HostLocalLoopAsync(peer, local));
         }
         else if (!_peers.TryAdd(from, peer))
         {
@@ -617,7 +693,7 @@ public sealed class DirectBridge : IAsyncDisposable
         Interlocked.Add(ref peer.BytesIn, data.Length);
         try
         {
-            if (_isHost) { if (peer.Local is { } local) await local.SendToAsync(data, SocketFlags.None, new IPEndPoint(IPAddress.Loopback, LocalPort)); }
+            if (_isHost) { if (peer.Local is { } local) await local.SendToAsync(data, SocketFlags.None, new IPEndPoint(IPAddress.Loopback, peer.TargetPort)); }
             else if (peer.LocalClient is { } client) await _guestLocal!.SendToAsync(data, SocketFlags.None, client);
         }
         catch (Exception e) when (e is SocketException or ObjectDisposedException) { }
@@ -632,14 +708,16 @@ public sealed class DirectBridge : IAsyncDisposable
         await SendRawAsync(packet, peer.Remote, _cts.Token);
     }
 
-    private async Task HostLocalLoopAsync(DirectPeer peer)
+    private async Task HostLocalLoopAsync(DirectPeer peer, Socket local)
     {
         var buffer = new byte[65536];
         while (!_cts.IsCancellationRequested)
         {
             try
             {
-                var r = await peer.Local!.ReceiveFromAsync(buffer, SocketFlags.None, new IPEndPoint(IPAddress.Any, 0), _cts.Token);
+                var r = await local.ReceiveFromAsync(buffer, SocketFlags.None, new IPEndPoint(IPAddress.Any, 0), _cts.Token);
+                // 批准后换了本机套接字：旧套接字（大厅那边）上收到的不再往外发。
+                if (!ReferenceEquals(peer.Local, local)) return;
                 if (!_peers.TryGetValue(peer.Remote, out var active) || !ReferenceEquals(active, peer)) continue;
                 await SendDataAsync(peer, buffer.AsMemory(0, r.ReceivedBytes));
             }
@@ -710,6 +788,64 @@ public sealed class DirectBridge : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 房主：这条桥上的人证明了自己是批准过的成员：换一个新的本机套接字，改接房间的 EasyTier（大厅那边的连接随旧套接字断掉）。
+    /// 成员钥匙作废（踢出、重新批准换了钥匙、房间结束）时这条桥马上断开，之后这个地址的探测不再接。
+    /// </summary>
+    public bool Admit(DirectPeer peer, MemberEntry member)
+    {
+        if (!_isHost) throw new InvalidOperationException();
+        Socket? old;
+        lock (_peerGate)
+        {
+            if (!_peers.TryGetValue(peer.Remote, out var active) || !ReferenceEquals(active, peer) || member.Revoked) return false;
+            if (peer.Admitted && ReferenceEquals(peer.Member, member)) return true;
+            Socket local;
+            try
+            {
+                local = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                if (OperatingSystem.IsWindows()) local.IOControl(unchecked((int)0x9800000C), [0, 0, 0, 0], null);
+                local.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            }
+            catch (SocketException e)
+            {
+                _log(L.F("core.mp.punch.localerror", e.GetType().Name));
+                return false;
+            }
+            old = peer.Local;
+            peer.Revocation.Dispose();
+            peer.Local = local;
+            peer.TargetPort = LocalPort;
+            peer.Member = member;
+            peer.Admitted = true;
+            _loops.Add(HostLocalLoopAsync(peer, local));
+        }
+        old?.Dispose();
+        // 已经作废的，Register 会立刻调用。
+        peer.Revocation = member.Revocation.Register(() => Kick(peer));
+        _log(L.F("core.mp.direct.admitted", peer.Remote));
+        return true;
+    }
+
+    /// <summary>房主：断开这条桥（踢出的人），之后这个地址发来的探测不再接。</summary>
+    public void Kick(DirectPeer peer)
+    {
+        lock (_peerGate)
+        {
+            _blocked.Add(peer.Remote);
+            if (_peers.TryGetValue(peer.Remote, out var active) && ReferenceEquals(active, peer)) _peers.TryRemove(peer.Remote, out _);
+            if (_pausedPeers.TryGetValue(peer.Remote, out var paused) && ReferenceEquals(paused, peer)) _pausedPeers.Remove(peer.Remote);
+            peer.Local?.Dispose();
+        }
+        _log(L.F("core.mp.direct.kicked", peer.Remote));
+    }
+
+    /// <summary>房主：这条桥的随机挑战（批准后的证明对它做 HMAC）。每条桥一个，第一次要时生成。</summary>
+    internal byte[] ChallengeFor(DirectPeer peer)
+    {
+        lock (_peerGate) return peer.Challenge ??= RandomNumberGenerator.GetBytes(16);
+    }
+
     /// <summary>经直连通道发控制消息（测试矩阵双方同步用）。</summary>
     public async Task SendControlAsync(DirectPeer peer, JsonObject message) =>
         await SendRawAsync(Seal(Control, Encoding.UTF8.GetBytes(message.ToJsonString())), peer.Remote, _cts.Token);
@@ -721,7 +857,11 @@ public sealed class DirectBridge : IAsyncDisposable
         {
             if (!preserveLocalTransport)
             {
-                foreach (var peer in _pausedPeers.Values) peer.Local?.Dispose();
+                foreach (var peer in _pausedPeers.Values)
+                {
+                    peer.Local?.Dispose();
+                    peer.Revocation.Dispose();
+                }
                 _pausedPeers.Clear();
             }
             foreach (var endpoint in _peers.Keys)
@@ -732,7 +872,11 @@ public sealed class DirectBridge : IAsyncDisposable
                     peer.LastSeen = DateTime.UtcNow;
                     _pausedPeers[endpoint] = peer;
                 }
-                else peer.Local?.Dispose();
+                else
+                {
+                    peer.Local?.Dispose();
+                    peer.Revocation.Dispose();
+                }
             }
         }
     }
@@ -753,5 +897,6 @@ public sealed class DirectBridge : IAsyncDisposable
             if (e is not (OperationCanceledException or ObjectDisposedException or SocketException)) _log(L.F("core.mp.punch.localerror", e.GetType().Name));
         }
         _cts.Dispose();
+        CryptographicOperations.ZeroMemory(_key);
     }
 }

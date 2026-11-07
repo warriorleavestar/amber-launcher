@@ -67,7 +67,7 @@ internal sealed partial class SelfTest
         vm.RemoveNodeCommand.Execute(importedNode);
 
         var directCode = await FindAsync<TextBox>(t => t.PlaceholderText == L.T("multiplayer.direct.invite_placeholder"));
-        const string directInvite = "AMBDIRECT1-eyJhIjoxfQ";
+        const string directInvite = "JAY2D-eyJ2IjoxfQ";
         Dispatcher.UIThread.Invoke(() => roomCode!.Text = directInvite);
         Check("联机引导：房间框的直连邀请码转到直连框", Press(await FindAsync<Button>(b => ReferenceEquals(b.Command, vm.JoinCommand)))
             && roomCode!.Text == "" && directCode!.Text == directInvite && vm.IsIdle);
@@ -75,7 +75,7 @@ internal sealed partial class SelfTest
         Dispatcher.UIThread.Invoke(() => directCode!.Text = relayRoom);
         Check("联机引导：直连框的房间码转到房间框", Press(await FindAsync<Button>(b => ReferenceEquals(b.Command, vm.JoinDirectCommand)))
             && directCode!.Text == "" && roomCode!.Text == relayRoom && vm.IsIdle);
-        Dispatcher.UIThread.Invoke(() => directCode!.Text = "AMBREPLY1-eyJhIjoxfQ");
+        Dispatcher.UIThread.Invoke(() => directCode!.Text = "JAY2R-eyJ2IjoxfQ");
         Check("联机引导：点击加入识别回复码", Press(await FindAsync<Button>(b => ReferenceEquals(b.Command, vm.JoinDirectCommand))));
         await Task.Delay(200);
         Check("联机引导：回复码误贴时提示交给房主", vm.Status == L.T("multiplayer.code.reply_misplaced") && vm.IsIdle);
