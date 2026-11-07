@@ -254,11 +254,11 @@ public sealed class PrivacyPlusTests : IAsyncLifetime
         var membership = new GateMembership("relay.example.com", 47671, RandomNumberGenerator.GetBytes(32), key, "Steve",
             new GateNetwork(PrivacyLevel.Plus, null, [new("relay.example.com", 47671), new("10.0.0.2", 47671)]));
         var entry = list.Add(membership);
-        var back = JayServerList.ToMembership(list.Load().Single());
+        var back = list.ToMembership(list.Load().Single());
         Assert.Equal(PrivacyLevel.Plus, back.Network!.Level);
         Assert.Equal(membership.Network!.Relays, back.Network.Relays);
         list.UpdateNetwork(entry.Id, new GateNetwork(PrivacyLevel.Basic, new("mc.example.com", 47670), []));
-        back = JayServerList.ToMembership(list.Load().Single());
+        back = list.ToMembership(list.Load().Single());
         Assert.Equal(PrivacyLevel.Basic, back.Network!.Level);
         Assert.Equal(new GateEndpoint("mc.example.com", 47670), back.Network.Direct);
     }

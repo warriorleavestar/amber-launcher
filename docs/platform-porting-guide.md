@@ -87,7 +87,7 @@
 | 联机身份（X25519 私钥）加密 | ✅ DPAPI | 🟡 AES-GCM + 本机密钥文件 | 🟡 同左 | `Multiplayer/MemberIdentity.cs` |
 | 敏感文字复制后 60 秒清剪贴板 | ✅ | ✅ | 🟡 Wayland 下要测 | `App/Services/SensitiveClipboard.cs` |
 | 远程控制【实验】【未发布】 | ✅ | 🪟 界面提示“只支持 Windows” | 🪟 同左 | `RemoteControl/Windows/WindowsRemote.cs` |
-| Jay 服务器（客户端加入）【实验】 | ✅ DPAPI 存访问密钥 | 🟡 访问密钥明文存（0600） | 🟡 同左 | `Multiplayer/Gate/JayServers.cs` |
+| Jay 服务器（客户端加入）【实验】 | ✅ DPAPI 存访问密钥 | 🟡 AES-GCM + 本机密钥文件（0600），还没进钥匙串 | 🟡 同左 | `Multiplayer/Gate/JayServers.cs` |
 | `jay-server` 服务端【实验】 | ✅ | ✅ | ✅（systemd） | `src/Amber.Server` |
 | 模组烘焙【实验，默认关】 | ✅ | 🟡 | 🟡 | `Bake/BakeService.cs` |
 | 发布包：单文件 + ReadyToRun | ✅ | ✅ | ✅ | `.github/workflows/build.yml` |
@@ -340,7 +340,7 @@ public interface IInputSink : IDisposable
 一个只能用 Jay 进的 MC 服务器。三部分：
 
 - **服务端 `jay-server`**（`src/Amber.Server/Program.cs`）：`init`、`setup`（下载官方服务端 jar 并核对 SHA-1、准备 Java）、`run`、`invite`、`revoke`、节点管理等命令。MC 服务端固定只听 127.0.0.1（`Gate/McServerHost.cs`）。网关（`Gate/GateServer.cs`）在公网端口（默认 47670）上做 Noise 握手、核对设备名单和用户名（`Gate/McLogin.cs` 读 Handshake 和 Login Start），认不出的连接一个字节都不回。数据在 `Gate/GateStore.cs`，只存设备公钥和用户名，Unix 上文件权限 0600。Windows 上用 Ctrl+C，Unix 上另外处理 SIGTERM（systemd 停服务时正常关闭 MC）。三平台都能跑。
-- **客户端**（`Gate/JayServers.cs`，联机页的“Jay 服务器”卡片）：粘贴 `JAYS1-` 邀请码（`Gate/GateInvite.cs`）入服，拿到这台设备的访问密钥，之后一键进服。访问密钥在 Windows 上 DPAPI 加密（`dpapi:` 前缀），**在 Mac/Linux 上是明文 Base64（`plain:` 前缀），只靠文件权限 0600**。这是现在凭据存储里最弱的一处，建议和账号令牌一起改成钥匙串 / libsecret，至少先改成和 `Accounts.cs` 一样的 AES-GCM + 本机密钥。
+- **客户端**（`Gate/JayServers.cs`，联机页的“Jay 服务器”卡片）：粘贴 `JAYS1-` 邀请码（`Gate/GateInvite.cs`）入服，拿到这台设备的访问密钥，之后一键进服。访问密钥在 Windows 上 DPAPI 加密（`dpapi:` 前缀），在 Mac/Linux 上和 `Accounts.cs` 一样用 AES-GCM + 数据目录下 0600 的本机密钥（`aesgcm:` 前缀，密钥文件 `jay-servers.json.key`）；旧版写的明文 `plain:` 读到时自动迁移。下一步和账号令牌一起改成钥匙串 / libsecret（第二批第 10 项）。
 - **节点**（`Gate/GateRelay.cs`）：把 TCP 原样转给网关，不持有密钥。
 
 main 上 v0.7.0 之后新增【未发布】：
@@ -383,7 +383,7 @@ CI 的单元测试只在 `windows-latest` 上跑。有一些测试本身按 `Ope
 
 | # | 功能 | 改哪里 | 怎么做 | 验收 |
 |---|---|---|---|---|
-| 1 | Jay 服务器访问密钥加密 | `Gate/JayServers.cs` `Protect`/`Unprotect` | 先改成和 `Auth/Accounts.cs` 一样的 AES-GCM + 本机密钥（新前缀，比如 `aesgcm:`），旧的 `plain:` 能读，下次保存自动迁移；第二批再接钥匙串 | Mac/Linux 上 `jay-servers.json` 里看不到明文密钥；旧文件升级后还能进服；补单元测试 |
+| 1 | ✅ Jay 服务器访问密钥加密 | `Gate/JayServers.cs` `Protect`/`Unprotect` | 先改成和 `Auth/Accounts.cs` 一样的 AES-GCM + 本机密钥（新前缀，比如 `aesgcm:`），旧的 `plain:` 能读，下次保存自动迁移；第二批再接钥匙串 | Mac/Linux 上 `jay-servers.json` 里看不到明文密钥；旧文件升级后还能进服；补单元测试 |
 | 2 | 老版本（1.6 以前）家目录 | `Launch/AsciiPaths.cs` `LegacyHome`、`GameLauncher.cs` 第 310 行附近 | 在数据目录下建 `legacyhome/<哈希>/`，里面放指向实例的符号链接（Linux：`.minecraft`；macOS：`Library/Application Support/minecraft`），启动时加 `-Duser.home=<该目录>`；符号链接用 `Directory.CreateSymbolicLink` | 在测试目录里启动 1.5.2 + 老 Forge，用户真实的 minecraft 目录没有新文件 |
 | 3 | 正常关闭游戏（Linux） | `GameLauncher.RequestExit` | X11：找到游戏进程的窗口（`_NET_WM_PID`）发 `WM_DELETE_WINDOW`；Wayland 或找不到窗口时发 SIGTERM，并在界面上提示“可能来不及存档” | X11 下点“关闭游戏”，世界正常保存（看 `latest.log` 的 Saving 行） |
 | 4 | EasyTier 不残留 | `Multiplayer/EasyTier.cs` `Launch` | 每次启动把 PID + 进程启动时间写进 `easytier/run/*.pid`；Jay 启动和开房间前清理“PID 还在、启动时间对得上”的旧进程。Linux 额外可以用 `prctl(PR_SET_PDEATHSIG, SIGTERM)`（需要一个小包装进程，因为 .NET 的 `Process.Start` 不能在 fork 后插代码） | `kill -9` 掉 Jay 后重新打开，没有 easytier-core 残留 |

@@ -187,7 +187,9 @@ public static class GateClient
 }
 
 /// <summary>
-/// 客户端保存的 Jay 服务器（数据目录下的 jay-servers.json）。访问密钥加密保存：Windows 用 DPAPI（当前用户），其他系统靠文件只给当前用户读（0600）。
+/// 客户端保存的 Jay 服务器（数据目录下的 jay-servers.json）。访问密钥加密保存：Windows 用 DPAPI（当前用户），
+/// 其他系统用 AES-GCM，密钥是数据目录下只给当前用户读写（0600）的 jay-servers.json.key（和账号令牌的做法一样）。
+/// 旧版在 Mac/Linux 上存的 <c>plain:</c> 仍能读，读到时自动改存成加密格式。
 /// 访问密钥单独泄露也进不了服：还要这台设备的身份私钥。
 /// </summary>
 public sealed class JayServerList
@@ -232,14 +234,17 @@ public sealed class JayServerList
         lock (_gate)
         {
             if (!File.Exists(_path)) return [];
+            List<Entry> servers;
             try
             {
-                return JsonSerializer.Deserialize(File.ReadAllBytes(_path), JayServersJsonContext.Default.FileModel)?.Servers ?? [];
+                servers = JsonSerializer.Deserialize(File.ReadAllBytes(_path), JayServersJsonContext.Default.FileModel)?.Servers ?? [];
             }
             catch (JsonException)
             {
                 return [];
             }
+            MigratePlain(servers);
+            return servers;
         }
     }
 
@@ -319,7 +324,7 @@ public sealed class JayServerList
         }
     }
 
-    public static GateMembership ToMembership(Entry entry)
+    public GateMembership ToMembership(Entry entry)
     {
         GateNetwork? network = null;
         var level = entry.Privacy switch { "plusplus" => PrivacyLevel.PlusPlus, "plus" => PrivacyLevel.Plus, _ => PrivacyLevel.Basic };
@@ -344,19 +349,91 @@ public sealed class JayServerList
         File.Move(temp, _path, true);
     }
 
-    private static string Protect(byte[] key) => OperatingSystem.IsWindows()
-        ? "dpapi:" + Convert.ToBase64String(ProtectedData.Protect(key, Entropy, DataProtectionScope.CurrentUser))
-        : "plain:" + Convert.ToBase64String(key);
+    /// <summary>旧版在 Mac/Linux 上明文（<c>plain:</c>）存的访问密钥：改存成加密格式。只在调用方已持有 <see cref="_gate"/> 时调用。</summary>
+    private void MigratePlain(List<Entry> servers)
+    {
+        if (OperatingSystem.IsWindows() || !servers.Any(e => e.ProtectedAccessKey.StartsWith(PlainPrefix, StringComparison.Ordinal))) return;
+        try
+        {
+            foreach (var entry in servers)
+                if (entry.ProtectedAccessKey.StartsWith(PlainPrefix, StringComparison.Ordinal))
+                    entry.ProtectedAccessKey = Protect(Convert.FromBase64String(entry.ProtectedAccessKey[PlainPrefix.Length..]));
+            Save(new FileModel { Servers = servers });
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or FormatException or CryptographicException)
+        {
+            // 迁移失败不影响使用：内存里已经换成加密格式（或保持原样），下次保存再写盘。
+        }
+    }
 
-    private static byte[] Unprotect(string stored)
+    private const string PlainPrefix = "plain:";
+    private const string AesPrefix = "aesgcm:";
+    private const int NonceSize = 12;
+    private const int TagSize = 16;
+
+    private string Protect(byte[] key)
+    {
+        if (OperatingSystem.IsWindows())
+            return "dpapi:" + Convert.ToBase64String(ProtectedData.Protect(key, Entropy, DataProtectionScope.CurrentUser));
+        var nonce = RandomNumberGenerator.GetBytes(NonceSize);
+        var cipher = new byte[key.Length];
+        var tag = new byte[TagSize];
+        using (var aes = new AesGcm(LocalKey(), TagSize)) aes.Encrypt(nonce, key, cipher, tag, Entropy);
+        return AesPrefix + Convert.ToBase64String([.. nonce, .. tag, .. cipher]);
+    }
+
+    private byte[] Unprotect(string stored)
     {
         if (stored.StartsWith("dpapi:", StringComparison.Ordinal))
         {
             if (!OperatingSystem.IsWindows()) throw new CryptographicException(L.T("core.gate.store.otherplatform"));
             return ProtectedData.Unprotect(Convert.FromBase64String(stored[6..]), Entropy, DataProtectionScope.CurrentUser);
         }
-        if (stored.StartsWith("plain:", StringComparison.Ordinal)) return Convert.FromBase64String(stored[6..]);
+        if (stored.StartsWith(AesPrefix, StringComparison.Ordinal))
+        {
+            var all = Convert.FromBase64String(stored[AesPrefix.Length..]);
+            if (all.Length <= NonceSize + TagSize) throw new CryptographicException(L.T("core.gate.store.corrupt"));
+            var plain = new byte[all.Length - NonceSize - TagSize];
+            // 密钥文件丢了或换了：解不开就报错（调用方提示重新申请入服），不会偷偷生成新密钥覆盖。
+            var key = ReadLocalKey() ?? throw new CryptographicException(L.T("core.gate.store.corrupt"));
+            using (var aes = new AesGcm(key, TagSize))
+                aes.Decrypt(all.AsSpan(0, NonceSize), all.AsSpan(NonceSize + TagSize), all.AsSpan(NonceSize, TagSize), plain, Entropy);
+            return plain;
+        }
+        if (stored.StartsWith(PlainPrefix, StringComparison.Ordinal)) return Convert.FromBase64String(stored[PlainPrefix.Length..]);
         throw new CryptographicException(L.T("core.gate.store.corrupt"));
+    }
+
+    private string KeyPath => _path + ".key";
+
+    private byte[]? ReadLocalKey()
+    {
+        if (!File.Exists(KeyPath)) return null;
+        var key = File.ReadAllBytes(KeyPath);
+        return key.Length == 32 ? key : throw new CryptographicException(L.T("core.gate.store.corrupt"));
+    }
+
+    /// <summary>读本机密钥，没有就新建（创建时就是 0600，不留按 umask 可读的窗口）。</summary>
+    private byte[] LocalKey()
+    {
+        if (ReadLocalKey() is { } existing) return existing;
+        Directory.CreateDirectory(Path.GetDirectoryName(KeyPath)!);
+        var created = RandomNumberGenerator.GetBytes(32);
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        try
+        {
+            using var stream = new FileStream(KeyPath, options);
+            stream.Write(created);
+            stream.Flush(true);
+        }
+        catch (IOException) when (File.Exists(KeyPath))
+        {
+            // 另一个 Jay 进程刚好先建好了：用它的。
+            return ReadLocalKey()!;
+        }
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(KeyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        return created;
     }
 }
 

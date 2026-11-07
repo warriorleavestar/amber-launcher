@@ -107,7 +107,7 @@ public sealed partial class JayServersViewModel : ObservableObject
         await DisconnectAsync();
         try
         {
-            var membership = JayServerList.ToMembership(item.Entry);
+            var membership = _list.ToMembership(item.Entry);
             var entryId = item.Entry.Id;
             // 网关每次进服都会回最新的隐私等级和节点列表：存下来，下次直接用。
             _tunnel = new TunnelClient(0, GateClient.Opener(membership, Identity(), network => _list.UpdateNetwork(entryId, network)), line => Avalonia.Threading.Dispatcher.UIThread.Post(() => Status = line));
