@@ -1549,5 +1549,6 @@
   "core.gate.log.breaker_open": "プライバシー++ ブレーカー作動：利用不可の中継ノード {0}。{1} 接続を切断し、新規接続を停止しました",
   "core.gate.log.breaker_closed": "プライバシー++ ブレーカー解除：中継ノードが復旧し、接続を再開しました",
   "core.gate.admin.bad_rotation": "ローテーション設定が正しくありません。時間枠は 30 秒〜1 日、ポート範囲は 1024–65535 の中で 100 ポート以上にしてください",
-  "core.gate.log.listen_failed": "ポートを開けません：{0}"
+  "core.gate.log.listen_failed": "ポートを開けません：{0}",
+  "core.gate.log.revoked_dropped": "デバイス {1} が失効、または {0} が停止/削除されたため、接続中のセッションを切断しました"
 }

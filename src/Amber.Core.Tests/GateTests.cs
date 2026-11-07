@@ -105,6 +105,59 @@ public sealed class GateTests : IAsyncLifetime
         Assert.NotNull(_store.Read().Member("Steve")!.Devices.Single().LastSeen);
     }
 
+    [Theory]
+    [InlineData("revoke")]
+    [InlineData("disable")]
+    [InlineData("remove")]
+    public async Task RevokedDeviceIsDroppedWhileOnline(string how)
+    {
+        using var identity = Identity("a");
+        var membership = await GateClient.EnrollAsync(Invite("Steve"), identity);
+        await using var local = new TunnelClient(0, GateClient.Opener(membership, identity));
+        using var game = new TcpClient();
+        await game.ConnectAsync(IPAddress.Loopback, local.Port);
+        await game.GetStream().WriteAsync(LoginPackets("Steve"));
+        using var server = await _backend.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await server.GetStream().WriteAsync("pong"u8.ToArray());
+        var reply = new byte[4];
+        await game.GetStream().ReadExactlyAsync(reply).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+
+        switch (how)
+        {
+            case "revoke": Assert.Equal(1, _store.RevokeDevices("Steve", null)); break;
+            case "disable": Assert.True(_store.SetDisabled("Steve", true)); break;
+            default: Assert.True(_store.RemoveMember("Steve")); break;
+        }
+
+        // 网关每秒看一次名单：在线的连接要被断开（读到结尾或连接被重置），不用等玩家重连。
+        var dropped = false;
+        try { dropped = await game.GetStream().ReadAsync(new byte[16]).AsTask().WaitAsync(TimeSpan.FromSeconds(10)) == 0; }
+        catch (IOException) { dropped = true; }
+        Assert.True(dropped);
+        lock (_log) Assert.Contains(_log, l => l.Contains("Steve"));
+    }
+
+    [Fact]
+    public async Task OtherMembersStayOnlineWhenOneIsRevoked()
+    {
+        using var a = Identity("a");
+        using var b = Identity("b");
+        var steve = await GateClient.EnrollAsync(Invite("Steve"), a);
+        var alex = await GateClient.EnrollAsync(Invite("Alex"), b);
+        await using var tunnel = new TunnelClient(0, GateClient.Opener(alex, b));
+        using var game = new TcpClient();
+        await game.ConnectAsync(IPAddress.Loopback, tunnel.Port);
+        await game.GetStream().WriteAsync(LoginPackets("Alex"));
+        using var server = await _backend.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        _store.RevokeDevices("Steve", null);
+        await Task.Delay(2500);
+        await server.GetStream().WriteAsync("pong"u8.ToArray());
+        var reply = new byte[4];
+        await game.GetStream().ReadExactlyAsync(reply).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("pong"u8.ToArray(), reply);
+        Assert.Equal("Steve", steve.Username);
+    }
+
     [Fact]
     public async Task InviteIsSingleUseAndGateStaysSilent()
     {

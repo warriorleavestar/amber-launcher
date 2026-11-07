@@ -1549,5 +1549,6 @@
   "core.gate.log.breaker_open": "隐私++ 熔断：不可用的节点 {0}；断开了 {1} 条连接，暂停接受新连接",
   "core.gate.log.breaker_closed": "隐私++ 熔断解除：节点恢复，重新接受连接",
   "core.gate.admin.bad_rotation": "轮换设置不对：时间窗 30 秒到 1 天，端口范围在 1024–65535 之间且至少 100 个端口",
-  "core.gate.log.listen_failed": "开不了端口 {0}"
+  "core.gate.log.listen_failed": "开不了端口 {0}",
+  "core.gate.log.revoked_dropped": "设备 {1} 已被撤销或 {0} 已停用/移出名单：断开它在线的连接"
 }

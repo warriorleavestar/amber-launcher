@@ -1549,5 +1549,6 @@
   "core.gate.log.breaker_open": "隱私++ 熔斷：不可用的節點 {0}；斷開了 {1} 條連線，暫停接受新連線",
   "core.gate.log.breaker_closed": "隱私++ 熔斷解除：節點恢復，重新接受連線",
   "core.gate.admin.bad_rotation": "輪換設定不對：時間窗 30 秒到 1 天，連接埠範圍在 1024–65535 之間且至少 100 個連接埠",
-  "core.gate.log.listen_failed": "開不了連接埠 {0}"
+  "core.gate.log.listen_failed": "開不了連接埠 {0}",
+  "core.gate.log.revoked_dropped": "裝置 {1} 已被撤銷或 {0} 已停用/移出名單：斷開它在線的連線"
 }

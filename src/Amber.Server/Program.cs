@@ -295,7 +295,7 @@ public static class Program
             case "revoke":
             {
                 var n = store.RevokeDevices(Arg(0, "用户名"), options.Positional.ElementAtOrDefault(1));
-                output.WriteLine(n == 0 ? "没找到要撤销的设备。" : $"撤销了 {n} 台设备，它们之后进不来了（已经在线的连接下次重连时生效）。");
+                output.WriteLine(n == 0 ? "没找到要撤销的设备。" : $"撤销了 {n} 台设备，它们之后进不来了（网关在运行时，几秒内会断开它们在线的连接）。");
                 return 0;
             }
             case "disable":
@@ -459,6 +459,7 @@ public static class Program
 
     internal static TimeSpan ParseDuration(string text)
     {
+        if (text == "0") return TimeSpan.Zero;
         if (text.Length < 2) throw new FormatException("时长写成 30m、24h 或 7d");
         var number = double.Parse(text[..^1], CultureInfo.InvariantCulture);
         return char.ToLowerInvariant(text[^1]) switch
