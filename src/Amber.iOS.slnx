@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Amber.Core/Amber.Core.csproj" />
+  <Project Path="Amber.Mobile/Amber.Mobile.csproj" />
+  <Project Path="Amber.iOS/Amber.iOS.csproj" />
+</Solution>

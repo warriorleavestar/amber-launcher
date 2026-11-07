@@ -57,17 +57,26 @@ public sealed partial class MobileMainViewModel : ObservableObject, IAsyncDispos
     public ObservableCollection<MobileServerItem> Servers { get; } = [];
 
     public string Title => "Jay";
-    public string VersionText => L.F("mobile.version", "0.7.0");
+    private static string PlatformName => OperatingSystem.IsIOS()
+        ? L.T("mobile.platform.ios")
+        : OperatingSystem.IsAndroid()
+            ? L.T("mobile.platform.android")
+            : L.T("mobile.platform.mobile");
+
+    private static string PlatformString(string key) =>
+        L.T(OperatingSystem.IsIOS() ? key + ".ios" : OperatingSystem.IsAndroid() ? key + ".android" : key + ".mobile");
+
+    public string VersionText => L.F("mobile.version", PlatformName, "0.7.0");
     public string ExperimentalText => L.T("mobile.experimental");
     public string ScopeTitle => L.T("mobile.scope.title");
-    public string ScopeDescription => L.T("mobile.scope.description");
+    public string ScopeDescription => PlatformString("mobile.scope.description");
     public string DeviceTitle => L.T("mobile.device.title");
     public string DeviceHint => L.T("mobile.device.hint");
     public string EnrollTitle => L.T("mobile.enroll.title");
     public string EnrollHint => L.T("mobile.enroll.hint");
     public string EnrollButtonText => L.T("mobile.enroll.button");
     public string TunnelTitle => L.T("mobile.tunnel.title");
-    public string TunnelHint => L.T("mobile.tunnel.hint");
+    public string TunnelHint => PlatformString("mobile.tunnel.hint");
     public string DisconnectButtonText => L.T("mobile.tunnel.disconnect");
     public string SavedServersTitle => L.T("mobile.servers.title");
     public string NoServersText => L.T("mobile.servers.empty");
