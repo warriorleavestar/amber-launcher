@@ -1529,7 +1529,7 @@
   "core.gate.split.leg_lost": "两路连接中的一路断开了",
   "core.gate.split.mismatch": "两路数据对不上，连接已断开",
   "core.gate.split.timeout": "等另一路连接超时",
-  "core.gate.split.need_two": "隐私+ 需要两个能连上的节点，现在凑不齐（不会退回直连）",
+  "core.gate.split.need_two": "两路连接需要两个能连上的节点，现在凑不齐（不会退回直连）。节点都在线的话，可能是服主改了设置，请找服主要一个新邀请码",
   "core.gate.admin.plus_needs_relays": "隐私+ 至少要两个节点：先用 jay-server relays add 加节点",
   "core.gate.admin.badsource": "来源必须是一个 IP 地址",
   "core.gate.admin.too_many_relays": "节点太多了（最多 16 个）",

@@ -1560,7 +1560,7 @@
   "core.gate.split.leg_lost": "One of the two relay paths was lost",
   "core.gate.split.mismatch": "The two relay paths don't match; the connection was closed",
   "core.gate.split.timeout": "Timed out waiting for the second relay path",
-  "core.gate.split.need_two": "Privacy+ needs two reachable relays and fewer are available (Jay won't fall back to a direct connection)",
+  "core.gate.split.need_two": "The two-path connection needs two reachable relays and fewer are available (Jay won't fall back to a direct connection). If the relays are online, the server owner may have changed settings; ask them for a new invite code",
   "core.gate.admin.plus_needs_relays": "Privacy+ needs at least two relays. Add them with jay-server relays add first.",
   "core.gate.admin.badsource": "The source must be an IP address",
   "core.gate.admin.too_many_relays": "Too many relays (at most 16)",

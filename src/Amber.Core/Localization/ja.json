@@ -1529,7 +1529,7 @@
   "core.gate.split.leg_lost": "2 つの経路のうち 1 つが切断されました",
   "core.gate.split.mismatch": "2 つの経路のデータが一致しないため、接続を切断しました",
   "core.gate.split.timeout": "もう一方の経路の待機がタイムアウトしました",
-  "core.gate.split.need_two": "プライバシー+ には接続可能な中継ノードが 2 つ必要ですが、足りません（直接接続には切り替えません）",
+  "core.gate.split.need_two": "2 経路接続には接続可能な中継ノードが 2 つ必要ですが、足りません（直接接続には切り替えません）。ノードがオンラインなら、サーバー側の設定が変わった可能性があります。管理者に新しい招待コードをもらってください",
   "core.gate.admin.plus_needs_relays": "プライバシー+ には中継ノードが 2 つ以上必要です。先に jay-server relays add で追加してください。",
   "core.gate.admin.badsource": "送信元は IP アドレスで指定してください",
   "core.gate.admin.too_many_relays": "中継ノードが多すぎます（最大 16 個）",
