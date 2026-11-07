@@ -154,6 +154,8 @@ dotnet publish Amber.App -c Release -r osx-arm64 --self-contained -p:PublishSing
 
 项目使用 C#、.NET 10 和 [Avalonia](https://avaloniaui.net/)。
 
+Android 和 iOS 实验版使用独立的平台工程，目前只提供 Jay 服务器登记和本机网关，还不能直接启动 Minecraft。构建方法和能力边界见 [Android 实验版说明](docs/android.md)和 [iOS 实验版说明](docs/ios.md)。
+
 ## 常见问题
 
 **Windows 提示“已保护你的电脑”怎么办？**

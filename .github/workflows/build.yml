@@ -121,6 +121,91 @@ jobs:
           path: packages/*
           if-no-files-found: error
 
+  android:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Android workload
+        run: dotnet workload install android
+
+      - name: Install Android SDK and JDK
+        run: >-
+          dotnet build Amber.Android/Amber.Android.csproj
+          -t:InstallAndroidDependencies -f net10.0-android
+          -p:AndroidSdkDirectory=${{ runner.temp }}/android-sdk
+          -p:JavaSdkDirectory=${{ runner.temp }}/jdk
+          -p:AcceptAndroidSdkLicenses=true
+
+      - name: Publish experimental APK
+        run: >-
+          dotnet publish Amber.Android/Amber.Android.csproj -c Release
+          -p:AndroidSdkDirectory=${{ runner.temp }}/android-sdk
+          -p:JavaSdkDirectory=${{ runner.temp }}/jdk
+          -p:AndroidPackageFormats=apk
+
+      - name: Stage APK
+        shell: bash
+        run: |
+          mkdir -p ../packages
+          cp Amber.Android/bin/Release/net10.0-android/publish/nz.work.minecraft.jay-Signed.apk ../packages/Jay-android-experimental.apk
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: jay-android
+          path: packages/Jay-android-experimental.apk
+          if-no-files-found: error
+
+  ios:
+    # Keep the platform compile independent so a desktop-only/flaky test cannot hide iOS compiler failures.
+    # .NET 10.0.403 installs the iOS 27.1 workload; this image has matching Xcode 27.1 as its default.
+    runs-on: xcode-27
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install iOS workload
+        run: dotnet workload install ios
+
+      - name: Build experimental iOS Simulator app
+        run: >-
+          dotnet build Amber.iOS/Amber.iOS.csproj -c Release
+          -r iossimulator-arm64 -p:CodesignKey=-
+
+      - name: Stage simulator app
+        shell: bash
+        run: |
+          APP_PATH="$(find Amber.iOS/bin/Release/net10.0-ios/iossimulator-arm64 -type d -name 'Jay.app' -print -quit)"
+          test -n "$APP_PATH"
+          mkdir -p ../packages
+          tar -C "$(dirname "$APP_PATH")" -czf ../packages/Jay-ios-simulator-arm64-experimental.tar.gz "$(basename "$APP_PATH")"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: jay-ios-simulator
+          path: packages/Jay-ios-simulator-arm64-experimental.tar.gz
+          if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: publish
