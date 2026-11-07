@@ -121,6 +121,8 @@ public sealed class DirectSession : IAsyncDisposable
     public IEasyTierSession? EasyTier { get; private set; }
     public int LocalGamePort { get; } = EasyTierArgs.FreeTcpPort();
     public int LocalChatPort { get; } = EasyTierArgs.FreeTcpPort();
+    /// <summary>加入方：远程控制连房主用的本机端口（不建网卡时）。</summary>
+    public int LocalRemotePort { get; } = EasyTierArgs.FreeTcpPort();
     public int LocalSpeedPort { get; } = EasyTierArgs.FreeTcpPort();
     public bool UsingFallbackNode { get; private set; }
     public NatKind LocalNat => _gathered?.Nat ?? NatKind.Unknown;
@@ -224,6 +226,7 @@ public sealed class DirectSession : IAsyncDisposable
         return new EasyTierOptions(Room, false, peers, EasyTierArgs.FreeTcpPort(), tun ? null : LocalGamePort, null, _machineId, tun,
             tun ? null : LocalChatPort, false, exitNode, Verbose(extra), [(LocalSpeedPort, SpeedTestServer.Port)])
         {
+            LocalRemotePort = tun ? null : LocalRemotePort,
             DirectUnderlayAddresses = UnderlayAddresses(),
             DirectUnderlayUsesIpv6 = UnderlayUsesIpv6,
         };
