@@ -79,9 +79,11 @@ public sealed class SecretsStayOutOfLogsTests
         var reply = new DirectCode(true, "0123456789abcdef", NatKind.Cone, [new Candidate(PathKind.Punch, new IPEndPoint(IPAddress.Parse("198.51.100.9"), 40001))]);
 
         // 踢人：通知、移出、作废邀请，再换网络。
-        await hub.NotifyKickedAsync(entry);
+        // 被踢的人回了确认才断开：他那边一定已经收到通知。
+        Assert.True(await hub.NotifyKickedAsync(entry, TimeSpan.FromSeconds(10)));
+        Assert.True(await WaitAsync(() => kicked));
         Assert.True(table.Kick(entry, book));
-        Assert.True(await WaitAsync(() => kicked || hub.MemberCount == 0));
+        Assert.True(await WaitAsync(() => hub.MemberCount == 0));
         var next = credentials.Rotate();
         await hub.SendRekeyAsync(next.ToRekey(), TimeSpan.FromSeconds(2));
         // 被踢的人再连：失败的错误消息也收起来。

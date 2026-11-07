@@ -260,7 +260,7 @@ public sealed partial class MultiplayerViewModel
             var inviteRevoked = false;
             if (members.FindGuest(item.PublicKey) is { } entry)
             {
-                // 先告诉他“你已被移出房间”（他那边停止联机），再作废钥匙断开。
+                // 先告诉他“你已被移出房间”（他那边停止联机），等他确认收到（最多 2 秒，旧客户端不回确认就等满）再作废钥匙断开。
                 await hub.NotifyKickedAsync(entry);
                 inviteRevoked = members.Kick(entry, _lobby?.Book);
             }

@@ -1,5 +1,7 @@
 # Jay 服务器版（jay-server）
 
+> **实验功能**（v0.7.0 起提供）：已通过自动测试，但还没有连真实 MC 服务端做过完整的端到端测试。遇到问题请到 [Issues](https://github.com/warriorleavestar/jay-launcher/issues/new/choose) 反馈。
+
 在一台电脑上开一个 Minecraft 服务器，**只有用 Jay 启动器、拿到邀请的人才能进**。这台电脑可以是 VPS，也可以是局域网里的电脑（Windows、Linux、macOS 都行）。
 
 它做的事：
