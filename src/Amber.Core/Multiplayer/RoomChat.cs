@@ -192,7 +192,8 @@ internal static class ChatWire
     private const int MaxNonce = 32;
 
     /// <summary>
-    /// 控制帧（带 "ctl" 字段）：房主 → 成员的 "rekey"（换网络），成员 → 房主的 "rekey-ack"。
+    /// 控制帧（带 "ctl" 字段）：房主 → 成员的 "rekey"（换网络）和 "kicked"（你被踢了），
+    /// 成员 → 房主的 "rekey-ack" 和 "kicked-ack"（收到了踢人通知，可以断开了）。
     /// 房主从不转发控制帧；成员发来的 "rekey" 一律不理。不是控制帧时返回 null。
     /// </summary>
     public static string? ControlOf(byte[] frame, out JsonObject? json)
@@ -211,6 +212,11 @@ internal static class ChatWire
     }
 
     public static byte[] RekeyAck(int epoch) => KnockProtocol.Json(new JsonObject { ["ctl"] = "rekey-ack", ["epoch"] = epoch });
+
+    public static byte[] Kicked() => KnockProtocol.Json(new JsonObject { ["ctl"] = "kicked" });
+
+    /// <summary>成员收到“你已被移出房间”后回的确认。不带字段：只决定房主什么时候断开，安全上仍靠钥匙作废。</summary>
+    public static byte[] KickedAck() => KnockProtocol.Json(new JsonObject { ["ctl"] = "kicked-ack" });
 
     internal static int? EpochOf(JsonObject json) => json["epoch"] is JsonValue v && v.TryGetValue<int>(out var epoch) ? epoch : null;
 
@@ -420,6 +426,11 @@ public sealed class ChatHub : IAsyncDisposable
         public volatile bool PingCapable;
         /// <summary>加入被宣布过（离开时要宣布）。</summary>
         public bool JoinAnnounced;
+        /// <summary>
+        /// 给这条连接发了踢人通知后等它确认：收到 "kicked-ack" 完成为 true，连接先断了完成为 false。
+        /// 只属于这条连接，别的成员发 "kicked-ack" 碰不到它。
+        /// </summary>
+        public volatile TaskCompletionSource<bool>? KickAck;
 
         public void Kick()
         {
@@ -575,18 +586,44 @@ public sealed class ChatHub : IAsyncDisposable
         return (sent, acked);
     }
 
+    /// <summary>踢人通知默认最多等这么久的确认（旧客户端不回确认，等满了照样踢）。</summary>
+    public static readonly TimeSpan KickAckTimeout = TimeSpan.FromSeconds(2);
+
     /// <summary>
-    /// 踢人之前：经这个成员自己的通道告诉他“你已被移出房间”（他那边收到后停止联机）。只是通知，真正断开靠钥匙作废。
-    /// 发出后等一小会儿让这一帧写出去。不在线时什么都不做。
+    /// 踢人之前：经这个成员自己的每条在线连接告诉他“你已被移出房间”（他那边收到后停止联机），
+    /// 等他回 "kicked-ack"（最多 timeout，默认 2 秒）再让调用方作废钥匙断开。
+    /// 不等确认就断开的话，帧可能还没写出去，或者房主这边还有没读完的数据，关连接时发 RST，他那边已经收到的帧也会被丢掉。
+    /// 只是通知，真正断开靠钥匙作废。全部确认返回 true；不在线、没发出去、超时（比如旧客户端）或者连接先断了返回 false。
     /// </summary>
-    public async Task NotifyKickedAsync(MemberEntry entry, CancellationToken ct = default)
+    public async Task<bool> NotifyKickedAsync(MemberEntry entry, TimeSpan? timeout = null, CancellationToken ct = default)
     {
-        if (_table is null) return;
-        var frame = KnockProtocol.Json(new JsonObject { ["ctl"] = "kicked" });
-        var sent = false;
+        if (_table is null) return false;
+        var frame = ChatWire.Kicked();
+        var waits = new List<Task<bool>>();
         foreach (var member in _members.Values)
-            if (member.Authenticated && !member.IsHost && ReferenceEquals(member.Entry, entry)) sent |= member.Outbox.Writer.TryWrite(frame);
-        if (sent) await Task.Delay(300, ct);
+        {
+            if (!member.Authenticated || member.IsHost || !ReferenceEquals(member.Entry, entry)) continue;
+            var ack = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            member.KickAck = ack;
+            // 连接在放 KickAck 之前就断了：ServeAsync 的 finally 已经跑过，这里直接算没确认。
+            if (!_members.Values.Contains(member)) ack.TrySetResult(false);
+            if (!member.Outbox.Writer.TryWrite(frame))
+            {
+                member.KickAck = null;
+                continue;
+            }
+            waits.Add(ack.Task);
+        }
+        if (waits.Count == 0) return false;
+        try
+        {
+            var results = await Task.WhenAll(waits).WaitAsync(timeout ?? KickAckTimeout, ct);
+            return results.All(r => r);
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
     }
 
     private void OnRekeyAck(MemberEntry who, int epoch)
@@ -641,9 +678,11 @@ public sealed class ChatHub : IAsyncDisposable
                 if (frame is null) break;
                 if (_table is not null && ChatWire.ControlOf(frame, out var control) is { } ctl)
                 {
-                    // 控制帧从不转发。成员只能回“rekey-ack”；成员发来的“rekey”（想替房主换网络）不理。
+                    // 控制帧从不转发。成员只能回“rekey-ack”和“kicked-ack”；成员发来的“rekey”“kicked”（想替房主操作）不理。
                     Interlocked.Exchange(ref member.LastActivity, Clock().UtcTicks);
                     if (ctl == "rekey-ack" && member.Authenticated && member.Entry is { } who && ChatWire.EpochOf(control!) is { } epoch) OnRekeyAck(who, epoch);
+                    // 只完成这条连接自己的等待：没收到过踢人通知的连接 KickAck 是 null，回了也没用。
+                    else if (ctl == "kicked-ack" && member.Authenticated && member.Entry is not null) member.KickAck?.TrySetResult(true);
                     continue;
                 }
                 var message = Open(frame, member, out var contentTooLong);
@@ -701,6 +740,7 @@ public sealed class ChatHub : IAsyncDisposable
         finally
         {
             _members.TryRemove(id, out _);
+            member.KickAck?.TrySetResult(false);
             member.Outbox.Writer.TryComplete();
             member.Revocation.Dispose();
             (member.Stream as Transport.SecureStream)?.Abort();
@@ -779,6 +819,8 @@ public sealed class ChatClient : IAsyncDisposable
     private readonly TransportProfile? _profile;
     private readonly int _epoch;
     private int _rekeyed;
+    /// <summary>收到过踢人通知：之后连接断开不再报 Disconnected（被踢了不该显示“正在重连”）。</summary>
+    private int _kicked;
     private Stream? _stream;
     private readonly TcpClient _client = new();
     private readonly CancellationTokenSource _cts = new();
@@ -801,8 +843,11 @@ public sealed class ChatClient : IAsyncDisposable
     /// <summary>邀请房间：房主换了网络（踢人之后），发来新的网络名、密钥和版本。只认房主这条腿上来的、版本比当前大的，只认一次；已经回过确认。</summary>
     public event Action<RoomRekey>? Rekeyed;
 
-    /// <summary>邀请房间：房主踢出了自己（经房主这条腿上来的通知）。</summary>
+    /// <summary>邀请房间：房主踢出了自己（经房主这条腿上来的通知）。只报一次；报过之后不再报 Disconnected。</summary>
     public event Action? Kicked;
+
+    /// <summary>测试用：收到踢人通知时不回确认（模拟旧客户端）。</summary>
+    internal bool SkipKickAckForTest { get; init; }
 
     public ChatClient(RoomCode room, string name)
     {
@@ -907,7 +952,16 @@ public sealed class ChatClient : IAsyncDisposable
                         catch (Exception e) when (e is IOException or OperationCanceledException or ObjectDisposedException or InvalidOperationException or SocketException or CryptographicException) { }
                         Rekeyed?.Invoke(next);
                     }
-                    else if (ctl == "kicked") Kicked?.Invoke();
+                    else if (ctl == "kicked" && Interlocked.Exchange(ref _kicked, 1) == 0)
+                    {
+                        // 先回确认（房主等到它才断开），再交给界面。发不出去也照样算被踢。
+                        if (!SkipKickAckForTest)
+                        {
+                            try { await SendControlAsync(ChatWire.KickedAck(), _cts.Token); }
+                            catch (Exception e) when (e is IOException or OperationCanceledException or ObjectDisposedException or InvalidOperationException or SocketException or CryptographicException) { }
+                        }
+                        Kicked?.Invoke();
+                    }
                     continue;
                 }
                 if ((_cipher is not null ? _cipher.Open(frame) : ChatWire.ParseRelay(frame)) is not { } message) continue;
@@ -923,7 +977,7 @@ public sealed class ChatClient : IAsyncDisposable
         catch (Exception e) when (e is IOException or InvalidDataException or OperationCanceledException or SocketException or ObjectDisposedException or CryptographicException)
         {
         }
-        if (!_cts.IsCancellationRequested) Disconnected?.Invoke();
+        if (!_cts.IsCancellationRequested && Volatile.Read(ref _kicked) == 0) Disconnected?.Invoke();
     }
 
     private async Task PingLoopAsync()
