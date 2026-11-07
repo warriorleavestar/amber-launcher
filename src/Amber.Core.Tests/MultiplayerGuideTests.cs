@@ -60,8 +60,17 @@ public sealed class MultiplayerGuideTests
         Assert.Equal(L.T("multiplayer.advanced.title"), vm.AdvancedHeaderText);
 
         vm.FullLanMode = true;
-        Assert.Contains(nameof(MultiplayerViewModel.AdvancedHeaderText), changed);
-        Assert.Contains(L.T("multiplayer.advanced.item.full_lan"), vm.AdvancedHeaderText);
+        if (vm.FullLanSupported)
+        {
+            Assert.Contains(nameof(MultiplayerViewModel.AdvancedHeaderText), changed);
+            Assert.Contains(L.T("multiplayer.advanced.item.full_lan"), vm.AdvancedHeaderText);
+        }
+        else
+        {
+            // Mac/Linux：勾不上完整局域网，标题里也不会出现它。
+            Assert.False(vm.FullLanMode);
+            Assert.Equal(L.T("multiplayer.advanced.title"), vm.AdvancedHeaderText);
+        }
 
         changed.Clear();
         vm.AllowGameProxy = true;

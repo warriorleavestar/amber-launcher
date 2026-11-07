@@ -640,6 +640,9 @@ public sealed class DirectSession : IAsyncDisposable
     /// <returns>真的同意并且告诉了房主时返回 true（请求已经作废、断开、拒绝都是 false）。</returns>
     public async Task<bool> AnswerTestRequestAsync(bool accept, bool allowFullLan, bool allowExit)
     {
+        // 这台电脑做不到的部分不答应（告诉房主不测），免得测试里出现必然失败的步骤。
+        allowFullLan &= PlatformFeatures.FullLan;
+        allowExit &= allowFullLan && PlatformFeatures.ExitNode;
         var run = TestConsent.Pending?.Run;
         _pendingWatch?.Dispose();
         _pendingWatch = null;
@@ -812,6 +815,8 @@ public sealed class DirectSession : IAsyncDisposable
     public async Task<List<MatrixResult>> RunMatrixAsync(bool wantFullLan, IProgress<MatrixResult>? progress, Func<MatrixStep, bool, CancellationToken, Task<bool?>>? chatProbe, CancellationToken ct)
     {
         if (!IsHost || Bridge?.Peers.FirstOrDefault() is not { } peer) throw new InvalidOperationException(L.T("core.mp.matrix.peerrequired"));
+        // 房主这边不支持完整局域网时，不请求那几步（加入方那边不支持时它会回“不同意”，同样跳过）。
+        wantFullLan &= PlatformFeatures.FullLan;
         if (GuestIsLegacy) throw new InvalidOperationException(L.T("core.mp.matrix.legacyguest"));
         var run = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
         using var abort = CancellationTokenSource.CreateLinkedTokenSource(ct);

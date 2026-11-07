@@ -959,6 +959,7 @@
   "multiplayer.lan.empty": "No open games found yet",
   "multiplayer.lan.full_mode": "Full LAN mode (requires administrator access)",
   "multiplayer.lan.full_mode_hint": "Usually unnecessary. The default mode forwards only the game port and needs no administrator access. This mode creates a virtual network adapter named “Amber LAN” and gives each member a virtual IP, letting other LAN games and apps communicate too. Game LAN broadcasts are also forwarded to room members. Windows asks for permission when creating or joining a room. The adapter shuts down when the session ends or Jay closes. Both sides must enable this mode.",
+  "multiplayer.lan.full_mode_unavailable": "Not available on this computer yet: full LAN mode needs a virtual network adapter and broadcast forwarding, which only the Windows version has so far. The default mode (game port only) still works with players on any system.",
   "multiplayer.lan.game_label": "{0} · Port {1} ({2})",
   "multiplayer.lan.not_found": "No games open to LAN found. Enter a world, select “Open to LAN” in the pause menu, then select “Find”.",
   "multiplayer.lan.opened": "{0} is open to LAN on port {1}. You can now create a room.",

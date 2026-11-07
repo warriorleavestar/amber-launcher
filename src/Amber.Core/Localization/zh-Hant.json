@@ -933,6 +933,7 @@
   "multiplayer.lan.empty": "尚未找到開放的遊戲",
   "multiplayer.lan.full_mode": "完整區域網路模式（需要系統管理員權限）",
   "multiplayer.lan.full_mode_hint": "通常不需要開啟。預設模式僅轉送遊戲連接埠，不需要系統管理員權限。開啟後會建立名為「Amber LAN」的虛擬網路介面卡，並為每個人分配虛擬 IP，讓區域網路內的其他遊戲與程式也能互通，遊戲的區域網路廣播也會轉送給房間成員。建立或加入房間時，Windows 會顯示權限確認；結束連線或關閉 Jay 時，虛擬網路介面卡也會關閉。雙方都需要開啟這個模式。",
+  "multiplayer.lan.full_mode_unavailable": "這台電腦暫時無法使用：完整區域網路需要建立虛擬網路介面卡並轉送廣播，目前只有 Windows 版完成。預設模式（僅轉送遊戲連接埠）照常可以和任何系統的人連線。",
   "multiplayer.lan.game_label": "{0} · 連接埠 {1}（{2}）",
   "multiplayer.lan.not_found": "找不到在區域網路上開放的遊戲：請進入世界，在暫停選單點選「在區域網路上開放」，再點選「尋找」",
   "multiplayer.lan.opened": "{0} 已在區域網路上開放，連接埠為 {1}，現在可以建立房間",

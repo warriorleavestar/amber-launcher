@@ -933,6 +933,7 @@
   "multiplayer.lan.empty": "还没找到开放的游戏",
   "multiplayer.lan.full_mode": "完整局域网模式（需要管理员权限）",
   "multiplayer.lan.full_mode_hint": "一般不用开。默认模式只转发游戏端口，不需要管理员权限。开启后会建一块名为“Amber LAN”的虚拟网卡，每个人有一个虚拟 IP，局域网里的其他游戏和程序也能互通，游戏发的局域网广播也会转发给房间里的人；创建或加入房间时 Windows 会弹出权限确认，结束联机或关闭 Jay 时虚拟网卡随之关闭。双方都要开启这个模式。",
+  "multiplayer.lan.full_mode_unavailable": "这台电脑上暂时不能用：完整局域网要建虚拟网卡和转发广播，目前只有 Windows 版做好了。默认模式（只转发游戏端口）照常能和任何系统的人联机。",
   "multiplayer.lan.game_label": "{0} · 端口 {1}（{2}）",
   "multiplayer.lan.not_found": "没找到开放到局域网的游戏：进入世界后，在暂停菜单点“对局域网开放”，再点“查找”",
   "multiplayer.lan.opened": "{0} 已对局域网开放，端口 {1}，可以创建房间了",

@@ -69,7 +69,19 @@ public sealed partial class MultiplayerViewModel
         }
     }
 
-    partial void OnFullLanModeChanged(bool value) => OnPropertyChanged(nameof(AdvancedHeaderText));
+    partial void OnFullLanModeChanged(bool value)
+    {
+        // 这台电脑做不到完整局域网：勾不上（界面上已经禁用并说明，这里再挡一次）。
+        if (value && !FullLanSupported)
+        {
+            FullLanMode = false;
+            return;
+        }
+        OnPropertyChanged(nameof(AdvancedHeaderText));
+    }
+
+    /// <summary>这台电脑能不能开完整局域网（Mac/Linux 暂时不能，见 <see cref="PlatformFeatures"/>）。</summary>
+    public bool FullLanSupported => PlatformFeatures.FullLan;
     partial void OnAllowExitNodeChanged(bool value) => OnPropertyChanged(nameof(AdvancedHeaderText));
     partial void OnAllowGameProxyChanged(bool value) => OnPropertyChanged(nameof(AdvancedHeaderText));
     partial void OnSelectedTransportChanged(TransportChoice value) => OnPropertyChanged(nameof(AdvancedHeaderText));

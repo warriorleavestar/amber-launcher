@@ -57,6 +57,11 @@ public sealed partial class MultiplayerViewModel
     [ObservableProperty] public partial bool TestAllowFullLan { get; set; }
     [ObservableProperty] public partial bool TestAllowExit { get; set; }
 
+    partial void OnMatrixFullLanChanged(bool value)
+    {
+        if (value && !FullLanSupported) MatrixFullLan = false;
+    }
+
     partial void OnTestAllowFullLanChanged(bool value)
     {
         if (!value) TestAllowExit = false;
