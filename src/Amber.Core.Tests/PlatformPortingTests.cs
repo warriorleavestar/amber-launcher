@@ -97,6 +97,35 @@ public sealed class PlatformPortingTests : IDisposable
     }
 
     [Fact]
+    public void EasyTierOfAnotherRunningJayIsLeftAlone()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var otherJay = Process.Start(new ProcessStartInfo("/bin/sleep", "30") { UseShellExecute = false })!;
+        using var process = Process.Start(new ProcessStartInfo("/bin/sleep", "30") { UseShellExecute = false })!;
+        try
+        {
+            var executable = process.MainModule!.FileName!;
+            var ownerTicks = otherJay.StartTime.ToUniversalTime().Ticks;
+            Assert.NotNull(EasyTierProcessTracker.Track(process, _root, executable, otherJay.Id, ownerTicks));
+
+            EasyTierProcessTracker.Cleanup(_root, executable);
+            Assert.False(process.WaitForExit(500));
+            Assert.Single(Directory.EnumerateFiles(_root, ".jay-easytier-*.pid"));
+
+            otherJay.Kill();
+            otherJay.WaitForExit(5000);
+            EasyTierProcessTracker.Cleanup(_root, executable);
+            Assert.True(process.WaitForExit(5000));
+            Assert.Empty(Directory.EnumerateFiles(_root, ".jay-easytier-*.pid"));
+        }
+        finally
+        {
+            if (!process.HasExited) process.Kill();
+            if (!otherJay.HasExited) otherJay.Kill();
+        }
+    }
+
+    [Fact]
     public void LinuxExitRequestSendsSigterm()
     {
         if (!OperatingSystem.IsLinux()) return;
