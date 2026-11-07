@@ -47,7 +47,7 @@ public sealed class GameLauncher(GameDirectory dir)
 
     /// <summary>
     /// 请求游戏正常退出（像点窗口的关闭按钮）。Windows 关主窗口，macOS 发“退出”，
-    /// Linux 在 X11 下给游戏窗口发 WM_DELETE_WINDOW，Wayland 下发 SIGTERM（老版本可能来不及存档）。
+    /// Linux 在 X11 下给游戏窗口发 WM_DELETE_WINDOW，找不到窗口（Wayland、还在加载）时发 SIGTERM（老版本可能来不及存档）。
     /// </summary>
     public static ExitRequest RequestExitDetailed(Process game)
     {
@@ -305,9 +305,14 @@ public sealed class GameLauncher(GameDirectory dir)
             StandardErrorEncoding = onOutput is not null ? System.Text.Encoding.UTF8 : null,
             CreateNoWindow = true,
         };
+        // 1.6 以前的版本（和 Jay 装的老 Forge）会按系统家目录写文件，先准备指向本实例的隔离家目录。
+        var realWorkDir = RealRoot is { } real ? AsciiPaths.Remap(workDir, dir.Root, real) : workDir;
+        var legacyHome = IsPreLaunchwrapperHome(version) ? AsciiPaths.LegacyHome(realWorkDir, onOutput) : null;
         string? noTraceDir = null;
         try
         {
+            if (legacyHome is not null && !OperatingSystem.IsWindows())
+                psi.ArgumentList.Add("-Duser.home=" + legacyHome);
             foreach (var arg in BuildArguments(options, onOutput, out noTraceDir)) psi.ArgumentList.Add(arg);
         }
         catch
@@ -315,13 +320,13 @@ public sealed class GameLauncher(GameDirectory dir)
             DeleteNoTraceDir(noTraceDir);
             throw;
         }
-        // 1.6 以前的版本（和 Amber 装的老 Forge）把 %APPDATA%\.minecraft 当家目录，改成指向这个实例。
-        var realWorkDir = RealRoot is { } real ? AsciiPaths.Remap(workDir, dir.Root, real) : workDir;
-        if (IsPreLaunchwrapperHome(version) && AsciiPaths.LegacyHome(realWorkDir, onOutput) is { } home)
+        if (legacyHome is not null && OperatingSystem.IsWindows())
         {
-            psi.Environment["APPDATA"] = home;
-            onOutput?.Invoke(L.F("core.launch.game.legacyappdata", home));
+            psi.Environment["APPDATA"] = legacyHome;
+            onOutput?.Invoke(L.F("core.launch.game.legacyappdata", legacyHome));
         }
+        else if (legacyHome is not null)
+            onOutput?.Invoke(L.F("core.launch.game.legacyhome", legacyHome));
 
         Process process;
         try

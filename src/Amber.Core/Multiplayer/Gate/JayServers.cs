@@ -2,6 +2,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Amber.Core.Auth;
 using Amber.Core.Localization;
 using Amber.Core.Multiplayer.Transport;
 
@@ -187,7 +188,7 @@ public static class GateClient
 }
 
 /// <summary>
-/// 客户端保存的 Jay 服务器（数据目录下的 jay-servers.json）。访问密钥加密保存：Windows 用 DPAPI（当前用户），其他系统靠文件只给当前用户读（0600）。
+/// 客户端保存的 Jay 服务器（数据目录下的 jay-servers.json）。访问密钥加密保存：Windows 用 DPAPI，macOS/Linux 用 AES-GCM + 0600 本机密钥。
 /// 访问密钥单独泄露也进不了服：还要这台设备的身份私钥。
 /// </summary>
 public sealed class JayServerList
@@ -234,7 +235,26 @@ public sealed class JayServerList
             if (!File.Exists(_path)) return [];
             try
             {
-                return JsonSerializer.Deserialize(File.ReadAllBytes(_path), JayServersJsonContext.Default.FileModel)?.Servers ?? [];
+                var model = JsonSerializer.Deserialize(File.ReadAllBytes(_path), JayServersJsonContext.Default.FileModel) ?? new FileModel();
+                // 旧版非 Windows 直接存 plain:Base64；读到后立即换成加密格式。
+                if (!OperatingSystem.IsWindows() && model.Servers.Any(e => e.ProtectedAccessKey.StartsWith("plain:", StringComparison.Ordinal)))
+                {
+                    var migrated = false;
+                    foreach (var entry in model.Servers.Where(e => e.ProtectedAccessKey.StartsWith("plain:", StringComparison.Ordinal)))
+                    {
+                        try
+                        {
+                            entry.ProtectedAccessKey = Protect(Unprotect(entry.ProtectedAccessKey));
+                            migrated = true;
+                        }
+                        catch (Exception e) when (e is CryptographicException or FormatException)
+                        {
+                            // 损坏的单条记录留给选中它时报错，不影响其他服务器加载和迁移。
+                        }
+                    }
+                    if (migrated) Save(model);
+                }
+                return model.Servers;
             }
             catch (JsonException)
             {
@@ -319,7 +339,7 @@ public sealed class JayServerList
         }
     }
 
-    public static GateMembership ToMembership(Entry entry)
+    public GateMembership ToMembership(Entry entry)
     {
         GateNetwork? network = null;
         var level = entry.Privacy switch { "plusplus" => PrivacyLevel.PlusPlus, "plus" => PrivacyLevel.Plus, _ => PrivacyLevel.Basic };
@@ -344,16 +364,33 @@ public sealed class JayServerList
         File.Move(temp, _path, true);
     }
 
-    private static string Protect(byte[] key) => OperatingSystem.IsWindows()
-        ? "dpapi:" + Convert.ToBase64String(ProtectedData.Protect(key, Entropy, DataProtectionScope.CurrentUser))
-        : "plain:" + Convert.ToBase64String(key);
+    private string Protect(byte[] key)
+    {
+        if (OperatingSystem.IsWindows())
+            return "dpapi:" + Convert.ToBase64String(ProtectedData.Protect(key, Entropy, DataProtectionScope.CurrentUser));
+        var nonce = RandomNumberGenerator.GetBytes(12);
+        var cipher = new byte[key.Length];
+        var tag = new byte[16];
+        using (var aes = new AesGcm(LocalSecretKey.LoadOrCreate(_path + ".key", "Jay server"), tag.Length))
+            aes.Encrypt(nonce, key, cipher, tag, Entropy);
+        return "aesgcm:" + Convert.ToBase64String([.. nonce, .. tag, .. cipher]);
+    }
 
-    private static byte[] Unprotect(string stored)
+    private byte[] Unprotect(string stored)
     {
         if (stored.StartsWith("dpapi:", StringComparison.Ordinal))
         {
             if (!OperatingSystem.IsWindows()) throw new CryptographicException(L.T("core.gate.store.otherplatform"));
             return ProtectedData.Unprotect(Convert.FromBase64String(stored[6..]), Entropy, DataProtectionScope.CurrentUser);
+        }
+        if (stored.StartsWith("aesgcm:", StringComparison.Ordinal))
+        {
+            var all = Convert.FromBase64String(stored[7..]);
+            if (all.Length < 29) throw new CryptographicException(L.T("core.gate.store.corrupt"));
+            var plain = new byte[all.Length - 28];
+            using (var aes = new AesGcm(LocalSecretKey.LoadOrCreate(_path + ".key", "Jay server"), 16))
+                aes.Decrypt(all.AsSpan(0, 12), all.AsSpan(28), all.AsSpan(12, 16), plain, Entropy);
+            return plain;
         }
         if (stored.StartsWith("plain:", StringComparison.Ordinal)) return Convert.FromBase64String(stored[6..]);
         throw new CryptographicException(L.T("core.gate.store.corrupt"));

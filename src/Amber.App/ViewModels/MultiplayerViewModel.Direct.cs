@@ -42,6 +42,11 @@ public sealed partial class MultiplayerViewModel
     [ObservableProperty] public partial bool MatrixRunning { get; set; }
     [ObservableProperty] public partial bool MatrixFullLan { get; set; }
 
+    partial void OnMatrixFullLanChanged(bool value)
+    {
+        if (value && !CanUseFullLan) MatrixFullLan = false;
+    }
+
     /// <summary>加入方：房主请求全条件测试，等用户确认。</summary>
     [ObservableProperty] public partial bool TestRequestPending { get; set; }
 
@@ -59,6 +64,11 @@ public sealed partial class MultiplayerViewModel
 
     partial void OnTestAllowFullLanChanged(bool value)
     {
+        if (value && !CanUseFullLan)
+        {
+            TestAllowFullLan = false;
+            return;
+        }
         if (!value) TestAllowExit = false;
     }
 

@@ -65,16 +65,21 @@ public static class AsciiPaths
     }
 
     /// <summary>
-    /// 1.6 以前的 Minecraft 和老 FML 不认 --gameDir，固定用 %APPDATA%\.minecraft 做“家目录”（日志、lib、coremods 都写在那）。
-    /// 给这个实例建 本地数据\Amber\legacyhome\哈希\.minecraft → 实例目录的联接，启动时只给这个游戏进程把 APPDATA 指过去，
-    /// 用户真正的 .minecraft 就不会被写。返回要设成 APPDATA 的目录；建不了时返回 null。
+    /// 1.6 以前的 Minecraft 和老 FML 不认 --gameDir，会按系统家目录寻找 minecraft 目录。
+    /// 在 Jay 数据目录下建一个临时家目录，再用 junction / 符号链接指向实例，避免写进用户真正的 minecraft 目录。
+    /// Windows 返回要设成 APPDATA 的目录；macOS/Linux 返回要设成 user.home 的目录。
     /// </summary>
-    public static string? LegacyHome(string workDir, Action<string>? log = null)
+    public static string? LegacyHome(string workDir, Action<string>? log = null, string? dataDirectory = null)
     {
-        if (!OperatingSystem.IsWindows()) return null;
         var full = FullDirectoryPath(workDir);
         var name = "h" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(full.ToLowerInvariant())))[..10];
-        var parent = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Amber", "legacyhome", name);
+        var dataRoot = dataDirectory is { Length: > 0 } explicitDirectory
+            ? Path.GetFullPath(explicitDirectory)
+            : Environment.GetEnvironmentVariable("AMBER_DATA_DIR") is { Length: > 0 } configured
+                ? Path.GetFullPath(configured)
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Amber");
+        var parent = Path.Combine(dataRoot, "legacyhome", name);
+        if (!OperatingSystem.IsWindows()) return UnixLegacyHome(parent, full, log);
         if (!Representable(parent)) parent = Path.Combine(Environment.GetEnvironmentVariable("PUBLIC") ?? @"C:\Users\Public", "AmberLegacyHome", name);
         var link = Path.Combine(parent, ".minecraft");
         try
@@ -97,6 +102,37 @@ public static class AsciiPaths
             log?.Invoke(L.F("core.launch.paths.homejunctionfailed", e.Message));
         }
         return null;
+    }
+
+    private static string? UnixLegacyHome(string parent, string target, Action<string>? log)
+    {
+        var home = Path.Combine(parent, "home");
+        var link = OperatingSystem.IsMacOS()
+            ? Path.Combine(home, "Library", "Application Support", "minecraft")
+            : Path.Combine(home, ".minecraft");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(link)!);
+            var info = new DirectoryInfo(link);
+            if (info.LinkTarget is { } existing)
+            {
+                var resolved = Path.IsPathFullyQualified(existing)
+                    ? existing
+                    : Path.GetFullPath(existing, Path.GetDirectoryName(link)!);
+                if (FullDirectoryPath(resolved).Equals(target, StringComparison.Ordinal))
+                    return home;
+                // 只换掉旧的符号链接；遇到普通目录就不动。
+                info.Delete();
+            }
+            else if (info.Exists) return null;
+            Directory.CreateSymbolicLink(link, target);
+            return home;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            log?.Invoke(L.F("core.launch.paths.homejunctionfailed", e.Message));
+            return null;
+        }
     }
 
     private static string FullDirectoryPath(string directory)

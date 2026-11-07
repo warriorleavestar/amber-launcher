@@ -15,27 +15,20 @@ public enum ExitRequest
 
 /// <summary>
 /// Linux 上让游戏正常退出：X11 下找 _NET_WM_PID 是游戏进程的窗口，发 WM_DELETE_WINDOW（和点关闭按钮一样）；
-/// Wayland 下（游戏窗口不在 X11 上）或者没有图形会话时发 SIGTERM。
+/// 找不到这样的窗口时（Wayland、没有图形会话、还在加载）发 SIGTERM（<see cref="UnixGameProcess"/>）。
 /// </summary>
 internal static unsafe class LinuxGameProcess
 {
     private const int ClientMessage = 33;
     private const int Success = 0;
-    private const int SigTerm = 15;
     private const nint AnyPropertyType = 0;
 
     internal static ExitRequest RequestExit(int processId)
     {
-        var sent = TryCloseX11Windows(processId);
-        if (sent is > 0) return ExitRequest.WindowClose;
-        // 有 X11 而且能查（sent 不是 null），只是还没有游戏窗口：多半还在加载，不发信号，让用户自己决定强制结束。
-        // Wayland 会话里游戏窗口可能是原生 Wayland 窗口，X11 上找不到；没有 X11 时也只能发信号。
-        if (sent is 0 && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"))) return ExitRequest.NotSent;
-        return kill(processId, SigTerm) == 0 ? ExitRequest.Signal : ExitRequest.NotSent;
+        if (TryCloseX11Windows(processId) is > 0) return ExitRequest.WindowClose;
+        // Wayland 原生窗口、没有 X11、窗口还没出来或者老 LWJGL 没设 _NET_WM_PID：退而发 SIGTERM，JVM 会跑关闭钩子。
+        return UnixGameProcess.RequestExit(processId) ? ExitRequest.Signal : ExitRequest.NotSent;
     }
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int kill(int pid, int sig);
 
     // ---- X11（用到才加载，没有 libX11 或者没有 DISPLAY 时返回 null）----
 
