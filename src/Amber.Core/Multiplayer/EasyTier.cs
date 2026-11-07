@@ -346,8 +346,20 @@ public sealed class EasyTierSession : IEasyTierSession
 
     public static EasyTierSession Start(EasyTierInstaller installer, EasyTierOptions options, string workDir)
     {
+        var (process, job) = Launch(installer.CorePath, EasyTierArgs.Build(options), EasyTierArgs.Environment(options), workDir);
+        var session = new EasyTierSession(process, installer.CliPath, options, job);
+        process.OutputDataReceived += (_, e) => session.OnLine(e.Data);
+        process.ErrorDataReceived += (_, e) => session.OnLine(e.Data);
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        return session;
+    }
+
+    /// <summary>启动 easytier-core（密钥经环境变量传）；Windows 上放进作业对象。输出要调用方开始读。</summary>
+    internal static (Process Process, ProcessJob? Job) Launch(string corePath, IEnumerable<string> args, IReadOnlyDictionary<string, string> environment, string workDir)
+    {
         Directory.CreateDirectory(workDir);
-        var info = new ProcessStartInfo(installer.CorePath)
+        var info = new ProcessStartInfo(corePath)
         {
             WorkingDirectory = workDir,
             UseShellExecute = false,
@@ -355,8 +367,8 @@ public sealed class EasyTierSession : IEasyTierSession
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        foreach (var a in EasyTierArgs.Build(options)) info.ArgumentList.Add(a);
-        foreach (var (name, value) in EasyTierArgs.Environment(options)) info.Environment[name] = value;
+        foreach (var a in args) info.ArgumentList.Add(a);
+        foreach (var (name, value) in environment) info.Environment[name] = value;
         var process = Process.Start(info) ?? throw new InvalidOperationException(L.T("core.mp.component.startfailed"));
         ProcessJob? job = null;
         if (OperatingSystem.IsWindows())
@@ -372,12 +384,7 @@ public sealed class EasyTierSession : IEasyTierSession
                 job = null;
             }
         }
-        var session = new EasyTierSession(process, installer.CliPath, options, job);
-        process.OutputDataReceived += (_, e) => session.OnLine(e.Data);
-        process.ErrorDataReceived += (_, e) => session.OnLine(e.Data);
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-        return session;
+        return (process, job);
     }
 
     private void OnLine(string? line)
@@ -455,6 +462,115 @@ public sealed class EasyTierSession : IEasyTierSession
             return null;
         }
     }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (!_process.HasExited) _process.Kill(true);
+            _process.WaitForExit(3000);
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        _process.Dispose();
+        _job?.Dispose();
+    }
+}
+
+/// <summary>大厅的参数：只为敲门存在的第二个 EasyTier 网络（名字和密钥从邀请码里的大厅密钥派生）。</summary>
+/// <param name="ListenUdpPort">房主：在本机回环的这个 UDP 端口上监听（直连桥把还没批准的加入方转发到这里）。不设时不监听。</param>
+public sealed record LobbyOptions(string Name, string Secret, bool IsHost, IReadOnlyList<string> Peers, int RpcPort, int? LocalKnockPort = null, int? ListenUdpPort = null)
+{
+    public override string ToString() => "LobbyOptions";
+}
+
+/// <summary>
+/// 大厅的 easytier-core 参数。和房间的实例完全分开：另一个网段（10.234.0.0/24，房主固定 .1）、另一个管理端口，不建网卡、不监听公网端口。
+/// 房主只放行敲门端口 47660（不建网卡时 EasyTier 把发往房主大厅地址的连接交给本机 127.0.0.1:47660）；加入方什么都不放行，只把本机一个端口转发到房主的敲门端口。
+/// </summary>
+public static class LobbyArgs
+{
+    public const string HostIp = "10.234.0.1";
+    public const string Subnet = "10.234.0.";
+
+    public static Dictionary<string, string> Environment(LobbyOptions o) => new() { [EasyTierArgs.SecretVariable] = o.Secret };
+
+    public static List<string> Build(LobbyOptions o)
+    {
+        var args = new List<string>
+        {
+            "--network-name", o.Name,
+            "--ipv4", o.IsHost ? HostIp : Subnet + RandomNumberGenerator.GetInt32(2, 255),
+            "--rpc-portal", $"127.0.0.1:{o.RpcPort}",
+            "--hostname", o.IsHost ? "jay-lobby-host" : "jay-lobby-guest",
+            "--instance-name", $"jay-lobby-{(o.IsHost ? "host" : "guest")}-{o.RpcPort}",
+            // 和房间的实例用不同的机器标识，免得在节点上互相顶掉。
+            "--machine-id", Guid.NewGuid().ToString(),
+            "--no-tun",
+            "--latency-first",
+        };
+        // 直连房间的房主：只在本机回环上监听，给直连桥用；其他情况不监听。
+        if (o.IsHost && o.ListenUdpPort is { } listen) args.AddRange(["--listeners", $"udp://127.0.0.1:{listen.ToString(System.Globalization.CultureInfo.InvariantCulture)}"]);
+        else args.Add("--no-listener");
+        foreach (var peer in o.Peers.Where(p => !string.IsNullOrWhiteSpace(p))) args.AddRange(["--peers", peer.Trim()]);
+        if ((o.IsHost && o.ListenUdpPort is not null) || o.Peers.Any(p => Uri.TryCreate(p.Trim(), UriKind.Absolute, out var u) && (u.IsLoopback || u.Host == "localhost")))
+            args.AddRange(["--bind-device", "false"]);
+        args.AddRange(["--tcp-whitelist", o.IsHost ? KnockProtocol.Port.ToString(System.Globalization.CultureInfo.InvariantCulture) : "1"]);
+        args.AddRange(["--udp-whitelist", "1"]);
+        args.AddRange(["--rpc-portal-whitelist", "127.0.0.1/32"]);
+        if (!o.IsHost)
+        {
+            var local = o.LocalKnockPort ?? throw new ArgumentException(L.T("core.mp.component.forwardrequired"));
+            args.AddRange(["--port-forward", $"tcp://127.0.0.1:{local}/{HostIp}:{KnockProtocol.Port}"]);
+        }
+        return args;
+    }
+}
+
+/// <summary>运行中的大厅 easytier-core。</summary>
+public sealed class EasyTierLobby : IDisposable
+{
+    private readonly Process _process;
+    private readonly IDisposable? _job;
+    private readonly string _cliPath;
+    private readonly Queue<string> _output = new();
+
+    public LobbyOptions Options { get; }
+    public bool HasExited => _process.HasExited;
+    public event Action<string>? Output;
+
+    private EasyTierLobby(Process process, ProcessJob? job, string cliPath, LobbyOptions options)
+    {
+        _process = process;
+        _job = job;
+        _cliPath = cliPath;
+        Options = options;
+    }
+
+    public IReadOnlyList<string> RecentOutput { get { lock (_output) return _output.ToList(); } }
+
+    public static EasyTierLobby Start(EasyTierInstaller installer, LobbyOptions options, string workDir)
+    {
+        var (process, job) = EasyTierSession.Launch(installer.CorePath, LobbyArgs.Build(options), LobbyArgs.Environment(options), workDir);
+        var lobby = new EasyTierLobby(process, job, installer.CliPath, options);
+        process.OutputDataReceived += (_, e) => lobby.OnLine(e.Data);
+        process.ErrorDataReceived += (_, e) => lobby.OnLine(e.Data);
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        return lobby;
+    }
+
+    private void OnLine(string? line)
+    {
+        if (line is null) return;
+        lock (_output)
+        {
+            _output.Enqueue(line);
+            if (_output.Count > 200) _output.Dequeue();
+        }
+        Output?.Invoke(line);
+    }
+
+    public Task<List<PeerInfo>> PeersAsync(CancellationToken ct = default) => EasyTierSession.QueryPeersAsync(_cliPath, Options.RpcPort, ct);
 
     public void Dispose()
     {

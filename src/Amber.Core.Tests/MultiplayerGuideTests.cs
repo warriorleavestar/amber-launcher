@@ -108,10 +108,28 @@ public sealed class MultiplayerGuideTests
     {
         var (service, vm, _) = Create();
         using var __ = service;
-        vm.DirectInviteInput = "AMBREPLY1-eyJhIjoxfQ";
+        vm.DirectInviteInput = "JAY2R-eyJ2IjoxfQ";
         vm.JoinDirectCommand.Execute(null);
-        Assert.Equal("AMBREPLY1-eyJhIjoxfQ", vm.DirectInviteInput);
+        Assert.Equal("JAY2R-eyJ2IjoxfQ", vm.DirectInviteInput);
         Assert.Equal(L.T("multiplayer.code.reply_misplaced"), vm.Status);
+        Assert.True(vm.IsIdle);
+    });
+
+    /// <summary>旧版本的直连码（里面是完整的房间码）：不接受，提示对方更新。</summary>
+    [Theory]
+    [InlineData("AMBDIRECT1-eyJhIjoxfQ")]
+    [InlineData("AMBREPLY1-eyJhIjoxfQ")]
+    public void OldDirectCodeShowsTheUpdateHint(string code) => UiTestThread.Run(() =>
+    {
+        var (service, vm, _) = Create();
+        using var __ = service;
+        vm.DirectInviteInput = code;
+        vm.JoinDirectCommand.Execute(null);
+        Assert.Equal(L.T("multiplayer.direct.old_code"), vm.Status);
+        Assert.True(vm.IsIdle);
+        vm.JoinCode = code;
+        vm.JoinCommand.Execute(null);
+        Assert.Equal(L.T("multiplayer.direct.old_code"), vm.Status);
         Assert.True(vm.IsIdle);
     });
 
@@ -120,7 +138,7 @@ public sealed class MultiplayerGuideTests
     {
         var (service, vm, _) = Create();
         using var __ = service;
-        const string code = "AMBDIRECT1-eyJhIjoxfQ";
+        const string code = "JAY2D-eyJ2IjoxfQ";
         vm.JoinCode = code;
         vm.JoinCommand.Execute(null);
         Assert.Equal("", vm.JoinCode);
@@ -129,15 +147,28 @@ public sealed class MultiplayerGuideTests
     });
 
     [Fact]
-    public void RoomCodeInDirectBoxMovesToRoomBox() => UiTestThread.Run(() =>
+    public void InviteInDirectBoxMovesToRoomBox() => UiTestThread.Run(() =>
     {
         var (service, vm, _) = Create();
         using var __ = service;
-        const string code = "AMB-K7Q2M9XD-4HZP8RW2N6TC-25565";
+        const string code = "JAY2-00041061050R3GG28A1C60T3GF-0G2491650N2RBHG68T3CE1T7GZ-2";
         vm.DirectInviteInput = code;
         vm.JoinDirectCommand.Execute(null);
         Assert.Equal("", vm.DirectInviteInput);
         Assert.Equal(code, vm.JoinCode);
+        Assert.True(vm.IsIdle);
+    });
+
+    /// <summary>旧版本的 AMB- 房间码贴进直连框：不再转去加入，提示请房主更新。</summary>
+    [Fact]
+    public void OldRoomCodeInDirectBoxShowsUpdateHint() => UiTestThread.Run(() =>
+    {
+        var (service, vm, _) = Create();
+        using var __ = service;
+        vm.DirectInviteInput = "AMB-K7Q2M9XD-4HZP8RW2N6TC-25565";
+        vm.JoinDirectCommand.Execute(null);
+        Assert.Equal("", vm.JoinCode);
+        Assert.Contains("JAY2-", vm.Status);
         Assert.True(vm.IsIdle);
     });
 

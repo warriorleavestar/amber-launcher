@@ -291,6 +291,7 @@ public sealed class GuestTestLifecycleTests : IDisposable
         var modes = new List<bool>();
         await using var session = new DirectSession(null!, _dir, Room, false, Options, new DiagnosticLog())
         {
+            BridgeKey = DirectTestKeys.Bridge,
             CreateSessionForTest = (elevated, o) =>
             {
                 modes.Add(elevated);
@@ -320,6 +321,7 @@ public sealed class GuestTestLifecycleTests : IDisposable
         var failNext = false;
         await using var session = new DirectSession(null!, _dir, Room, false, Options, new DiagnosticLog())
         {
+            BridgeKey = DirectTestKeys.Bridge,
             CreateSessionForTest = (elevated, o) =>
             {
                 modes.Add(elevated);
@@ -352,6 +354,7 @@ public sealed class GuestTestLifecycleTests : IDisposable
         var modes = new List<bool>();
         await using var session = new DirectSession(null!, _dir, Room, isHost, Options, new DiagnosticLog())
         {
+            BridgeKey = DirectTestKeys.Bridge,
             CreateSessionForTest = (elevated, o) =>
             {
                 modes.Add(elevated);
@@ -380,6 +383,7 @@ public sealed class GuestTestLifecycleTests : IDisposable
         var elevationAttempts = 0;
         await using var session = new DirectSession(null!, _dir, Room, false, Options, new DiagnosticLog())
         {
+            BridgeKey = DirectTestKeys.Bridge,
             CreateSessionForTest = (elevated, o) =>
             {
                 if (elevated)
@@ -392,7 +396,7 @@ public sealed class GuestTestLifecycleTests : IDisposable
         };
         await session.StartEasyTierAsync(Original, default);
         await session.PrepareAsync();
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { });
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true, 1, _ => { });
         var reply = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
         host.ControlReceived += (_, message) =>
         {
@@ -491,7 +495,7 @@ public sealed class GuestTestLifecycleTests : IDisposable
     public void LegacyHelloIsRecognized()
     {
         Assert.True(DirectSession.IsLegacyHello(new JsonObject { ["op"] = "hello", ["code"] = "AMBER-D1-xxxx" }));
-        var code = new DirectCode(true, Room, "abcdef0123456789", NatKind.Cone, [new Candidate(PathKind.Lan, IPEndPoint.Parse("192.168.1.9:40001"))]);
+        var code = new DirectCode(true, "abcdef0123456789", NatKind.Cone, [new Candidate(PathKind.Lan, IPEndPoint.Parse("192.168.1.9:40001"))]);
         Assert.False(DirectSession.IsLegacyHello(DirectSession.Hello(code)));
     }
 
@@ -499,8 +503,8 @@ public sealed class GuestTestLifecycleTests : IDisposable
     [Fact]
     public async Task SilentPeerIsReprobed()
     {
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { });
-        await using var sealer = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true, 1, _ => { });
+        await using var sealer = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, false, null, _ => { });
         using var raw = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
         var hostEnd = new IPEndPoint(IPAddress.Loopback, host.SocketEndPoint.Port);
         await raw.SendAsync(sealer.Seal(1, new byte[13]), hostEnd);

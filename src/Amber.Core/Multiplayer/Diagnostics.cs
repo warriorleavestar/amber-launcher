@@ -48,6 +48,9 @@ public static partial class NetDiagnostics
         // 先换整个码，再换单独出现的密钥。
         text = RoomCodePattern().Replace(text, m => L.F("core.mp.diagnostics.redactedroom", m.Groups[1].Value, m.Groups[2].Value));
         text = DirectCodePattern().Replace(text, m => L.F("core.mp.diagnostics.redacteddirect", m.Groups[1].Value));
+        // 邀请码整段换掉；大厅和邀请房间的 EasyTier 网络名（jay-l-… / jay-…）也不留。
+        text = InvitePattern().Replace(text, L.T("core.mp.diagnostics.redactedinvite"));
+        text = JayNetworkPattern().Replace(text, L.T("core.mp.diagnostics.secret"));
         text = SecretArgPattern().Replace(text, L.T("core.mp.diagnostics.secretarg"));
         // EasyTier 输出里打印配置时的写法（network_secret: "…" / network_secret = …）。
         text = SecretConfigPattern().Replace(text, m => m.Groups[1].Value + L.T("core.mp.diagnostics.secret"));
@@ -76,8 +79,14 @@ public static partial class NetDiagnostics
     [GeneratedRegex(@"AMB-((?:T[1-3]D?-)?[0-9A-Z]{8})-[0-9A-Z]{12}-(\d{1,5})", RegexOptions.IgnoreCase)]
     private static partial Regex RoomCodePattern();
 
-    [GeneratedRegex(@"(AMBDIRECT\d+|AMBREPLY\d+)-[A-Za-z0-9_-]+")]
+    [GeneratedRegex(@"(AMBDIRECT\d+|AMBREPLY\d+|JAY2D|JAY2R)-[A-Za-z0-9_-]+", RegexOptions.IgnoreCase)]
     private static partial Regex DirectCodePattern();
+
+    [GeneratedRegex(@"JAY2-(?:T[1-3]D?-)?[0-9A-Z]{26}-[0-9A-Z]{26}(?:-[0-9A-Z*~$=])?", RegexOptions.IgnoreCase)]
+    private static partial Regex InvitePattern();
+
+    [GeneratedRegex(@"\bjay-(?:l-)?[0-9a-f]{16}\b", RegexOptions.IgnoreCase)]
+    private static partial Regex JayNetworkPattern();
 
     [GeneratedRegex(@"--network-secret\s+\S+")]
     private static partial Regex SecretArgPattern();

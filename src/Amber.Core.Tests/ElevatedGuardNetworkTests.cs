@@ -14,9 +14,13 @@ public class ElevatedGuardNetworkTests
     {
         if (!OperatingSystem.IsWindows()) return;
         using var guard = ElevatedGuard.Start(Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".exe"), [], new Dictionary<string, string>(), elevate: false);
-        var error = await Assert.ThrowsAsync<IOException>(() => guard.WaitForReadyAsync().WaitAsync(TimeSpan.FromSeconds(20)));
+        // 启动结果一定会有：守护脚本回“failed”、连不上管道（ConnectTimeout 后）或者守护进程退出，三者之一。
+        // 以前这里自己掐 20 秒，比产品自己的 30 秒连接期限还短：机器忙、PowerShell 启动慢时测试先超时，
+        // 抛的是 TimeoutException 而不是要测的 IOException。现在等产品自己给出结果，外面这个期限只防挂死。
+        var settle = ElevatedGuard.ConnectTimeout + TimeSpan.FromMinutes(2);
+        var error = await Assert.ThrowsAsync<IOException>(() => guard.WaitForReadyAsync().WaitAsync(settle));
         Assert.NotEmpty(error.Message);
-        Assert.True(guard.WaitForExit(TimeSpan.FromSeconds(10)));
+        Assert.True(guard.WaitForExit(settle));
         Assert.False(guard.StartPending);
         Assert.NotEmpty(guard.RecentOutput);
     }

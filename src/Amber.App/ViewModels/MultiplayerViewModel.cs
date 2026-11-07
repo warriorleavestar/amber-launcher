@@ -53,6 +53,13 @@ public sealed record TransportChoice(TransportMode Mode) : LocalizedRecord
         _ => "multiplayer.transport.mode.general",
     });
     public string Detail => TransportProfile.Describe(Mode);
+
+    /// <summary>一句话说清这种模式下谁看得到游戏流量。</summary>
+    public string Privacy => L.T(Mode switch
+    {
+        TransportMode.General => "multiplayer.transport.privacy.general",
+        _ => "multiplayer.transport.privacy.member_channel",
+    });
     public override string ToString() => Label;
 }
 
@@ -254,6 +261,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         IsComponentReady = _service.EasyTier.IsInstalled;
         LoadNodes();
         RefreshInstances();
+        RefreshTrusted();
         // 不自动听局域网广播：绑定端口可能让 Windows 弹防火墙询问。用 Amber 启动的游戏从日志就能认出端口。
     }
 
@@ -466,37 +474,42 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             SetStatus(StatusMessage.Warning("multiplayer.nodes.host_required"));
             return;
         }
-        var room = RoomCode.Create(port.Value) with { Tunnel = new TunnelSettings(SelectedTransport.Mode, CanDisguise && DisguiseAsMinecraft) };
+        // 房间的网络名和密钥随机生成，只在批准加入时经加密的敲门通道发给对方；没有可以直接分享的房间码，靠“邀请”。
+        var credentials = NewCredentials(port.Value, new TunnelSettings(SelectedTransport.Mode, CanDisguise && DisguiseAsMinecraft));
+        // 成员表：批准一个人时发给他自己的钥匙（游戏通道和聊天按它认人）；房主自己的聊天客户端也有一把。
+        var members = new MemberTable();
+        var room = credentials.ToHostRoom(members, ChatName);
         if (!TryStartSession(new EasyTierOptions(room, true, TestPeers ?? _service.MultiplayerPeers, EasyTierArgs.FreeTcpPort(), null, TestListeners, Guid.NewGuid().ToString(), FullLanMode, null, FullLanMode && AllowExitNode)
             {
                 AllowProxy = AllowGameProxy,
             })) return;
         Mode = "host";
-        RoomCodeText = room.ToString();
+        RoomCodeText = "";
         _room = room;
         RestoreChatHistory(room);
         StartHub(room);
+        StartHostLobby(credentials, members);
         Status = FullLanMode
             ? L.T("multiplayer.room.created_full_lan")
             : L.T("multiplayer.room.created");
     }
 
     [RelayCommand]
-    private void Join()
+    private async Task JoinAsync()
     {
-        if (!IsIdle) return;
-        if (RouteMisplacedCode(JoinCode, PastedCodeKind.Room, () => JoinCode = "")) return;
+        if (!IsIdle || IsKnocking) return;
+        if (RouteMisplacedCode(JoinCode, PastedCodeKind.Invite, () => JoinCode = "")) return;
         if (!IsComponentReady)
         {
             SetStatus(StatusMessage.Warning("multiplayer.component.download_required"));
             return;
         }
-        if (!RoomCode.TryParse(JoinCode, out var room))
+        if (!JayInvite.TryParse(JoinCode, out var invite))
         {
-            SetStatus(StatusMessage.Error("multiplayer.room.invalid_code"));
+            SetStatus(JayInvite.LooksLikeOldCode(JoinCode) ? StatusMessage.Warning("multiplayer.invite.old_code") : StatusMessage.Error("multiplayer.room.invalid_code"));
             return;
         }
-        if (room.Tunnel.Mode == TransportMode.Extreme && !NoiseHandshake.HybridSupported)
+        if (invite.Tunnel.Mode == TransportMode.Extreme && !NoiseHandshake.HybridSupported)
         {
             SetStatus(StatusMessage.Warning("multiplayer.room.extreme_unsupported"));
             return;
@@ -506,6 +519,13 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             SetStatus(StatusMessage.Warning("multiplayer.nodes.join_required"));
             return;
         }
+        await KnockAndJoinAsync(invite);
+    }
+
+    /// <summary>拿到房间凭据之后：启动 EasyTier 加入房间。</summary>
+    private bool StartJoin(RoomCode room)
+    {
+        if (!IsIdle) return false;
         // 封装模式下游戏和聊天都先连本机的 Amber，再封装着发给房主（完整局域网模式也一样）。
         var wraps = room.Tunnel.Wraps;
         var local = FullLanMode && !wraps ? (int?)null : EasyTierArgs.FreeTcpPort();
@@ -514,7 +534,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
             {
                 LocalTunnelPort = wraps && !FullLanMode ? EasyTierArgs.FreeTcpPort() : null,
                 AllowProxy = AllowGameProxy,
-            })) return;
+            })) return false;
         _room = room;
         MarkJoinStarted(newRoom: true);
         RestoreChatHistory(room);
@@ -523,10 +543,11 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         Mode = "join";
         // 完整局域网模式下直接连房主的虚拟 IP；普通模式连本机转发端口。
         JoinAddress = local is { } l ? $"127.0.0.1:{l}" : $"{EasyTierArgs.HostIp}:{room.Port}";
-        RoomCodeText = room.ToString();
+        RoomCodeText = "";
         // 游戏的“多人游戏”列表里也会出现这个房间。
         if (local is { } port) _ = Amber.Core.Multiplayer.LanGames.AnnounceAsync(L.T("multiplayer.room.server_name"), port, _sessionCts!.Token);
         SetStatus(StatusMessage.Info("multiplayer.room.connecting"));
+        return true;
     }
 
     private bool TryStartSession(EasyTierOptions options)
@@ -597,6 +618,12 @@ public sealed partial class MultiplayerViewModel : PageViewModel
     private async Task UseGameProxyAsync()
     {
         if (SelectedExitPeer is not { } peer || _session is null || _currentOptions is not { } current) return;
+        // 邀请房间的封装通道只在成员和房主之间有钥匙：只能经房主转发。
+        if (current.Room.FromInvite && current.Room.Tunnel.Wraps && peer.Peer.Ip != EasyTierArgs.HostIp)
+        {
+            SetStatus(StatusMessage.Warning("multiplayer.proxy.host_only"));
+            return;
+        }
         var options = current with
         {
             ProxyExit = peer.Peer.Ip,
@@ -669,6 +696,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _chatConnecting = true;
         var client = new ChatClient(room, ChatName);
         client.Received += m => Dispatcher.UIThread.Post(() => OnChatMessage(client, m));
+        client.Rekeyed += next => Dispatcher.UIThread.Post(() => OnRekey(client, next));
+        client.Kicked += () => Dispatcher.UIThread.Post(() => OnKicked(client));
         client.Disconnected += () => Dispatcher.UIThread.Post(() =>
         {
             if (_chat != client) return;
@@ -864,7 +893,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         if (_session is not { } session || _refreshing) return;
         if (session.HasExited)
         {
-            var last = session.RecentOutput.LastOrDefault(l => !string.IsNullOrWhiteSpace(l)) ?? "";
+            // EasyTier 最后一行输出要显示在状态栏：先遮掉房间密钥和各种码。
+            var last = NetDiagnostics.Redact(session.RecentOutput.LastOrDefault(l => !string.IsNullOrWhiteSpace(l)) ?? "", _room is { } r ? [.. r.Secrets] : [], includePublicIps: true);
             StopSession();
             Status = session.Options.Tun ? L.F("multiplayer.room.full_lan_ended", last) : L.F("multiplayer.component.exited", last);
             return;
@@ -919,14 +949,14 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         }
     }
 
+    /// <summary>复制房间码、邀请码、直连码用的剪贴板：60 秒后自动清掉（自检里换成短一点的）。</summary>
+    internal Amber.App.Services.SensitiveClipboard SecretClipboard { get; set; } = Amber.App.Services.SensitiveClipboard.Shared;
+
     [RelayCommand]
     private async Task CopyRoomCodeAsync()
     {
-        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime { MainWindow.Clipboard: { } clipboard })
-        {
-            await clipboard.SetTextAsync(RoomCodeText);
+        if (await SecretClipboard.CopyAsync(RoomCodeText))
             SetStatus(StatusMessage.Success("multiplayer.room.code_copied"));
-        }
     }
 
     /// <summary>把房间加进所选版本的服务器列表。</summary>
@@ -973,6 +1003,8 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         Peers.Clear();
         if (_room is { } leftRoom) SaveChatHistory(leftRoom);
         _room = null;
+        StopHostLobby();
+        HostFingerprint = "";
         _localChatPort = null;
         _hubOnVirtualIp = false;
         var chat = _chat;

@@ -84,10 +84,14 @@ public sealed partial class MultiplayerViewModel
         if (kind == expected || kind == PastedCodeKind.Unknown) return false;
         switch (kind)
         {
-            case PastedCodeKind.Room:
+            case PastedCodeKind.Invite:
                 clearSource();
                 JoinCode = text;
                 JoinCommand.Execute(null);
+                return true;
+            case PastedCodeKind.Room:
+                // 旧版本的 AMB- 房间码不能再用来加入：请房主更新后发邀请码。
+                SetStatus(StatusMessage.Warning("multiplayer.invite.old_code"));
                 return true;
             case PastedCodeKind.DirectInvite:
                 clearSource();
@@ -103,6 +107,9 @@ public sealed partial class MultiplayerViewModel
                 return true;
             case PastedCodeKind.DirectReply:
                 SetStatus(StatusMessage.Warning("multiplayer.code.reply_misplaced"));
+                return true;
+            case PastedCodeKind.OldDirect:
+                SetStatus(StatusMessage.Warning("multiplayer.direct.old_code"));
                 return true;
             default:
                 return false;

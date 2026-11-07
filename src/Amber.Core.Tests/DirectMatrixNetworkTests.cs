@@ -28,6 +28,7 @@ public sealed class DirectMatrixNetworkTests
         new(null!, Path.Combine(Path.GetTempPath(), "amber-matrix-" + Guid.NewGuid().ToString("N")), Room,
             isHost, Options, new DiagnosticLog())
         {
+            BridgeKey = DirectTestKeys.Bridge,
             StartForTest = (o, _) => Task.FromResult<IEasyTierSession>(new FakeEasyTier(o)),
             SpeedTestPortForTest = 0,
             MatrixStepTimeout = stepTimeout ?? TimeSpan.FromSeconds(120),
@@ -44,7 +45,7 @@ public sealed class DirectMatrixNetworkTests
         var hostPeer = await guest.PunchAsync(invite.Candidates, invite.Nat, Deadline);
         Assert.NotNull(hostPeer);
         Assert.NotNull(await hostWait);
-        await guest.SendControlAsync(hostPeer, DirectSession.Hello(new DirectCode(true, Room, invite.Session, NatKind.Cone, [Address(guest)])));
+        await guest.SendControlAsync(hostPeer, DirectSession.Hello(new DirectCode(true, invite.Session, NatKind.Cone, [Address(guest)])));
         return hostPeer;
     }
 
@@ -75,7 +76,7 @@ public sealed class DirectMatrixNetworkTests
     public async Task TimedOutHostStepCancelsBackgroundWorkAndRestoresAllPaths()
     {
         await using var host = NewSession(true, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(400));
-        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, false, null, _ => { });
         var messages = Controls(guest);
         var peer = await ConnectHostAsync(host, guest);
         var chatStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -108,7 +109,7 @@ public sealed class DirectMatrixNetworkTests
     public async Task CancelledHostStepWaitsForProbeCleanupBeforeReturning()
     {
         await using var host = NewSession(true);
-        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), Room, false, null, _ => { });
+        await using var guest = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, false, null, _ => { });
         var messages = Controls(guest);
         var peer = await ConnectHostAsync(host, guest);
         using var stop = new CancellationTokenSource();
@@ -137,10 +138,10 @@ public sealed class DirectMatrixNetworkTests
     {
         await using var guest = NewSession(false);
         await guest.PrepareAsync();
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { });
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true, 1, _ => { });
         var messages = Controls(host);
         var waiting = host.WaitForPeerAsync(Deadline);
-        Assert.True(await guest.JoinAsync(new DirectCode(false, Room, "0123456789abcdef", NatKind.Cone, [Address(host)])));
+        Assert.True(await guest.JoinAsync(new DirectCode(false, "0123456789abcdef", NatKind.Cone, [Address(host)], DirectTestKeys.Invite), DirectTestKeys.Knock(Room)));
         Assert.NotNull(await waiting);
         await using var speed = new SpeedTestServer(guest.LocalSpeedPort);
         var original = guest.EasyTier;
@@ -178,10 +179,10 @@ public sealed class DirectMatrixNetworkTests
     {
         await using var guest = NewSession(false);
         await guest.PrepareAsync();
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { });
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true, 1, _ => { });
         var messages = Controls(host);
         var waiting = host.WaitForPeerAsync(Deadline);
-        Assert.True(await guest.JoinAsync(new DirectCode(false, Room, "0123456789abcdef", NatKind.Cone, [Address(host)])));
+        Assert.True(await guest.JoinAsync(new DirectCode(false, "0123456789abcdef", NatKind.Cone, [Address(host)], DirectTestKeys.Invite), DirectTestKeys.Knock(Room)));
         Assert.NotNull(await waiting);
         await using var speed = throughputAvailable ? new SpeedTestServer(guest.LocalSpeedPort) : null;
         const string run = "matrix-data-failure";
@@ -212,9 +213,9 @@ public sealed class DirectMatrixNetworkTests
     {
         await using var guest = NewSession(false);
         await guest.PrepareAsync();
-        await using var host = new DirectBridge(DirectBridge.CreateSocket(), Room, true, 1, _ => { });
+        await using var host = new DirectBridge(DirectBridge.CreateSocket(), DirectTestKeys.Bridge, true, 1, _ => { });
         var waiting = host.WaitForPeerAsync(Deadline);
-        Assert.True(await guest.JoinAsync(new DirectCode(false, Room, "0123456789abcdef", NatKind.Cone, [Address(host)])));
+        Assert.True(await guest.JoinAsync(new DirectCode(false, "0123456789abcdef", NatKind.Cone, [Address(host)], DirectTestKeys.Invite), DirectTestKeys.Knock(Room)));
         Assert.NotNull(await waiting);
         var originalPeer = Assert.Single(guest.Bridge!.Peers);
         const string run = "matrix-delayed-step";
@@ -254,6 +255,7 @@ public sealed class DirectMatrixNetworkTests
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var guest = new DirectSession(null!, "unused", Room, false, Options, new DiagnosticLog())
         {
+            BridgeKey = DirectTestKeys.Bridge,
             StartForTest = async (o, _) =>
             {
                 if (o.Tun)
