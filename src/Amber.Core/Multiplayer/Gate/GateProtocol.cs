@@ -16,10 +16,73 @@ public enum GateStatus : byte
     NotMember = 4,
     /// <summary>用户名被管理员停用了。</summary>
     Disabled = 5,
+    /// <summary>服务器开了隐私+：只接受经两个节点的拆分连接（旧版 Jay 会收到这个，要更新）。</summary>
+    SplitRequired = 6,
+}
+
+/// <summary>服务器的隐私等级。</summary>
+public enum PrivacyLevel : byte
+{
+    /// <summary>直连网关。</summary>
+    Basic = 0,
+    /// <summary>隐私+：经两个不同节点各走一半（2-of-2 拆分），网关只接受节点转来的连接。</summary>
+    Plus = 1,
+}
+
+/// <summary>一个地址（网关或节点）。</summary>
+public sealed record GateEndpoint(string Host, int Port)
+{
+    public override string ToString() => Host.Contains(':') ? $"[{Host}]:{Port}" : $"{Host}:{Port}";
+
+    /// <summary>解析 host:port 或 [v6]:port。</summary>
+    public static GateEndpoint? TryParse(string? text)
+    {
+        text = text?.Trim();
+        if (string.IsNullOrEmpty(text)) return null;
+        string host;
+        string port;
+        if (text.StartsWith('['))
+        {
+            var close = text.IndexOf("]:", StringComparison.Ordinal);
+            if (close < 0) return null;
+            host = text[1..close];
+            port = text[(close + 2)..];
+        }
+        else
+        {
+            var colon = text.LastIndexOf(':');
+            if (colon <= 0 || text.IndexOf(':') != colon) return null;
+            host = text[..colon];
+            port = text[(colon + 1)..];
+        }
+        return GateInvite.IsValidHost(host) && int.TryParse(port, out var p) && p is > 0 and < 65536 ? new GateEndpoint(host, p) : null;
+    }
+}
+
+/// <summary>网关告诉客户端的连法：隐私等级、直连地址（隐私+ 下不给，免得暴露源站）、节点列表。每次进服都会回最新的。</summary>
+public sealed record GateNetwork(PrivacyLevel Level, GateEndpoint? Direct, IReadOnlyList<GateEndpoint> Relays)
+{
+    public const int MaxRelays = 16;
+}
+
+/// <summary>进服请求的种类（v2 写在握手第三条消息的负载里）。</summary>
+public enum JoinKind : byte
+{
+    Direct = 0,
+    /// <summary>两路拆分里的一条腿。</summary>
+    SplitLeg = 1,
+}
+
+/// <summary>v2 进服请求：拆分腿要带序号（0 / 1）和两条腿共用的配对 ID。</summary>
+public sealed record JoinRequest(JoinKind Kind, byte Index, byte[] PairId)
+{
+    public const int PairIdLength = 16;
+    public static readonly JoinRequest Direct = new(JoinKind.Direct, 0, []);
+    public static JoinRequest Leg(byte index, byte[] pairId) => new(JoinKind.SplitLeg, index, pairId);
 }
 
 /// <summary>入服成功后客户端要保存的东西：网关地址、网关公钥（钉住）、访问密钥、绑定的用户名。</summary>
-public sealed record GateMembership(string Host, int Port, byte[] ServerPublicKey, byte[] AccessKey, string Username)
+public sealed record GateMembership(string Host, int Port, byte[] ServerPublicKey, byte[] AccessKey, string Username, GateNetwork? Network = null)
 {
     public override string ToString() => $"{Username}@{Host}:{Port}";
 }
@@ -33,6 +96,7 @@ public sealed class GateRejectedException(GateStatus status) : Exception(Describ
         GateStatus.DeviceLimit => L.T("core.gate.status.devicelimit"),
         GateStatus.NotMember => L.T("core.gate.status.notmember"),
         GateStatus.Disabled => L.T("core.gate.status.disabled"),
+        GateStatus.SplitRequired => L.T("core.gate.status.splitrequired"),
         _ => L.T("core.gate.status.unknown"),
     };
 }
@@ -46,11 +110,15 @@ public sealed class GateRejectedException(GateStatus status) : Exception(Describ
 /// </list>
 /// 两种都是 psk 在第一条消息就生效：不知道令牌或访问密钥的连接第一条就解不开，网关一个字节都不回，扫描器看不出这里有服务。
 /// 握手帧：[2 字节长度][Noise 消息]。
+/// <para>v2（隐私+）：客户端在第三条消息的负载里写 [2][种类][腿序号][16 字节配对 ID]（入服只写 [2]）；网关看到 v2 才在结果后面附上 <see cref="GateNetwork"/>。
+/// 负载为空的是 v1 客户端，网关照旧只回 1 字节结果。</para>
 /// </summary>
 public static class GateProtocol
 {
     public static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
     private const int MaxHandshakeMessage = 1024;
+    private const int MaxRecord = 4096;
+    internal const byte Version2 = 2;
     internal static readonly byte[] EnrollPrologue = "jay-gate-v1|enroll"u8.ToArray();
     internal static readonly byte[] JoinPrologue = "jay-gate-v1|join"u8.ToArray();
 
@@ -78,7 +146,7 @@ public static class GateProtocol
         try
         {
             using var hs = new NoiseHandshake(NoisePattern.XXpsk0, initiator: true, EnrollPrologue, psk, device);
-            (secure, serverKey) = await InitiateAsync(stream, hs, key => CryptographicOperations.FixedTimeEquals(ServerKeyHash(key), invite.ServerKeyHash), timeout.Token);
+            (secure, serverKey) = await InitiateAsync(stream, hs, key => CryptographicOperations.FixedTimeEquals(ServerKeyHash(key), invite.ServerKeyHash), [Version2], timeout.Token);
         }
         finally
         {
@@ -91,10 +159,12 @@ public static class GateProtocol
             if (status != GateStatus.Ok) throw new GateRejectedException(status);
             if (reply.Length < 1 + 32 + 1) throw new CryptographicException(L.T("core.gate.protocol.malformed"));
             var accessKey = reply[1..33];
+            if (34 + reply[33] > reply.Length) throw new CryptographicException(L.T("core.gate.protocol.malformed"));
             var name = Encoding.ASCII.GetString(reply, 34, reply[33]);
-            if (34 + reply[33] != reply.Length || !GateInvite.IsValidUsername(name)) throw new CryptographicException(L.T("core.gate.protocol.malformed"));
+            if (!GateInvite.IsValidUsername(name)) throw new CryptographicException(L.T("core.gate.protocol.malformed"));
+            var network = DecodeNetwork(reply.AsSpan(34 + reply[33]));
             await secure.CloseAsync(timeout.Token);
-            return new GateMembership(invite.Host, invite.Port, serverKey, accessKey, name);
+            return new GateMembership(invite.Host, invite.Port, serverKey, accessKey, name, network);
         }
         finally
         {
@@ -102,17 +172,30 @@ public static class GateProtocol
         }
     }
 
-    /// <summary>进服：返回已认证的加密流，之后直接当成到 MC 服务端的连接用。网关拒绝时抛 <see cref="GateRejectedException"/>。</summary>
-    public static async Task<SecureStream> JoinAsync(Stream stream, GateMembership membership, X25519KeyPair device, CancellationToken ct = default)
+    /// <summary>进服（直连）：返回已认证的加密流，之后直接当成到 MC 服务端的连接用。网关拒绝时抛 <see cref="GateRejectedException"/>。</summary>
+    public static Task<SecureStream> JoinAsync(Stream stream, GateMembership membership, X25519KeyPair device, CancellationToken ct = default) =>
+        JoinAsync(stream, membership, device, JoinRequest.Direct, null, ct);
+
+    /// <param name="request">null 表示按 v1 进服（第三条消息负载为空，只收 1 字节结果）：只给兼容测试用。</param>
+    /// <param name="onNetwork">网关回了最新的连法（隐私等级、节点列表）时调用，拒绝时（比如要求拆分）也会先调用。</param>
+    public static async Task<SecureStream> JoinAsync(Stream stream, GateMembership membership, X25519KeyPair device, JoinRequest? request, Action<GateNetwork>? onNetwork, CancellationToken ct)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(HandshakeTimeout);
         using var hs = new NoiseHandshake(NoisePattern.XXpsk0, initiator: true, JoinPrologue, membership.AccessKey, device);
-        var (secure, _) = await InitiateAsync(stream, hs, key => CryptographicOperations.FixedTimeEquals(key, membership.ServerPublicKey), timeout.Token);
+        var (secure, _) = await InitiateAsync(stream, hs, key => CryptographicOperations.FixedTimeEquals(key, membership.ServerPublicKey), EncodeJoinRequest(request), timeout.Token);
         try
         {
             var reply = await ReadRecordAsync(secure, timeout.Token);
-            if (reply.Length != 1) throw new CryptographicException(L.T("core.gate.protocol.malformed"));
+            if (request is null)
+            {
+                if (reply.Length != 1) throw new CryptographicException(L.T("core.gate.protocol.malformed"));
+            }
+            else if (reply.Length > 1)
+            {
+                var network = DecodeNetwork(reply.AsSpan(1)) ?? throw new CryptographicException(L.T("core.gate.protocol.malformed"));
+                onNetwork?.Invoke(network);
+            }
             if ((GateStatus)reply[0] != GateStatus.Ok) throw new GateRejectedException((GateStatus)reply[0]);
             return secure;
         }
@@ -124,7 +207,7 @@ public static class GateProtocol
         }
     }
 
-    private static async Task<(SecureStream, byte[] ServerKey)> InitiateAsync(Stream stream, NoiseHandshake hs, Func<byte[], bool> trustServer, CancellationToken ct)
+    private static async Task<(SecureStream, byte[] ServerKey)> InitiateAsync(Stream stream, NoiseHandshake hs, Func<byte[], bool> trustServer, byte[] payload, CancellationToken ct)
     {
         await WriteFrameAsync(stream, hs.WriteMessage([]), ct);
         byte[] second;
@@ -141,7 +224,7 @@ public static class GateProtocol
         var serverKey = hs.RemoteStaticPublicKey ?? throw new CryptographicException(L.T("core.gate.protocol.malformed"));
         // 先核对服务器身份，对上了才发第三条消息（里面才有本机的设备公钥）。
         if (!trustServer(serverKey)) throw new CryptographicException(L.T("core.gate.protocol.wrongserver"));
-        await WriteFrameAsync(stream, hs.WriteMessage([]), ct);
+        await WriteFrameAsync(stream, hs.WriteMessage(payload), ct);
         var (send, receive) = hs.Split();
         return (new SecureStream(stream, send, receive, Profile), serverKey);
     }
@@ -149,7 +232,9 @@ public static class GateProtocol
     // ---------------- 网关 ----------------
 
     /// <summary>网关这边一次握手的结果。</summary>
-    public sealed record Accepted(SecureStream Stream, byte[] DevicePublicKey, bool IsEnroll, string? InviteId);
+    /// <param name="Version">1 = 旧客户端（第三条消息负载为空），2 = 带 v2 负载。</param>
+    /// <param name="Request">v2 进服请求；入服和 v1 时为 null。</param>
+    public sealed record Accepted(SecureStream Stream, byte[] DevicePublicKey, bool IsEnroll, string? InviteId, int Version = 1, JoinRequest? Request = null);
 
     /// <summary>
     /// 网关：读第一条消息，按顺序试 join（访问密钥）和每个有效邀请的 psk，哪个解得开就是哪种。都不行返回 null（调用方直接断开，不回任何字节）。
@@ -182,34 +267,124 @@ public static class GateProtocol
             using (hs)
             {
                 await WriteFrameAsync(stream, hs.WriteMessage([]), ct);
-                byte[] third;
+                byte[] payload;
                 try
                 {
-                    third = await ReadFrameAsync(stream, ct);
-                    hs.ReadMessage(third);
+                    var third = await ReadFrameAsync(stream, ct);
+                    payload = hs.ReadMessage(third);
                 }
                 catch (Exception e) when (e is EndOfStreamException or CryptographicException)
                 {
                     return null;
                 }
+                var enroll = inviteId is not null;
+                if (!TryParsePayload(payload, enroll, out var version, out var request)) return null;
                 var device = hs.RemoteStaticPublicKey!;
                 var (send, receive) = hs.Split();
-                return new Accepted(new SecureStream(stream, send, receive, Profile), device, inviteId is not null, inviteId);
+                return new Accepted(new SecureStream(stream, send, receive, Profile), device, enroll, inviteId, version, request);
             }
         }
         return null;
     }
 
-    /// <summary>网关：回入服结果。</summary>
-    public static Task SendEnrollResultAsync(SecureStream stream, GateStatus status, byte[]? accessKey, string? username, CancellationToken ct)
+    /// <summary>网关：回入服结果。<paramref name="network"/> 只发给 v2 客户端（调用方按 <see cref="Accepted.Version"/> 决定传不传）。</summary>
+    public static Task SendEnrollResultAsync(SecureStream stream, GateStatus status, byte[]? accessKey, string? username, CancellationToken ct, GateNetwork? network = null)
     {
         if (status != GateStatus.Ok) return WriteRecordAsync(stream, [(byte)status], ct);
         var name = Encoding.ASCII.GetBytes(username!);
-        return WriteRecordAsync(stream, [(byte)GateStatus.Ok, .. accessKey!, (byte)name.Length, .. name], ct);
+        return WriteRecordAsync(stream, [(byte)GateStatus.Ok, .. accessKey!, (byte)name.Length, .. name, .. network is null ? [] : EncodeNetwork(network)], ct);
     }
 
-    public static Task SendJoinResultAsync(SecureStream stream, GateStatus status, CancellationToken ct) =>
-        WriteRecordAsync(stream, [(byte)status], ct);
+    public static Task SendJoinResultAsync(SecureStream stream, GateStatus status, CancellationToken ct, GateNetwork? network = null) =>
+        WriteRecordAsync(stream, [(byte)status, .. network is null ? [] : EncodeNetwork(network)], ct);
+
+    // ---------------- v2 负载 ----------------
+
+    internal static byte[] EncodeJoinRequest(JoinRequest? request) => request switch
+    {
+        null => [],
+        { Kind: JoinKind.SplitLeg } => [Version2, (byte)JoinKind.SplitLeg, request.Index, .. request.PairId],
+        _ => [Version2, (byte)JoinKind.Direct],
+    };
+
+    private static bool TryParsePayload(byte[] payload, bool enroll, out int version, out JoinRequest? request)
+    {
+        version = 1;
+        request = null;
+        if (payload.Length == 0) return true;
+        if (payload[0] != Version2) return false;
+        version = 2;
+        if (enroll) return payload.Length == 1;
+        if (payload.Length == 2 && payload[1] == (byte)JoinKind.Direct)
+        {
+            request = JoinRequest.Direct;
+            return true;
+        }
+        if (payload.Length == 3 + JoinRequest.PairIdLength && payload[1] == (byte)JoinKind.SplitLeg && payload[2] <= 1)
+        {
+            request = JoinRequest.Leg(payload[2], payload[3..]);
+            return true;
+        }
+        return false;
+    }
+
+    internal static byte[] EncodeNetwork(GateNetwork network)
+    {
+        var output = new List<byte> { (byte)network.Level };
+        if (network.Direct is { } direct) WriteEndpoint(output, direct);
+        else output.Add(0);
+        var relays = network.Relays.Take(GateNetwork.MaxRelays).ToList();
+        output.Add((byte)relays.Count);
+        foreach (var relay in relays) WriteEndpoint(output, relay);
+        return [.. output];
+    }
+
+    /// <summary>空的返回 null（v1 网关）；格式不对也返回 null。</summary>
+    internal static GateNetwork? DecodeNetwork(ReadOnlySpan<byte> data)
+    {
+        if (data.IsEmpty) return null;
+        var level = (PrivacyLevel)data[0];
+        if (level is not (PrivacyLevel.Basic or PrivacyLevel.Plus)) return null;
+        var offset = 1;
+        GateEndpoint? direct = null;
+        if (offset >= data.Length) return null;
+        if (data[offset] == 0) offset++;
+        else if (!TryReadEndpoint(data, ref offset, out direct)) return null;
+        if (offset >= data.Length) return null;
+        int count = data[offset++];
+        if (count > GateNetwork.MaxRelays) return null;
+        var relays = new List<GateEndpoint>(count);
+        for (var i = 0; i < count; i++)
+        {
+            if (!TryReadEndpoint(data, ref offset, out var relay)) return null;
+            relays.Add(relay!);
+        }
+        return offset == data.Length ? new GateNetwork(level, direct, relays) : null;
+    }
+
+    private static void WriteEndpoint(List<byte> output, GateEndpoint endpoint)
+    {
+        var host = Encoding.ASCII.GetBytes(endpoint.Host);
+        output.Add((byte)host.Length);
+        output.AddRange(host);
+        output.Add((byte)(endpoint.Port >> 8));
+        output.Add((byte)endpoint.Port);
+    }
+
+    private static bool TryReadEndpoint(ReadOnlySpan<byte> data, ref int offset, out GateEndpoint? endpoint)
+    {
+        endpoint = null;
+        if (offset >= data.Length) return false;
+        int length = data[offset++];
+        if (length == 0 || offset + length + 2 > data.Length) return false;
+        var host = Encoding.ASCII.GetString(data.Slice(offset, length));
+        offset += length;
+        var port = BinaryPrimitives.ReadUInt16BigEndian(data[offset..]);
+        offset += 2;
+        if (!GateInvite.IsValidHost(host) || port == 0) return false;
+        endpoint = new GateEndpoint(host, port);
+        return true;
+    }
 
     // ---------------- 帧 ----------------
 
@@ -228,7 +403,7 @@ public static class GateProtocol
         var header = new byte[2];
         if (!await SecureStream.ReadExactAsync(stream, header, ct)) throw new EndOfStreamException(L.T("core.gate.protocol.closed"));
         var length = BinaryPrimitives.ReadUInt16BigEndian(header);
-        if (length is 0 or > 256) throw new CryptographicException(L.T("core.gate.protocol.malformed"));
+        if (length is 0 or > MaxRecord) throw new CryptographicException(L.T("core.gate.protocol.malformed"));
         var body = new byte[length];
         if (!await SecureStream.ReadExactAsync(stream, body, ct)) throw new EndOfStreamException(L.T("core.gate.protocol.closed"));
         return body;

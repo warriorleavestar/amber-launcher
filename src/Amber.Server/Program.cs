@@ -33,6 +33,14 @@ public static class Program
           jay-server remove <用户名>
           jay-server online-mode on|off                        正版验证（默认 off：离线账号，由网关核对用户名）
 
+        隐私+（玩家经两个不同节点各走一半，源站地址不外传）：
+          jay-server relay --origin <网关地址:端口> [--listen 47671]
+              在节点电脑上运行（VPS 或局域网电脑都行）：只把连接原样转给网关，不存任何密钥
+          jay-server relays add <节点地址:端口> [--source <网关看到的节点 IP>]
+              节点在局域网里、或者和网关在同一台机器上时，--source 填网关这边看到的它的 IP
+          jay-server relays remove <节点地址:端口> / relays list
+          jay-server privacy basic|plus                        plus 至少要两个节点；之后网关只收节点转来的拆分连接
+
         通用选项：--dir <数据目录>（默认是程序旁边的 jay-server-data，也可以用环境变量 JAY_SERVER_DIR）
         """;
 
@@ -50,6 +58,7 @@ public static class Program
                 "init" => Init(root, options),
                 "setup" => await SetupAsync(root, options),
                 "run" => await RunAsync(root, options),
+                "relay" => await RelayAsync(options),
                 null => Help(),
                 _ => Admin(root, options, Console.Out),
             };
@@ -129,7 +138,10 @@ public static class Program
         var log = (string line) => Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Jay] {line}");
         await using var gate = new GateServer(store, config, key, log);
         gate.Start();
-        log($"网关在端口 {gate.Port} 上等待玩家（玩家连 {config.PublicHost}:{config.PublicPort}）；服务器身份 {MemberIdentity.FingerprintOf(key.PublicKey)}");
+        var state = store.Read();
+        log(state.Privacy == PrivacyLevel.Plus
+            ? $"网关在端口 {gate.Port} 上等待玩家（隐私+：只收 {state.Relays.Count} 个节点转来的拆分连接）；服务器身份 {MemberIdentity.FingerprintOf(key.PublicKey)}"
+            : $"网关在端口 {gate.Port} 上等待玩家（玩家连 {config.PublicHost}:{config.PublicPort}）；服务器身份 {MemberIdentity.FingerprintOf(key.PublicKey)}");
 
         McServerHost.RunningServer? mc = null;
         if (withMc)
@@ -186,6 +198,27 @@ public static class Program
             await mc.StopAsync(TimeSpan.FromSeconds(60));
             mc.Dispose();
         }
+        return 0;
+    }
+
+    /// <summary>节点：不需要初始化网关数据目录，只要知道源站地址。</summary>
+    private static async Task<int> RelayAsync(Options options)
+    {
+        var origin = GateEndpoint.TryParse(options.Get("origin")) ?? throw new ArgumentException("要用 --origin <网关地址:端口> 指定源站");
+        var listen = options.GetInt("listen", 47671);
+        var log = (string line) => Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Jay 节点] {line}");
+        await using var relay = new GateRelay(options.Get("bind") ?? "::", listen, origin.Host, origin.Port, log: log);
+        relay.Start();
+        log($"节点在端口 {relay.Port} 上运行，转给 {origin}。在网关上执行：jay-server relays add <本机地址>:{relay.Port}");
+        var stop = new CancellationTokenSource();
+        void Stop() { try { stop.Cancel(); } catch (ObjectDisposedException) { } }
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; Stop(); };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => Stop();
+        using var sigterm = OperatingSystem.IsWindows() ? null
+            : System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; Stop(); });
+        try { await Task.Delay(Timeout.Infinite, stop.Token); }
+        catch (OperationCanceledException) { }
+        log("正在关闭……");
         return 0;
     }
 
@@ -251,6 +284,42 @@ public static class Program
                 var host = new McServerHost(root);
                 host.WriteProperties(host.LoadSettings().Port, on);
                 output.WriteLine(on ? "已开启正版验证（重启 MC 服务端后生效）。" : "已关闭正版验证：离线账号，由网关核对用户名（重启后生效）。");
+                return 0;
+            }
+            case "privacy":
+            {
+                var level = Arg(0, "basic 或 plus") switch { "basic" => PrivacyLevel.Basic, "plus" => PrivacyLevel.Plus, _ => throw new ArgumentException("只能是 basic 或 plus") };
+                store.SetPrivacy(level);
+                output.WriteLine(level == PrivacyLevel.Plus
+                    ? "已切到隐私+：玩家经两个节点进服，网关只收节点转来的连接（新邀请码里写的是节点地址）。别忘了用防火墙只放行节点访问网关端口。"
+                    : "已切回普通模式：玩家直连网关。");
+                return 0;
+            }
+            case "relays":
+            {
+                switch (Arg(0, "add、remove 或 list"))
+                {
+                    case "add":
+                    {
+                        var address = GateEndpoint.TryParse(Arg(1, "节点地址")) ?? throw new ArgumentException("节点地址要写成 主机:端口");
+                        store.AddRelay(address, options.Get("source"));
+                        output.WriteLine($"已加节点 {address}。");
+                        break;
+                    }
+                    case "remove":
+                        output.WriteLine(store.RemoveRelay(Arg(1, "节点地址")) ? "已删除。" : "没有这个节点。");
+                        break;
+                    case "list":
+                    {
+                        var state = store.Read();
+                        output.WriteLine($"隐私等级：{(state.Privacy == PrivacyLevel.Plus ? "隐私+" : "普通")}");
+                        if (state.Relays.Count == 0) output.WriteLine("还没有节点。");
+                        foreach (var r in state.Relays) output.WriteLine($"  {r.Address}{(r.Source is null ? "" : $"  （来源 IP {r.Source}）")}");
+                        break;
+                    }
+                    default:
+                        throw new ArgumentException("只能是 add、remove 或 list");
+                }
                 return 0;
             }
             default:

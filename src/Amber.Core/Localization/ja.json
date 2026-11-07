@@ -1481,5 +1481,16 @@
   "core.gate.log.wrong_name": "拒否：デバイス {0} が {1} でログインしようとしました（紐づけ：{2}）",
   "core.gate.log.joined": "入室：{0}",
   "core.gate.log.left": "退室：{0}",
-  "core.gate.log.error": "接続エラー（デバイス {0}）：{1}"
+  "core.gate.log.error": "接続エラー（デバイス {0}）：{1}",
+  "core.gate.status.splitrequired": "このサーバーはプライバシー+を使用しています。2 つの中継ノード経由で接続する必要があるため、Jay を更新してください。",
+  "core.gate.split.leg_lost": "2 つの経路のうち 1 つが切断されました",
+  "core.gate.split.mismatch": "2 つの経路のデータが一致しないため、接続を切断しました",
+  "core.gate.split.timeout": "もう一方の経路の待機がタイムアウトしました",
+  "core.gate.split.need_two": "プライバシー+ には接続可能な中継ノードが 2 つ必要ですが、足りません（直接接続には切り替えません）",
+  "core.gate.admin.plus_needs_relays": "プライバシー+ には中継ノードが 2 つ以上必要です。先に jay-server relays add で追加してください。",
+  "core.gate.admin.badsource": "送信元は IP アドレスで指定してください",
+  "core.gate.admin.too_many_relays": "中継ノードが多すぎます（最大 16 個）",
+  "core.gate.admin.badrelay": "中継ノードのアドレスは host:port の形式で指定してください",
+  "core.gate.log.split_required": "拒否：デバイス {0} が 2 つの中継ノードを経由していません（プライバシー+）",
+  "core.gate.log.joined_split": "参加（2 経路）：{0}"
 }
