@@ -47,7 +47,7 @@ public static class Program
           jay-server status                                    节点心跳、熔断状态、在线人数（服务运行时）
 
         入口端口轮换（像验证器 App 的动态码：入口端口每隔一段时间按种子换一个，扫描器找不到，泄露的旧地址自动过期）：
-          jay-server rotate on [--window 10m] [--range 20000-60000] [--grace 3d] [--new-seed]
+          jay-server rotate on [--window 10m] [--range 20000-45000] [--grace 3d] [--new-seed]
               普通模式轮换网关端口，隐私+/++ 轮换节点端口（节点要带节点码运行）。
               grace 期间固定端口照开，老玩家进一次服就会拿到轮换信息；之后固定端口关闭
           jay-server rotate off / rotate status
@@ -380,7 +380,7 @@ public static class Program
                     case "on":
                     {
                         var range = (options.Get("range") ?? $"{GateRotation.Default.MinPort}-{GateRotation.Default.MaxPort}").Split('-');
-                        if (range.Length != 2 || !int.TryParse(range[0], out var min) || !int.TryParse(range[1], out var max)) throw new ArgumentException("--range 写成 20000-60000");
+                        if (range.Length != 2 || !int.TryParse(range[0], out var min) || !int.TryParse(range[1], out var max)) throw new ArgumentException("--range 写成 20000-45000");
                         var window = ParseDuration(options.Get("window") ?? "10m");
                         var grace = ParseDuration(options.Get("grace") ?? "3d");
                         store.EnableRotation(new GateRotation((int)window.TotalSeconds, min, max), grace, options.Has("new-seed"));

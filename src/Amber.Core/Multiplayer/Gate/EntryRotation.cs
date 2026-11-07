@@ -14,7 +14,8 @@ namespace Amber.Core.Multiplayer.Gate;
 public sealed record GateRotation(int WindowSeconds, int MinPort, int MaxPort)
 {
     public const int SeedLength = 32;
-    public static readonly GateRotation Default = new(600, 20000, 60000);
+    /// <summary>默认范围停在 49152 以下：Windows 的动态端口段（49152–65535）里常有被 Hyper-V / WinNAT 保留、绑不上的端口。</summary>
+    public static readonly GateRotation Default = new(600, 20000, 45000);
 
     public bool IsValid => WindowSeconds is >= 30 and <= 86400 && MinPort is >= 1024 and <= 65535 && MaxPort is >= 1024 and <= 65535 && MaxPort - MinPort >= 100;
 

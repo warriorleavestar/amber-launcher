@@ -11,7 +11,7 @@ namespace Amber.Core.Tests;
 /// <summary>入口端口轮换（TOTP 原理）：端口计算、邀请码和地址簿里的种子、网关和节点按时间窗开关端口、客户端照着连。</summary>
 public sealed class EntryRotationTests : IAsyncLifetime
 {
-    private static readonly GateRotation Rule = new(600, 41000, 59000);
+    private static readonly GateRotation Rule = new(600, 30000, 45000);
     private readonly string _root = Path.Combine(Path.GetTempPath(), "jay-rotation-test-" + Guid.NewGuid().ToString("N"));
     private GateStore _store = null!;
     private GateServer _server = null!;
