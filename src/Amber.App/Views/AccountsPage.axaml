@@ -6,20 +6,56 @@
              xmlns:auth="using:Amber.Core.Auth"
              x:Class="Amber.App.Views.AccountsPage"
              x:DataType="vm:AccountsViewModel">
-  <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,Auto">
+  <!-- 按页面自己的宽度排版（不看窗口、不看屏幕）：
+       窄（< 640）：右边“添加账号”卡片收窄，皮肤预览收起，账号列表留够宽度；
+       账号条目再按列表宽度判断，放不下一行时“使用”“移除”换到第二行。 -->
+  <UserControl.Styles>
+    <!-- 会被下面按宽度改掉的属性只能写在样式里：控件上直接写的值优先级比样式高，容器查询就改不动了 -->
+    <Style Selector="Border#AddCard">
+      <Setter Property="Width" Value="320" />
+    </Style>
+    <Style Selector="WrapPanel.account-actions">
+      <Setter Property="Grid.Column" Value="2" />
+    </Style>
+    <!-- 添加账号卡片窄时，按钮文字（尤其是较长的翻译）换行而不是被截掉 -->
+    <Style Selector="Border#AddCard Button /template/ ContentPresenter">
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <ContainerQuery Name="AccountsPageRoot" Query="max-width:640">
+      <Style Selector="Border#AddCard">
+        <Setter Property="Width" Value="240" />
+      </Style>
+      <Style Selector="Panel#SkinPreviewHost">
+        <Setter Property="IsVisible" Value="False" />
+      </Style>
+    </ContainerQuery>
+    <ContainerQuery Name="AccountItem" Query="max-width:420">
+      <Style Selector="WrapPanel.account-actions">
+        <Setter Property="Grid.Row" Value="1" />
+        <Setter Property="Grid.Column" Value="1" />
+        <Setter Property="Grid.ColumnSpan" Value="2" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="Margin" Value="12,8,0,0" />
+      </Style>
+    </ContainerQuery>
+  </UserControl.Styles>
+
+  <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,Auto" Container.Name="AccountsPageRoot" Container.Sizing="Width">
     <TextBlock Classes="h1" Text="{l:T accounts.title}" Grid.ColumnSpan="2" />
 
     <Border Grid.Row="1" Classes="card" Padding="8">
-      <!-- 皮肤预览放在列表左边一块固定大小的区域里，不再挤在下面留一大块空白 -->
+      <!-- 皮肤预览放在列表左边一块固定大小的区域里，不再挤在下面留一大块空白；页面窄时收起，给列表让位置 -->
       <Grid ColumnDefinitions="Auto,*">
-        <Border Width="104" Margin="4,4,10,4" VerticalAlignment="Top" IsVisible="{Binding Current.Body, Converter={x:Static ObjectConverters.IsNotNull}}">
-          <Image Source="{Binding Current.Body}" Width="96" Height="192" Stretch="Uniform"
-                 RenderOptions.BitmapInterpolationMode="None" ToolTip.Tip="{l:T accounts.skin.tooltip}" />
-        </Border>
+        <Panel x:Name="SkinPreviewHost">
+          <Border Width="104" Margin="4,4,10,4" VerticalAlignment="Top" IsVisible="{Binding Current.Body, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <Image Source="{Binding Current.Body}" Width="96" Height="192" Stretch="Uniform"
+                   RenderOptions.BitmapInterpolationMode="None" ToolTip.Tip="{l:T accounts.skin.tooltip}" />
+          </Border>
+        </Panel>
         <ListBox Grid.Column="1" ItemsSource="{Binding Accounts}" Background="Transparent">
           <ListBox.ItemTemplate>
             <DataTemplate DataType="vm:AccountItem">
-              <Grid ColumnDefinitions="Auto,*,Auto" Margin="4">
+              <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" Margin="4" Container.Name="AccountItem" Container.Sizing="Width">
                 <Border Width="40" Height="40" CornerRadius="6" Background="{DynamicResource Accent}" ClipToBounds="True">
                   <Panel>
                     <TextBlock Text="{Binding Initial}" IsVisible="{Binding HasNoAvatar}" Foreground="{DynamicResource OnAccent}" FontWeight="Bold" FontSize="18"
@@ -28,18 +64,20 @@
                   </Panel>
                 </Border>
                 <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
+                  <!-- 名字太长时省略，“当前”标签始终看得见 -->
+                  <!-- 靠左的 Grid：放得下时星号列就是名字的宽度，“当前”紧跟在后面；放不下时只压缩名字 -->
+                  <Grid ColumnDefinitions="*,Auto" HorizontalAlignment="Left">
                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
-                    <TextBlock Text="{l:T accounts.current.label}" IsVisible="{Binding IsCurrent}" Foreground="{DynamicResource AccentText}" />
-                  </StackPanel>
+                    <TextBlock Grid.Column="1" Margin="8,0,0,0" Text="{l:T accounts.current.label}" IsVisible="{Binding IsCurrent}" Foreground="{DynamicResource AccentText}" />
+                  </Grid>
                   <TextBlock Text="{Binding KindText}" Classes="hint" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding KindText}" />
                   <TextBlock Text="{l:T accounts.external.insecure_saved}" IsVisible="{Binding InsecureServer}" Foreground="{DynamicResource AmberAccent}"
                              FontSize="12" TextWrapping="Wrap" />
                 </StackPanel>
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                <WrapPanel Classes="account-actions" ItemSpacing="6" LineSpacing="6" VerticalAlignment="Center">
                   <Button Content="{l:T common.use}" Command="{Binding $parent[ListBox].((vm:AccountsViewModel)DataContext).UseCommand}" CommandParameter="{Binding}" />
                   <c:ConfirmButton Content="{l:T common.remove}" ConfirmText="{l:T common.confirm_remove}" ObjectName="{Binding Name}" Command="{Binding $parent[ListBox].((vm:AccountsViewModel)DataContext).RemoveCommand}" CommandParameter="{Binding}" />
-                </StackPanel>
+                </WrapPanel>
               </Grid>
             </DataTemplate>
           </ListBox.ItemTemplate>
@@ -47,7 +85,7 @@
       </Grid>
     </Border>
 
-    <Border Grid.Row="1" Grid.Column="1" Classes="card" Margin="14,0,0,14" Width="320" MinWidth="240">
+    <Border x:Name="AddCard" Grid.Row="1" Grid.Column="1" Classes="card" Margin="14,0,0,14">
       <ScrollViewer>
         <StackPanel Spacing="10">
           <TextBlock Classes="h2" Text="{l:T accounts.add.title}" Margin="0" />
