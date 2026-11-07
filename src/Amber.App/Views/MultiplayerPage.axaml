@@ -83,6 +83,40 @@
           </Border>
         </Grid>
 
+        <!-- Jay 服务器：经网关进的专用服务器（VPS 或局域网里跑 Jay 服务器版的电脑） -->
+        <Border Classes="card" Margin="0" DataContext="{Binding JayServers}" x:DataType="vm:JayServersViewModel">
+          <StackPanel Spacing="8">
+            <TextBlock Classes="h2" Text="{l:T multiplayer.jayserver.title}" Margin="0" />
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.jayserver.hint}" />
+            <SelectableTextBlock FontSize="12" Text="{Binding DeviceCode}" />
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBox Text="{Binding InviteText}" PlaceholderText="{l:T multiplayer.jayserver.invite_placeholder}" />
+              <Button Grid.Column="1" Classes="primary" Margin="6,0,0,0" Content="{l:T multiplayer.jayserver.join}" Command="{Binding JoinCommand}" IsEnabled="{Binding !IsBusy}" />
+            </Grid>
+            <ItemsControl ItemsSource="{Binding Servers}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:JayServerItem">
+                  <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
+                    <StackPanel VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Classes="hint" FontSize="12" Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="12,0,0,0">
+                      <Button Classes="primary" Content="{l:T multiplayer.jayserver.play}" IsVisible="{Binding !IsConnected}"
+                              Command="{Binding $parent[ItemsControl].((vm:JayServersViewModel)DataContext).PlayCommand}" CommandParameter="{Binding}" />
+                      <Button Content="{l:T multiplayer.jayserver.disconnect}" IsVisible="{Binding IsConnected}"
+                              Command="{Binding $parent[ItemsControl].((vm:JayServersViewModel)DataContext).DisconnectCommand}" />
+                      <Button Content="{l:T common.delete}"
+                              Command="{Binding $parent[ItemsControl].((vm:JayServersViewModel)DataContext).RemoveCommand}" CommandParameter="{Binding}" />
+                    </StackPanel>
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{Binding Status}" IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          </StackPanel>
+        </Border>
+
         <!-- 联机节点：收起时标题里显示有几个；没有节点时默认展开。房间里也要能导出分享码给朋友，所以一直显示。 -->
         <Expander HorizontalAlignment="Stretch" IsExpanded="{Binding NodesExpanded}">
           <Expander.Header>
