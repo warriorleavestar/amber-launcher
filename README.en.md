@@ -154,6 +154,8 @@ There is also a command-line version, for example `dotnet run --project Amber.Cl
 
 Jay is built with C#, .NET 10 and [Avalonia](https://avaloniaui.net/).
 
+The experimental Android project currently provides Jay Server enrollment and a localhost gateway; it cannot launch Minecraft itself yet. See the [Android experiment notes](docs/android.md) for build steps and current limitations.
+
 ## FAQ
 
 **Windows says it protected my PC. What should I do?**

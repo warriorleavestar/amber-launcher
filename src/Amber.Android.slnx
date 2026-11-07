@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Amber.Android/Amber.Android.csproj" />
+  <Project Path="Amber.Core/Amber.Core.csproj" />
+  <Project Path="Amber.Mobile/Amber.Mobile.csproj" />
+</Solution>
