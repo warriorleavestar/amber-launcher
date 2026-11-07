@@ -64,8 +64,9 @@ public sealed class MemberEntry
         catch (AggregateException) { }
     }
 
-    internal MemberEntry(MemberKey key, byte[] publicKey, string name, bool isHost)
+    internal MemberEntry(MemberKey key, byte[] publicKey, string name, bool isHost, PendingInvite? invite = null)
     {
+        Invite = invite;
         Key = key;
         PublicKey = (byte[])publicKey.Clone();
         Name = name;
@@ -76,6 +77,8 @@ public sealed class MemberEntry
     public byte[] PublicKey { get; }
     public string Name { get; }
     public bool IsHost { get; }
+    /// <summary>这个人是用哪张邀请进来的（踢出时一起作废，免得换个身份拿同一张再进来）。</summary>
+    public PendingInvite? Invite { get; }
     public string Id => Key.IdHex;
     public string Fingerprint => MemberIdentity.FingerprintOf(PublicKey);
 
@@ -108,7 +111,7 @@ public sealed class MemberTable
     public event Action<MemberEntry>? Removed;
 
     /// <summary>给一个被批准的人发钥匙（房主自己也有一把，用于本机的聊天客户端）。</summary>
-    public MemberEntry Issue(ReadOnlySpan<byte> publicKey, string name, bool isHost = false)
+    public MemberEntry Issue(ReadOnlySpan<byte> publicKey, string name, bool isHost = false, PendingInvite? invite = null)
     {
         if (publicKey.Length != 32) throw new ArgumentException(null, nameof(publicKey));
         MemberEntry entry;
@@ -126,7 +129,7 @@ public sealed class MemberTable
             MemberKey key;
             do key = MemberKey.Create();
             while (_byId.ContainsKey(key.IdHex));
-            entry = new MemberEntry(key, pub, name, isHost);
+            entry = new MemberEntry(key, pub, name, isHost, invite);
             _byId[entry.Id] = entry;
         }
         foreach (var old in replaced)
@@ -167,6 +170,21 @@ public sealed class MemberTable
     }
 
     /// <summary>加进这个房间的禁入名单：以后这把公钥敲门一律不理。</summary>
+    /// <summary>
+    /// 踢出：记进禁入名单、移出成员表（钥匙作废，现有连接马上断开），并作废他进来用的那张邀请——
+    /// 禁入名单按公钥记，换一个身份就能绕过，所以那张邀请也不能再用。
+    /// 那张邀请本来还有剩余次数时返回 true（界面提示房主：还要邀请的人请重新发一张）。
+    /// </summary>
+    public bool Kick(MemberEntry entry, InviteBook? book)
+    {
+        Ban(entry.PublicKey, entry.Name);
+        Remove(entry);
+        if (entry.Invite is not { } invite || book is null) return false;
+        var hadUses = invite.IsUsable(book.Now);
+        book.Revoke(invite);
+        return hadUses;
+    }
+
     public void Ban(ReadOnlySpan<byte> publicKey, string name)
     {
         var pub = publicKey.ToArray();

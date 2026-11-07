@@ -588,7 +588,7 @@ public sealed class KnockServer : IAsyncDisposable
                 if (!_book.TryConsume(invite)) reply = Reject("expired");
                 else if (request.Trusted || invite.AutoApprove || await AskAsync(request, ct))
                 {
-                    member = _members.Issue(guestPub, request.Name);
+                    member = _members.Issue(guestPub, request.Name, invite: invite);
                     reply = (_credentials() with { Member = member.Key }).ToJson();
                 }
                 else reply = Reject("denied");

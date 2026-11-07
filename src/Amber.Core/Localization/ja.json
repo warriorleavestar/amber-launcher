@@ -1409,5 +1409,7 @@
   "multiplayer.rekey.switching": "{0} をキックしました。ルームのキーを切り替えています…",
   "multiplayer.rekey.done": "{0} をキックしました。ルームのキーを切り替え、他の人が再接続しています。",
   "multiplayer.rekey.done_missed": "{0} をキックしました。ルームのキーを切り替えました。{1} 人がオフラインだったため、再招待が必要です。",
-  "multiplayer.rekey.reconnecting": "ルームのキーが切り替わりました。再接続しています…"
+  "multiplayer.rekey.reconnecting": "ルームのキーが切り替わりました。再接続しています…",
+  "multiplayer.kick.invite_revoked": "{0} をキックしました。ルームのキーを切り替えました。この招待は無効になりました。まだ招待したい人には新しい招待を送ってください。",
+  "multiplayer.kick.invite_revoked_missed": "{0} をキックしました。ルームのキーを切り替えました。{1} 人がオフラインだったため、再招待が必要です。この招待は無効になりました。まだ招待したい人には新しい招待を送ってください。"
 }

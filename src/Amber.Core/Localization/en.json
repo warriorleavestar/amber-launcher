@@ -1440,5 +1440,7 @@
   "multiplayer.rekey.switching": "Kicked {0}. The room is switching to new keys…",
   "multiplayer.rekey.done": "Kicked {0}. The room switched to new keys and everyone else is reconnecting.",
   "multiplayer.rekey.done_missed": "Kicked {0}. The room switched to new keys. {1} people were offline and need a new invite.",
-  "multiplayer.rekey.reconnecting": "The room switched to new keys. Reconnecting…"
+  "multiplayer.rekey.reconnecting": "The room switched to new keys. Reconnecting…",
+  "multiplayer.kick.invite_revoked": "Kicked {0}. The room switched to new keys. The invite they used is now void; send a new one to anyone else you still want to invite.",
+  "multiplayer.kick.invite_revoked_missed": "Kicked {0}. The room switched to new keys. {1} people were offline and need a new invite. The invite they used is now void; send a new one to anyone else you still want to invite."
 }

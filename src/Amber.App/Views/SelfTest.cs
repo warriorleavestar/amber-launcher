@@ -1109,7 +1109,8 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         kicked.Activate();
         kicked.TestPeers = [$"tcp://127.0.0.1:{relayPort}"];
         kicked.UseTestIdentity(Path.Combine(AppSettingsDataDir(), "selftest-identity-kicked"));
-        var invite = await CreateInviteAsync(host, uses: 2, auto: true);
+        // 三次的邀请，两个人进来后还剩一次：踢人时这张一起作废。
+        var invite = await CreateInviteAsync(host, uses: 3, auto: true);
         stays.JoinCode = invite;
         await stays.JoinCommand.ExecuteAsync(null);
         kicked.JoinCode = invite;
@@ -1125,6 +1126,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         Check("踢人：进了禁入名单、成员列表里没了", host.BannedPeople.Count == 1 && host.Members.All(m => m.Fingerprint != kicked.Identity.Fingerprint),
             string.Join(" | ", host.BannedPeople.Select(b => b.Label)));
         Check("踢人：房主换到新网络（版本 2）", host.RoomEpoch == 2, host.Status);
+        Check("踢人：他进来用的那张邀请作废了，并提示房主重新发", host.PendingInvites.Count == 0 && host.Status.Contains("作废"), host.Status);
         Check("踢人：被踢的人聊天马上断开", await WaitAsync(() => !kicked.ChatReady, 10), kicked.ChatStatus);
         Check("踢人：留下的人收到新网络并换过去", await WaitAsync(() => stays.RoomEpoch == 2, 15), stays.Status);
         Check("踢人：被踢的人收不到新网络", kicked.RoomEpoch == 1);

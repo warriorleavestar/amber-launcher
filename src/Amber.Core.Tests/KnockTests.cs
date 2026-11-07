@@ -319,6 +319,63 @@ public sealed class KnockTests : IAsyncDisposable
         Assert.True((await KnockAsync(fresh.Invite)).Approved);
     }
 
+    private async Task<KnockOutcome> KnockAsAsync(X25519KeyPair who, JayInvite invite, string name)
+    {
+        var server = Server();
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, server.Port);
+        return await KnockClient.KnockAsync(client.GetStream(), invite, who, name, "0.6.0", decisionTimeout: TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>
+    /// 踢出时作废他进来用的那张邀请：禁入名单按公钥记，换一个身份拿同一张（还剩次数、自动批准）不能再进来。
+    /// </summary>
+    [Fact]
+    public async Task KickVoidsTheInviteTheyCameInWith()
+    {
+        var invite = Invite(uses: 2, auto: true);
+        Assert.True((await KnockAsync(invite.Invite, "Steve")).Approved);
+        var server = Server();
+        var member = server.Members.FindGuest(_guest.PublicKey)!;
+        Assert.Same(invite, member.Invite);
+        Assert.True(server.Members.Kick(member, _book));
+        Assert.True(invite.Revoked);
+        using var reset = X25519KeyPair.Generate();
+        var again = await Record.ExceptionAsync(async () => Assert.False((await KnockAsAsync(reset, invite.Invite, "Steve")).Approved));
+        Assert.True(again is null or IOException, again?.ToString());
+        Assert.Null(server.Members.FindGuest(reset.PublicKey));
+        Assert.Empty(server.Members.All);
+    }
+
+    /// <summary>作废的只是那一张：另一张不相干的邀请照样能用。</summary>
+    [Fact]
+    public async Task KickLeavesOtherInvitesWorking()
+    {
+        var used = Invite(uses: 2, auto: true);
+        var other = Invite(auto: true);
+        Assert.True((await KnockAsync(used.Invite, "Steve")).Approved);
+        var server = Server();
+        Assert.True(server.Members.Kick(server.Members.FindGuest(_guest.PublicKey)!, _book));
+        using var reset = X25519KeyPair.Generate();
+        // 同一张：被拒（回“过期”或者直接断开都算）。
+        var again = await Record.ExceptionAsync(async () => Assert.False((await KnockAsAsync(reset, used.Invite, "Steve")).Approved));
+        Assert.True(again is null or IOException, again?.ToString());
+        using var alex = X25519KeyPair.Generate();
+        Assert.True((await KnockAsAsync(alex, other.Invite, "Alex")).Approved);
+        Assert.NotNull(server.Members.FindGuest(alex.PublicKey));
+        Assert.Null(server.Members.FindGuest(reset.PublicKey));
+    }
+
+    /// <summary>那张邀请本来就用完了：踢出时不提示“作废”。</summary>
+    [Fact]
+    public async Task KickOfAUsedUpInviteReportsNothingLeft()
+    {
+        var invite = Invite(auto: true);
+        Assert.True((await KnockAsync(invite.Invite)).Approved);
+        var server = Server();
+        Assert.False(server.Members.Kick(server.Members.FindGuest(_guest.PublicKey)!, _book));
+    }
+
     /// <summary>两个人用同一张两次的邀请进来：各自一把不同的钥匙。</summary>
     [Fact]
     public async Task EachGuestGetsTheirOwnMemberKey()

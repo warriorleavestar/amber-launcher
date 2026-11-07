@@ -235,9 +235,12 @@ public sealed partial class MultiplayerViewModel
         IsRekeying = true;
         try
         {
-            members.Ban(item.PublicKey, item.Name);
-            if (members.FindGuest(item.PublicKey) is { } entry) members.Remove(entry);
+            // 连他进来用的那张邀请一起作废（禁入名单按公钥记，换个身份就能拿同一张再进来）。
+            var inviteRevoked = false;
+            if (members.FindGuest(item.PublicKey) is { } entry) inviteRevoked = members.Kick(entry, _lobby?.Book);
+            else members.Ban(item.PublicKey, item.Name);
             Members.Remove(item);
+            RefreshInvites();
             RefreshBanned();
             var next = credentials.Rotate();
             _credentials = next;
@@ -249,8 +252,9 @@ public sealed partial class MultiplayerViewModel
             for (var i = 0; i < Members.Count; i++)
                 if (missed.Any(e => e.PublicKey.AsSpan().SequenceEqual(Members[i].PublicKey))) Members[i] = Members[i] with { NeedsInvite = true };
             if (!SwitchNetwork(room.Rekeyed(next.ToRekey()))) return;
-            SetStatus(missed.Count > 0
-                ? StatusMessage.Warning("multiplayer.rekey.done_missed", item.Name, missed.Count)
+            SetStatus(missed.Count > 0 && inviteRevoked ? StatusMessage.Warning("multiplayer.kick.invite_revoked_missed", item.Name, missed.Count)
+                : missed.Count > 0 ? StatusMessage.Warning("multiplayer.rekey.done_missed", item.Name, missed.Count)
+                : inviteRevoked ? StatusMessage.Warning("multiplayer.kick.invite_revoked", item.Name)
                 : StatusMessage.Success("multiplayer.rekey.done", item.Name));
         }
         finally

@@ -1409,5 +1409,7 @@
   "multiplayer.rekey.switching": "已踢出 {0}，房间正在换密钥…",
   "multiplayer.rekey.done": "已踢出 {0}，房间换了密钥，其他人正在重连",
   "multiplayer.rekey.done_missed": "已踢出 {0}，房间换了密钥。有 {1} 个人当时不在线，需要重新邀请",
-  "multiplayer.rekey.reconnecting": "房间换了密钥，正在重连"
+  "multiplayer.rekey.reconnecting": "房间换了密钥，正在重连",
+  "multiplayer.kick.invite_revoked": "已踢出 {0}，房间换了密钥。这张邀请已作废，还要邀请的人请重新发一张",
+  "multiplayer.kick.invite_revoked_missed": "已踢出 {0}，房间换了密钥。有 {1} 个人当时不在线，需要重新邀请。这张邀请已作废，还要邀请的人请重新发一张"
 }
