@@ -1553,7 +1553,7 @@
   "core.gate.log.listen_failed": "ポートを開けません：{0}",
   "core.mp.component.source.bundled": "同梱パッケージ",
   "core.mp.component.sourcefailed": "・{0}：{1}",
-  "core.mp.component.allfailed": "どの取得元からも EasyTier をインストールできませんでした：\n{0}\n別のネットワークで再試行するか、ブラウザーで {1} をダウンロードして「ファイルから読み込む」を選んでください。",
+  "core.mp.component.allfailed": "どの取得元からも EasyTier をインストールできませんでした。別のネットワークで再試行するか、ブラウザーで {1} をダウンロードして「ファイルから読み込む」を選んでください。取得元ごとの理由：\n{0}",
   "core.mp.component.wrongpackage": "必要なパッケージではありません：{0}（{1} バイト）が必要ですが、このファイルは {2} バイトです",
   "core.mp.component.httpstatus": "サーバーが HTTP {0} を返しました",
   "core.net.download.timeout": "ダウンロードがタイムアウトしました。サーバーが応答しません：{0}",

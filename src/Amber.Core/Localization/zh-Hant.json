@@ -1553,7 +1553,7 @@
   "core.gate.log.listen_failed": "開不了連接埠 {0}",
   "core.mp.component.source.bundled": "發布套件內附",
   "core.mp.component.sourcefailed": "· {0}：{1}",
-  "core.mp.component.allfailed": "所有來源都無法安裝 EasyTier：\n{0}\n可以換個網路再試，或用瀏覽器下載 {1}，再按「從檔案匯入」。",
+  "core.mp.component.allfailed": "所有來源都無法安裝 EasyTier。可以換個網路再試，或用瀏覽器下載 {1} 後按「從檔案匯入」。各來源的原因：\n{0}",
   "core.mp.component.wrongpackage": "不是需要的安裝套件：應為 {0}（{1} 位元組），此檔案為 {2} 位元組",
   "core.mp.component.httpstatus": "伺服器回傳 HTTP {0}",
   "core.net.download.timeout": "下載逾時，伺服器長時間沒有回應：{0}",

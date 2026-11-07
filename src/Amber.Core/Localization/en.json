@@ -1584,7 +1584,7 @@
   "core.gate.log.listen_failed": "Couldn't open port {0}",
   "core.mp.component.source.bundled": "Bundled package",
   "core.mp.component.sourcefailed": "· {0}: {1}",
-  "core.mp.component.allfailed": "Could not install EasyTier from any source:\n{0}\nTry another network, or download {1} in a browser and choose \"Import from file\".",
+  "core.mp.component.allfailed": "Could not install EasyTier from any source. Try another network, or download {1} in a browser and choose \"Import from file\". Reasons per source:\n{0}",
   "core.mp.component.wrongpackage": "Not the expected package: need {0} ({1} bytes), this file is {2} bytes",
   "core.mp.component.httpstatus": "Server returned HTTP {0}",
   "core.net.download.timeout": "Download timed out; the server did not respond: {0}",

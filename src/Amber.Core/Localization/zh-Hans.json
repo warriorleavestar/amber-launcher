@@ -1553,7 +1553,7 @@
   "core.gate.log.listen_failed": "开不了端口 {0}",
   "core.mp.component.source.bundled": "发布包自带",
   "core.mp.component.sourcefailed": "· {0}：{1}",
-  "core.mp.component.allfailed": "所有来源都没能装上 EasyTier：\n{0}\n可以换个网络再试，或者用浏览器下载 {1}，再点“从文件导入”。",
+  "core.mp.component.allfailed": "所有来源都没能装上 EasyTier。可以换个网络再试，或用浏览器下载 {1} 后点“从文件导入”。各来源的原因：\n{0}",
   "core.mp.component.wrongpackage": "不是需要的安装包：应为 {0}（{1} 字节），这个文件是 {2} 字节",
   "core.mp.component.httpstatus": "服务器返回 HTTP {0}",
   "core.net.download.timeout": "下载超时，服务器长时间没有响应：{0}",
