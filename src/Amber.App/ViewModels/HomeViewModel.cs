@@ -438,6 +438,9 @@ public sealed partial class HomeViewModel : PageViewModel
         var ctx = request.ExpectedContext ?? _service.Context;
         var workDir = _service.WorkDirFor(ctx, id);
         var run = new GameRun(id) { WorkDir = workDir };
+        // 每局一份日志：多开时第二局不会清掉第一局的，也不会混在一起。
+        // 从准备阶段就开始记：补文件、Java、登录这些步骤出错时，日志页也看得到原因。
+        run.Log = _log.BeginRun(id, DateTimeOffset.Now);
         _runs.Add(run);
         Crash = null;
         Progress = 0;
@@ -489,8 +492,6 @@ public sealed partial class HomeViewModel : PageViewModel
             await using var relay = relayClient;
             var memory = options.MaxMemoryMb;
 
-            // 每局一份日志：多开时第二局不会清掉第一局的，也不会混在一起。
-            run.Log = _log.BeginRun(id, DateTimeOffset.Now);
             if (_service.Settings.ExperimentalBake && !request.SkipBake)
             {
                 SetStatus(StatusMessage.Info("home.status.baking"));
@@ -585,10 +586,11 @@ public sealed partial class HomeViewModel : PageViewModel
             if (!string.IsNullOrWhiteSpace(settings.PostExitCommand))
                 await RunUserCommandAsync(settings.PostExitCommand, id, workDir, run.Log, CancellationToken.None);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             SetStatus(StatusMessage.Warning("common.cancelled"));
         }
+        // 其他的取消异常不是玩家点的：多半是连接超时（HttpClient 的 ConnectTimeout 也抛 TaskCanceledException），按失败显示原因。
         catch (Exception e)
         {
             SetStatus(StatusMessage.Failure("home.status.launch_failed", e, ErrorText.Of(e)));

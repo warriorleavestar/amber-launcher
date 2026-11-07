@@ -354,7 +354,8 @@ public sealed partial class DownloadViewModel : PageViewModel, ISnapshotDemo
             // 装的时候切到别的页面了：用 Toast 告诉一声，带“打开实例”。
             if (!IsCurrent && sameDirectory) Toasts.WithAction(L.F("download.installed.title", id), L.T("download.installed.open"), () => OpenInstance?.Invoke(id));
         }
-        catch (OperationCanceledException)
+        // 不是玩家点的取消（比如连接超时也抛 TaskCanceledException）按失败显示，不能说成“已取消”。
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             acceptingProgress = false;
             SetStatus(StatusMessage.Warning("download.status.cancelled"));

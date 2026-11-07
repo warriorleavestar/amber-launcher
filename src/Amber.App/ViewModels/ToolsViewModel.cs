@@ -78,7 +78,8 @@ public sealed partial class ToolsViewModel(LauncherService service) : PageViewMo
         {
             await work(_cts.Token);
         }
-        catch (OperationCanceledException)
+        // 不是玩家点的取消（比如连接超时也抛 TaskCanceledException）按失败显示，不能说成“已取消”。
+        catch (OperationCanceledException) when (_cts?.IsCancellationRequested == true)
         {
             SetStatus(StatusMessage.Warning("common.cancelled"));
         }

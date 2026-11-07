@@ -391,7 +391,8 @@ public sealed partial class OnboardingViewModel : ObservableObject
         {
             // 换了下载源：用新源接着装。
         }
-        catch (OperationCanceledException)
+        // 不是玩家点的取消（比如连接超时也抛 TaskCanceledException）按失败显示，不能说成“已取消”。
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             Message = StatusMessage.Warning("download.status.cancelled");
         }
