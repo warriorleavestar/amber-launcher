@@ -218,7 +218,43 @@ internal sealed class LayoutCheck(MainWindow window, MainViewModel main, string 
             if (!scrollsY && bottom > size.Height + 1 && topLeft.Y < size.Height)
                 result.Add($"超出窗口下边 {bottom - size.Height:F0}px：{label}");
         }
+        result.AddRange(FindOverlaps(root));
         return result.Distinct().ToList();
+    }
+
+    /// <summary>
+    /// 叠在一起的控件：Grid 的星号列被挤成 0 宽时，里面的东西不会被裁掉，而是和旁边那列画在同一个位置
+    /// （账号页窄窗口下头像、名字、“使用”“移除”叠成一团就是这样）。这种情况既不超出窗口也不触发文字检查，单独找。
+    /// 只比较看得见内容的控件；一个控件在另一个里面（按钮和它的文字）不算。
+    /// </summary>
+    internal static List<string> FindOverlaps(Control root)
+    {
+        var items = new List<(Control Control, Rect Rect, string Label)>();
+        foreach (var c in root.GetVisualDescendants().OfType<Control>())
+        {
+            if (!c.IsEffectivelyVisible || c.Bounds.Width <= 2 || c.Bounds.Height <= 2 || InsideInput(c)) continue;
+            if (c is Image { Source: null }) continue;
+            if (Describe(c) is not { } label) continue;
+            if (c.TranslatePoint(new Point(0, 0), root) is not { } p) continue;
+            // 只算真正画出来的部分：滚动区域、列表这类会裁剪的上级之外的部分看不见，不算重叠（比如滚到底栏下面的内容）。
+            var rect = new Rect(p, c.Bounds.Size);
+            foreach (var clip in c.GetVisualAncestors().OfType<Control>().Where(a => a.ClipToBounds))
+                if (clip.TranslatePoint(new Point(0, 0), root) is { } q)
+                    rect = rect.Intersect(new Rect(q, clip.Bounds.Size));
+            if (rect.Width <= 2 || rect.Height <= 2) continue;
+            items.Add((c, rect, label));
+        }
+        var result = new List<string>();
+        for (var i = 0; i < items.Count; i++)
+            for (var j = i + 1; j < items.Count; j++)
+            {
+                var (a, b) = (items[i], items[j]);
+                var overlap = a.Rect.Intersect(b.Rect);
+                if (overlap.Width <= 2 || overlap.Height <= 2) continue;
+                if (a.Control.IsVisualAncestorOf(b.Control) || b.Control.IsVisualAncestorOf(a.Control)) continue;
+                result.Add($"控件叠在一起：{a.Label} 和 {b.Label}");
+            }
+        return result;
     }
 
     /// <summary>自适应方面的问题：横向滚动、主要按钮要滚动才看得到、宽窗口下大片空白而内容挤在一边要滚动。</summary>
