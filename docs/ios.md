@@ -1,6 +1,6 @@
 # Jay iOS 实验版
 
-iOS 版与 Android 版共用 `Amber.Mobile` 界面和 Jay Server 客户端逻辑，平台入口放在独立的 `Amber.iOS` 工程中。它是 companion，不是能直接运行 Minecraft Java 的完整启动器。
+iOS 版与 Android 版共用 `Amber.Mobile` 界面和 Jay Server 客户端逻辑，平台入口放在独立的 `Amber.iOS` 工程中。它支持 iOS/iPadOS 15 或更高版本，是 companion，不是能直接运行 Minecraft Java 的完整启动器。
 
 ## 现在能做什么
 
