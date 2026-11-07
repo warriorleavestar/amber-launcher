@@ -26,6 +26,8 @@ public sealed class GateState
     public int HeartbeatTimeoutSeconds { get; set; } = 15;
     /// <summary>纪元号：吊销节点时加一，运行中的网关看到它变了就断开全部连接（大家重新握手，换新密钥）。</summary>
     public int Epoch { get; set; }
+    /// <summary>入口端口轮换（TOTP）。null 表示没开过。</summary>
+    public GateRotationState? Rotation { get; set; }
 
     public GateMember? Member(string name) => Members.FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
 }
@@ -56,6 +58,18 @@ public sealed class GateRelayEntry
     public string? HeartbeatPsk { get; set; }
     /// <summary>节点第一次连心跳通道时记下的公钥（Base64）。之后只认这一把。</summary>
     public string? PublicKey { get; set; }
+}
+
+public sealed class GateRotationState
+{
+    public bool Enabled { get; set; }
+    public int WindowSeconds { get; set; } = GateRotation.Default.WindowSeconds;
+    public int MinPort { get; set; } = GateRotation.Default.MinPort;
+    public int MaxPort { get; set; } = GateRotation.Default.MaxPort;
+    /// <summary>主种子（Base64，32 字节）。各个入口的种子从它派生。换了它，所有人保存的轮换信息都失效。</summary>
+    public string Seed { get; set; } = "";
+    /// <summary>刚开轮换时固定端口再开放到这个时间：这段时间里进过服的老玩家会拿到轮换信息，之后固定端口关掉。</summary>
+    public DateTimeOffset? FixedUntil { get; set; }
 }
 
 /// <summary>运行中的网关每 5 秒写一次的状态（health.json），给 jay-server status 看。</summary>
@@ -245,8 +259,8 @@ public sealed class GateStore
         var state = Read();
         if (state.Privacy.IsSplit() && state.Relays.Count > 0
             && GateEndpoint.TryParse(state.Relays[RandomNumberGenerator.GetInt32(state.Relays.Count)].Address) is { } relay)
-            return new GateInvite(relay.Host, relay.Port, keyHash, token, name);
-        return new GateInvite(config.PublicHost, config.PublicPort, keyHash, token, name);
+            return new GateInvite(relay.Host, relay.Port, keyHash, token, name, EntryRotation(relay.ToString(), state));
+        return new GateInvite(config.PublicHost, config.PublicPort, keyHash, token, name, EntryRotation(GateRotation.DirectEntry, state));
     }
 
     /// <summary>用邀请登记设备。设备已经在这个名下：照样算成功（重装后重新申请也走这条）。</summary>
@@ -316,13 +330,58 @@ public sealed class GateStore
     public bool CancelInvite(string id) => Mutate(s => s.Invites.RemoveAll(i => i.Id == id) > 0);
 
     /// <summary>告诉客户端的连法。隐私+ 下不带直连地址（源站地址不外传）。</summary>
+    /// <summary>开着的轮换：规则和主种子；没开返回 null。</summary>
+    public (GateRotation Rule, byte[] Master)? Rotation(GateState? state = null)
+    {
+        var r = (state ?? Read()).Rotation;
+        if (r is not { Enabled: true } || string.IsNullOrEmpty(r.Seed)) return null;
+        var rule = new GateRotation(r.WindowSeconds, r.MinPort, r.MaxPort);
+        return rule.IsValid ? (rule, Convert.FromBase64String(r.Seed)) : null;
+    }
+
+    /// <summary>固定端口现在还要不要开（没开轮换，或者还在过渡期里）。</summary>
+    public static bool FixedPortWanted(GateState state) =>
+        state.Rotation is not { Enabled: true } || state.Rotation.FixedUntil is { } until && DateTimeOffset.UtcNow < until;
+
+    /// <summary>开轮换。主种子只在第一次开时生成（或者明确要求换新）。grace 内固定端口照开，让老玩家进一次服拿到轮换信息。</summary>
+    public void EnableRotation(GateRotation rule, TimeSpan grace, bool newSeed = false)
+    {
+        if (!rule.IsValid) throw new ArgumentException(L.T("core.gate.admin.bad_rotation"));
+        Mutate(s =>
+        {
+            var wasOn = s.Rotation is { Enabled: true };
+            s.Rotation ??= new GateRotationState();
+            if (newSeed || string.IsNullOrEmpty(s.Rotation.Seed)) s.Rotation.Seed = Convert.ToBase64String(RandomNumberGenerator.GetBytes(GateRotation.SeedLength));
+            s.Rotation.Enabled = true;
+            s.Rotation.WindowSeconds = rule.WindowSeconds;
+            s.Rotation.MinPort = rule.MinPort;
+            s.Rotation.MaxPort = rule.MaxPort;
+            if (!wasOn || newSeed) s.Rotation.FixedUntil = grace > TimeSpan.Zero ? DateTimeOffset.UtcNow + grace : null;
+            return 0;
+        });
+    }
+
+    public void DisableRotation() => Mutate(s =>
+    {
+        if (s.Rotation is not null) s.Rotation.Enabled = false;
+        return 0;
+    });
+
+    /// <summary>某个入口（"direct" 或节点地址）现在的轮换信息。</summary>
+    public GateEntryRotation? EntryRotation(string entry, GateState? state = null) =>
+        Rotation(state) is { } r ? new GateEntryRotation(r.Rule, GateRotation.EntrySeed(r.Master, entry)) : null;
+
     public GateNetwork Network(GateConfig config)
     {
         var state = Read();
         // 隐私++ 只发有节点码（会发心跳）的节点。不按当前是否健康过滤：客户端要留着完整列表，节点恢复后才连得回来。
         var relays = state.Relays.Where(r => state.Privacy != PrivacyLevel.PlusPlus || r.HeartbeatPsk is not null).Select(r => GateEndpoint.TryParse(r.Address)).OfType<GateEndpoint>().ToList();
         var direct = state.Privacy.IsSplit() || !GateInvite.IsValidHost(config.PublicHost) ? null : new GateEndpoint(config.PublicHost, config.PublicPort);
-        return new GateNetwork(state.Privacy, direct, relays);
+        GateNetworkRotation? rotation = null;
+        if (Rotation(state) is { } r)
+            rotation = new GateNetworkRotation(r.Rule, direct is null ? null : GateRotation.EntrySeed(r.Master, GateRotation.DirectEntry),
+                [.. relays.Select(e => GateRotation.EntrySeed(r.Master, e.ToString()))]);
+        return new GateNetwork(state.Privacy, direct, relays, rotation);
     }
 
     /// <summary>切换隐私等级。隐私+ 至少要两个节点。</summary>

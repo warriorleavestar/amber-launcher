@@ -70,10 +70,25 @@ public sealed record GateEndpoint(string Host, int Port)
 }
 
 /// <summary>网关告诉客户端的连法：隐私等级、直连地址（隐私+ 下不给，免得暴露源站）、节点列表。每次进服都会回最新的。</summary>
-public sealed record GateNetwork(PrivacyLevel Level, GateEndpoint? Direct, IReadOnlyList<GateEndpoint> Relays)
+public sealed record GateNetwork(PrivacyLevel Level, GateEndpoint? Direct, IReadOnlyList<GateEndpoint> Relays, GateNetworkRotation? Rotation = null)
 {
     public const int MaxRelays = 16;
+
+    /// <summary>直连入口的轮换信息（没开轮换返回 null）。</summary>
+    public GateEntryRotation? DirectRotation => Rotation is { DirectSeed: { } seed } r ? new GateEntryRotation(r.Rule, seed) : null;
+
+    /// <summary>某个节点的轮换信息（没开轮换返回 null）。</summary>
+    public GateEntryRotation? RelayRotation(GateEndpoint relay)
+    {
+        if (Rotation is not { } r) return null;
+        for (var i = 0; i < Relays.Count && i < r.RelaySeeds.Count; i++)
+            if (Relays[i] == relay) return new GateEntryRotation(r.Rule, r.RelaySeeds[i]);
+        return null;
+    }
 }
+
+/// <summary>地址簿里的轮换部分：规则、直连入口的种子、每个节点的种子（和节点列表一一对应）。</summary>
+public sealed record GateNetworkRotation(GateRotation Rule, byte[]? DirectSeed, IReadOnlyList<byte[]> RelaySeeds);
 
 /// <summary>进服请求的种类（v2 写在握手第三条消息的负载里）。</summary>
 public enum JoinKind : byte
@@ -128,7 +143,7 @@ public static class GateProtocol
 {
     public static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
     private const int MaxHandshakeMessage = 1024;
-    private const int MaxRecord = 4096;
+    private const int MaxRecord = 8192;
     internal const byte Version2 = 2;
     internal static readonly byte[] EnrollPrologue = "jay-gate-v1|enroll"u8.ToArray();
     internal static readonly byte[] JoinPrologue = "jay-gate-v1|join"u8.ToArray();
@@ -410,6 +425,15 @@ public static class GateProtocol
         var relays = network.Relays.Take(GateNetwork.MaxRelays).ToList();
         output.Add((byte)relays.Count);
         foreach (var relay in relays) WriteEndpoint(output, relay);
+        // 轮换（可选，接在最后）：[1][规则 7 字节][有直连种子 0/1][直连种子][每个节点的种子]。
+        if (network.Rotation is { } rotation && rotation.RelaySeeds.Count >= relays.Count)
+        {
+            output.Add(1);
+            rotation.Rule.Write(output);
+            output.Add(network.Direct is not null && rotation.DirectSeed is not null ? (byte)1 : (byte)0);
+            if (network.Direct is not null && rotation.DirectSeed is not null) output.AddRange(rotation.DirectSeed);
+            foreach (var seed in rotation.RelaySeeds.Take(relays.Count)) output.AddRange(seed);
+        }
         return [.. output];
     }
 
@@ -433,7 +457,25 @@ public static class GateProtocol
             if (!TryReadEndpoint(data, ref offset, out var relay)) return null;
             relays.Add(relay!);
         }
-        return offset == data.Length ? new GateNetwork(level, direct, relays) : null;
+        if (offset == data.Length) return new GateNetwork(level, direct, relays);
+        if (data[offset++] != 1) return null;
+        var rule = GateRotation.Read(data[offset..]);
+        if (rule is null) return null;
+        offset += GateRotation.EncodedLength;
+        if (offset >= data.Length) return null;
+        var hasDirect = data[offset++];
+        if (hasDirect > 1 || hasDirect == 1 && direct is null) return null;
+        var expected = (hasDirect + relays.Count) * GateRotation.SeedLength;
+        if (data.Length - offset != expected) return null;
+        byte[]? directSeed = null;
+        if (hasDirect == 1)
+        {
+            directSeed = data.Slice(offset, GateRotation.SeedLength).ToArray();
+            offset += GateRotation.SeedLength;
+        }
+        var seeds = new List<byte[]>(relays.Count);
+        for (var i = 0; i < relays.Count; i++, offset += GateRotation.SeedLength) seeds.Add(data.Slice(offset, GateRotation.SeedLength).ToArray());
+        return new GateNetwork(level, direct, relays, new GateNetworkRotation(rule, directSeed, seeds));
     }
 
     private static void WriteEndpoint(List<byte> output, GateEndpoint endpoint)

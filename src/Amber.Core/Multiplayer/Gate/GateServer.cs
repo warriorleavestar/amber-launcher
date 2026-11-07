@@ -18,14 +18,17 @@ public sealed class GateServer : IAsyncDisposable
     private readonly GateConfig _config;
     private readonly X25519KeyPair _serverKey;
     private readonly Action<string> _log;
-    private readonly TcpListener _listener;
+    private EntryListeners? _listeners;
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _slots;
     private readonly ConcurrentDictionary<IPAddress, int> _handshaking = new();
-    private Task? _loop;
     private Task? _monitor;
 
-    public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
+    /// <summary>固定端口（Start 之后才有）。</summary>
+    public int Port => _listeners?.FixedPort ?? throw new InvalidOperationException();
+    /// <summary>现在开着的轮换端口。</summary>
+    public IReadOnlyList<int> RotatingPorts => _listeners?.RotatingPorts ?? [];
+    public bool FixedPortOpen => _listeners?.FixedOpen ?? false;
     public int Online;
     public int Rejected;
 
@@ -36,55 +39,50 @@ public sealed class GateServer : IAsyncDisposable
         _serverKey = serverKey;
         _log = log;
         _slots = new SemaphoreSlim(config.MaxConnections);
-        var address = IPAddress.Parse(config.ListenAddress);
-        try
-        {
-            _listener = new TcpListener(address, config.ListenPort);
-            if (address.AddressFamily == AddressFamily.InterNetworkV6) _listener.Server.DualMode = true;
-        }
-        catch (SocketException) when (address.Equals(IPAddress.IPv6Any))
-        {
-            // 有的 VPS / 容器关掉了 IPv6：退回只听 IPv4。
-            _listener = new TcpListener(IPAddress.Any, config.ListenPort);
-        }
     }
 
     public void Start()
     {
-        _listener.Start();
-        _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
+        _listeners = new EntryListeners(_config.ListenAddress, _config.ListenPort, OnAccepted, line => _log(L.F("core.gate.log.listen_failed", line)));
         _epoch = _store.Read().Epoch;
+        SyncListeners(_store.Read());
         _monitor = Task.Run(() => MonitorLoopAsync(_cts.Token));
     }
 
-    private async Task AcceptLoopAsync(CancellationToken ct)
+    private void OnAccepted(TcpClient client)
     {
-        while (!ct.IsCancellationRequested)
+        if (_cts.IsCancellationRequested || !_slots.Wait(0))
         {
-            TcpClient client;
-            try
-            {
-                client = await _listener.AcceptTcpClientAsync(ct);
-            }
-            catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException)
-            {
-                return;
-            }
-            catch (SocketException)
-            {
-                continue;
-            }
-            if (!_slots.Wait(0))
-            {
-                Pump.Abort(client);
-                client.Dispose();
-                continue;
-            }
-            _ = Task.Run(async () =>
-            {
-                try { await HandleAsync(client, ct); }
-                finally { _slots.Release(); }
-            }, CancellationToken.None);
+            Pump.Abort(client);
+            client.Dispose();
+            return;
+        }
+        var ct = _cts.Token;
+        _ = Task.Run(async () =>
+        {
+            try { await HandleAsync(client, ct); }
+            finally { _slots.Release(); }
+        }, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// 入口端口轮换：普通模式下开了轮换就关掉固定端口，只听当前前后三个时间窗的端口。
+    /// 隐私+/++ 下玩家连的是节点，网关的固定端口留给节点转发（用防火墙只放行节点），轮换交给节点去做。
+    /// </summary>
+    private void SyncListeners(GateState state)
+    {
+        if (_listeners is null) return;
+        var rotation = _store.Rotation(state);
+        if (rotation is not null && !state.Privacy.IsSplit())
+        {
+            var seed = GateRotation.EntrySeed(rotation.Value.Master, GateRotation.DirectEntry);
+            _listeners.SetRotating([.. rotation.Value.Rule.CandidatePorts(seed, DateTimeOffset.UtcNow)]);
+            _listeners.SetFixedOpen(GateStore.FixedPortWanted(state));
+        }
+        else
+        {
+            _listeners.SetFixedOpen(true);
+            _listeners.SetRotating([]);
         }
     }
 
@@ -312,7 +310,9 @@ public sealed class GateServer : IAsyncDisposable
                 }
                 await GateProtocol.WriteRecordAsync(channel, [(byte)GateStatus.Ok], ct);
                 if (_relayChannels.TryRemove(relayId, out var old)) old.Abort();
+                _pushed.TryRemove(relayId, out _);
                 _relayChannels[relayId] = channel;
+                await PushRotationAsync(relayId, channel, _store.Read(), ct);
                 ulong last = 0;
                 var timeout = HeartbeatTimeout(_store.Read());
                 while (!ct.IsCancellationRequested)
@@ -338,6 +338,38 @@ public sealed class GateServer : IAsyncDisposable
         }
     }
 
+    private readonly ConcurrentDictionary<string, byte[]> _pushed = new();
+
+    /// <summary>节点的入口设置：[1][固定端口开不开][有没有轮换][规则 7 字节][这个节点的种子]。变了才重发。</summary>
+    internal static byte[] RelaySettings(bool fixedOpen, GateEntryRotation? rotation)
+    {
+        var output = new List<byte> { 1, fixedOpen ? (byte)1 : (byte)0, rotation is null ? (byte)0 : (byte)1 };
+        if (rotation is not null)
+        {
+            rotation.Rotation.Write(output);
+            output.AddRange(rotation.Seed);
+        }
+        return [.. output];
+    }
+
+    private async Task PushRotationAsync(string relayId, SecureStream channel, GateState state, CancellationToken ct)
+    {
+        var record = RelaySettings(GateStore.FixedPortWanted(state), _store.EntryRotation(relayId, state));
+        if (_pushed.TryGetValue(relayId, out var last) && last.AsSpan().SequenceEqual(record)) return;
+        _pushed[relayId] = record;
+        await GateProtocol.WriteRecordAsync(channel, record, ct);
+    }
+
+    private void PushRotation(GateState state)
+    {
+        foreach (var (id, channel) in _relayChannels)
+            _ = Task.Run(async () =>
+            {
+                try { await PushRotationAsync(id, channel, state, _cts.Token); }
+                catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException or System.Net.Sockets.SocketException) { channel.Abort(); }
+            });
+    }
+
     private TimeSpan HeartbeatTimeout(GateState state) => HeartbeatTimeoutOverride ?? TimeSpan.FromSeconds(Math.Max(3, state.HeartbeatTimeoutSeconds));
 
     private async Task MonitorLoopAsync(CancellationToken ct)
@@ -349,7 +381,10 @@ public sealed class GateServer : IAsyncDisposable
             catch (OperationCanceledException) { return; }
             try
             {
-                Check(_store.Read());
+                var state = _store.Read();
+                Check(state);
+                SyncListeners(state);
+                PushRotation(state);
                 if (tick++ % 5 == 0) WriteHealth();
             }
             catch (Exception e) when (e is IOException or System.Text.Json.JsonException or UnauthorizedAccessException)
@@ -548,9 +583,7 @@ public sealed class GateServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _cts.Cancel();
-        _listener.Stop();
-        if (_loop is not null)
-            try { await _loop; } catch (OperationCanceledException) { }
+        if (_listeners is not null) await _listeners.DisposeAsync();
         if (_monitor is not null)
             try { await _monitor; } catch (OperationCanceledException) { }
         foreach (var channel in _relayChannels.Values) channel.Abort();
