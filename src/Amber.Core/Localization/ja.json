@@ -1550,5 +1550,11 @@
   "core.gate.log.breaker_open": "プライバシー++ ブレーカー作動：利用不可の中継ノード {0}。{1} 接続を切断し、新規接続を停止しました",
   "core.gate.log.breaker_closed": "プライバシー++ ブレーカー解除：中継ノードが復旧し、接続を再開しました",
   "core.gate.admin.bad_rotation": "ローテーション設定が正しくありません。時間枠は 30 秒〜1 日、ポート範囲は 1024–65535 の中で 100 ポート以上にしてください",
-  "core.gate.log.listen_failed": "ポートを開けません：{0}"
+  "core.gate.log.listen_failed": "ポートを開けません：{0}",
+  "download.install.again": "もう一つインストール…",
+  "download.installed.chip": "インストール済み",
+  "download.hot.latest": "最新リリース {0}",
+  "download.hot.missing": "バージョン一覧に {0} がありません。更新してからもう一度お試しください",
+  "download.install.wait": "ダウンロード元：{0} · {1} 秒経過",
+  "download.source.switch": "ダウンロード元を切り替え"
 }

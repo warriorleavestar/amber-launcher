@@ -38,6 +38,29 @@
       <Setter Property="Background" Value="{DynamicResource WarningTint}" />
       <Setter Property="BorderBrush" Value="{DynamicResource Warning}" />
     </Style>
+    <!-- 胶囊：类型和状态标签（改版规格 4.4：正式版 Success、快照 Accent、其余中性色） -->
+    <Style Selector="Border.pill">
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusPill}" />
+      <Setter Property="Padding" Value="8,1" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Background" Value="{DynamicResource PageBg}" />
+    </Style>
+    <Style Selector="Border.pill > TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FontCaption}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+    </Style>
+    <Style Selector="Border.pill.success">
+      <Setter Property="Background" Value="{DynamicResource SuccessTint}" />
+    </Style>
+    <Style Selector="Border.pill.success > TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource SuccessText}" />
+    </Style>
+    <Style Selector="Border.pill.accent">
+      <Setter Property="Background" Value="{DynamicResource AccentTint}" />
+    </Style>
+    <Style Selector="Border.pill.accent > TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource AccentText}" />
+    </Style>
     <Style Selector="Border.card">
       <Setter Property="Background" Value="{DynamicResource Surface}" />
       <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
