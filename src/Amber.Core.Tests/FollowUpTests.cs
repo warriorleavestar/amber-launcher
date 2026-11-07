@@ -262,4 +262,45 @@ public sealed class FollowUpTests : IDisposable
             window.Close();
         }
     });
+
+    /// <summary>状态条右边都有 ✕；成功、警告到时间自动消失，错误和进行中的信息留着。</summary>
+    [Fact]
+    public void StatusBarAutoDismissesSuccessAndWarning() => UiTestThread.Run(() =>
+    {
+        EnsureAppResources();
+        var bar = new StatusBar();
+        var window = new Avalonia.Controls.Window { Content = bar };
+        window.Show();
+        try
+        {
+            foreach (var kind in Enum.GetValues<StatusKind>())
+            {
+                bar.Message = new StatusMessage("common.raw", ["x"], kind);
+                Assert.True(bar.IsShowing);
+                Assert.True(bar.CloseButton.IsVisible);
+                var auto = kind is StatusKind.Success or StatusKind.Warning;
+                Assert.Equal(auto, bar.AutoDismissPending);
+                bar.ElapseAutoDismissForTest();
+                Assert.Equal(!auto, bar.IsShowing);
+            }
+
+            // 自动消失后来了新消息照常显示，并重新计时。
+            bar.Message = StatusMessage.Success("multiplayer.component.downloaded");
+            bar.ElapseAutoDismissForTest();
+            Assert.False(bar.IsShowing);
+            Assert.False(bar.AutoDismissPending);
+            bar.Message = StatusMessage.Success("multiplayer.component.downloaded");
+            Assert.True(bar.IsShowing);
+            Assert.True(bar.AutoDismissPending);
+
+            // 手动 ✕ 也能关成功消息，关了就不再计时。
+            bar.CloseButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+            Assert.False(bar.IsShowing);
+            Assert.False(bar.AutoDismissPending);
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
 }

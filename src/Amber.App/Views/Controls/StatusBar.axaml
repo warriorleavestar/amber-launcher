@@ -5,7 +5,8 @@
              x:Name="Root">
   <!--
     共享状态条（改版规格 5.2）：图标 + 文字，按级别着色；最多 3 行，ToolTip 是全文；有详情时显示【详情】，
-    里面能选中、能复制；错误一直留着直到关掉，成功 4 秒后变成中性色；没有消息时不占高度。
+    里面能选中、能复制；右边一直有 ✕ 可以关掉；成功几秒后自动消失、警告稍久一点，鼠标停在上面或详情打开时不消失；
+    错误和进行中的信息一直留着直到关掉或被下一条换掉；没有消息时不占高度。
   -->
   <UserControl.Styles>
     <Style Selector="Border#Bar">
@@ -19,9 +20,6 @@
     <Style Selector="Border#Bar.success TextBlock#Icon"><Setter Property="Foreground" Value="{DynamicResource SuccessText}" /></Style>
     <Style Selector="Border#Bar.warning TextBlock#Icon"><Setter Property="Foreground" Value="{DynamicResource WarningText}" /></Style>
     <Style Selector="Border#Bar.error TextBlock#Icon"><Setter Property="Foreground" Value="{DynamicResource DangerText}" /></Style>
-    <!-- 成功消息过一会儿淡成中性色 -->
-    <Style Selector="Border#Bar.settled"><Setter Property="Background" Value="Transparent" /></Style>
-    <Style Selector="Border#Bar.settled TextBlock#Icon"><Setter Property="Foreground" Value="{DynamicResource TextSecondary}" /></Style>
     <Style Selector="Border#Bar">
       <Setter Property="Transitions">
         <Transitions>
@@ -49,7 +47,7 @@
         </Button.Flyout>
       </Button>
       <Button x:Name="CloseButton" Grid.Column="3" Classes="ghost" Padding="6,2" Margin="4,0,0,0" VerticalAlignment="Center"
-              Content="✕" IsVisible="False" />
+              Content="✕" />
     </Grid>
   </Border>
 </UserControl>
