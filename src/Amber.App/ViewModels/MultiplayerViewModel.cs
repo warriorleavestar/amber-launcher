@@ -689,6 +689,7 @@ public sealed partial class MultiplayerViewModel : PageViewModel
         _chatConnecting = true;
         var client = new ChatClient(room, ChatName);
         client.Received += m => Dispatcher.UIThread.Post(() => OnChatMessage(client, m));
+        client.Rekeyed += next => Dispatcher.UIThread.Post(() => OnRekey(client, next));
         client.Disconnected += () => Dispatcher.UIThread.Post(() =>
         {
             if (_chat != client) return;

@@ -67,7 +67,11 @@ public static class TunnelHandshake
     }
 
     /// <summary>服务端（房主或出口成员）：接受连接后调用。返回 null 表示这是一次伪装下的状态查询（已经回答了，连接可以关）。</summary>
-    public static async Task<(SecureStream Stream, TunnelService Service)?> AcceptAsync(Stream stream, RoomCode room, TransportMode mode, bool disguise, CancellationToken ct = default)
+    public static async Task<(SecureStream Stream, TunnelService Service)?> AcceptAsync(Stream stream, RoomCode room, TransportMode mode, bool disguise, CancellationToken ct = default) =>
+        await AcceptWithMemberAsync(stream, room, mode, disguise, ct) is { } a ? (a.Stream, a.Service) : null;
+
+    /// <summary>同 AcceptAsync，邀请房间时另外给出是哪个成员（AMB- 房间是 null）。</summary>
+    public static async Task<(SecureStream Stream, TunnelService Service, MemberEntry? Member)?> AcceptWithMemberAsync(Stream stream, RoomCode room, TransportMode mode, bool disguise, CancellationToken ct = default)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(Timeout);
@@ -81,7 +85,7 @@ public static class TunnelHandshake
             var service = ParseService(payload);
             await WriteFramedAsync(stream, hs.WriteMessage([]), timeout.Token);
             var (send, receive) = hs.Split();
-            return (new SecureStream(stream, send, receive, profile), service);
+            return (new SecureStream(stream, send, receive, profile), service, null);
         }
         else
         {
@@ -92,7 +96,7 @@ public static class TunnelHandshake
             var service = ParseService(payload);
             var (send, receive) = hs.Split();
             var (i2r, r2i) = Masks(hs.HandshakeHash);
-            return (new SecureStream(stream, send, receive, profile, sendMask: i2r, receiveMask: r2i), service);
+            return (new SecureStream(stream, send, receive, profile, sendMask: i2r, receiveMask: r2i), service, null);
         }
     }
 
@@ -120,13 +124,13 @@ public static class TunnelHandshake
         }
     }
 
-    private static async Task<(SecureStream Stream, TunnelService Service)?> AcceptMemberAsync(Stream stream, MemberTable members, TransportProfile profile, bool disguise, CancellationToken ct)
+    private static async Task<(SecureStream Stream, TunnelService Service, MemberEntry? Member)?> AcceptMemberAsync(Stream stream, MemberTable members, TransportProfile profile, bool disguise, CancellationToken ct)
     {
         if (!disguise)
         {
-            var (secure, _, payload) = await MemberChannel.AcceptAsync(stream, members, profile, "tunnel",
+            var (secure, entry, payload) = await MemberChannel.AcceptAsync(stream, members, profile, "tunnel",
                 p => p is [var b] && Enum.IsDefined((TunnelService)b), ct);
-            return (secure, (TunnelService)payload[0]);
+            return (secure, (TunnelService)payload[0], entry);
         }
         var uuid = await McDisguise.ReadLoginUuidAsync(stream, ct);
         if (uuid is null) return null;
@@ -139,7 +143,7 @@ public static class TunnelHandshake
             var service = ParseService(hs.ReadMessage(await McDisguise.ReadEncryptionResponseAsync(stream, ct)));
             var (send, receive) = hs.Split();
             var (i2r, r2i) = Masks(hs.HandshakeHash);
-            return (new SecureStream(stream, send, receive, profile, sendMask: i2r, receiveMask: r2i), service);
+            return (new SecureStream(stream, send, receive, profile, sendMask: i2r, receiveMask: r2i), service, member);
         }
         finally
         {

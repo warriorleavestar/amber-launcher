@@ -1398,5 +1398,16 @@
   "core.mp.transport.exit_host_only": "邀請房間開了封裝時只能經房主轉發。",
   "multiplayer.proxy.host_only": "邀請房間開了封裝時，「僅遊戲」轉發只能選房主。",
   "multiplayer.invite.member_confirmed": "已確認",
-  "multiplayer.invite.member_unconfirmed": "未確認"
+  "multiplayer.invite.member_unconfirmed": "未確認",
+  "core.mp.knock.banned": "這個人在本房間已被踢出",
+  "multiplayer.kick.button": "踢出",
+  "multiplayer.kick.hint": "踢出後這個人會馬上斷開，本房間裡不能再敲門進來；房間會換一套新金鑰，其他在線的人會自動重新連線。",
+  "multiplayer.kick.banned_title": "已踢出",
+  "multiplayer.kick.unban": "解除",
+  "multiplayer.kick.unbanned": "已解除對 {0} 的禁止，可以重新邀請",
+  "multiplayer.kick.needs_invite": "需要重新邀請",
+  "multiplayer.rekey.switching": "已踢出 {0}，房間正在更換金鑰…",
+  "multiplayer.rekey.done": "已踢出 {0}，房間換了金鑰，其他人正在重新連線",
+  "multiplayer.rekey.done_missed": "已踢出 {0}，房間換了金鑰。有 {1} 個人當時不在線，需要重新邀請",
+  "multiplayer.rekey.reconnecting": "房間換了金鑰，正在重新連線"
 }

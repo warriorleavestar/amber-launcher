@@ -20,17 +20,27 @@ public sealed record RoomCredentials(string Network, string Secret, int Epoch, b
     public MemberKey? Member { get; init; }
 
     public static RoomCredentials Create(byte[] hostPublicKey, int gamePort, TunnelSettings tunnel) =>
-        new("jay-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)), Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)), 1,
-            (byte[])hostPublicKey.Clone(), gamePort, RoomChat.Port, tunnel);
+        new(NewNetwork(), NewSecret(), 1, (byte[])hostPublicKey.Clone(), gamePort, RoomChat.Port, tunnel);
+
+    private static string NewNetwork() => "jay-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
+    private static string NewSecret() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+
+    /// <summary>踢人之后换网络：新的随机网络名和 256 位密钥，版本加一。其余不变。</summary>
+    public RoomCredentials Rotate() => this with { Network = NewNetwork(), Secret = NewSecret(), Epoch = Epoch + 1, Member = null };
+
+    /// <summary>发给留下来的成员的那部分（经他们各自的成员通道）。</summary>
+    public RoomRekey ToRekey() => new(Network, Secret, Epoch);
 
     /// <summary>加入方：按凭据建出内部的房间对象。</summary>
-    public RoomCode ToRoom() => RoomCode.FromCredentials(Network, Secret, GamePort, Tunnel, Member ?? throw new InvalidOperationException("no member key"));
+    public RoomCode ToRoom() => RoomCode.FromCredentials(Network, Secret, GamePort, Tunnel, Member ?? throw new InvalidOperationException("no member key"), epoch: Epoch);
 
     /// <summary>房主：建房间对象，带上成员表，并给自己（本机的聊天客户端）发一把钥匙。</summary>
     public RoomCode ToHostRoom(MemberTable members, string hostName)
     {
-        var self = members.Issue(HostPublicKey, hostName, isHost: true);
-        return RoomCode.FromCredentials(Network, Secret, GamePort, Tunnel, self.Key, members);
+        // 已经有房主自己的那把就接着用：再发一把会让房主本机正在用的聊天钥匙作废。
+        var self = members.Host ?? members.Issue(HostPublicKey, hostName, isHost: true);
+        if (!self.PublicKey.AsSpan().SequenceEqual(HostPublicKey)) throw new InvalidOperationException("member table belongs to another host");
+        return RoomCode.FromCredentials(Network, Secret, GamePort, Tunnel, self.Key, members, Epoch);
     }
 
     public override string ToString() => "RoomCredentials";
@@ -73,6 +83,34 @@ public sealed record RoomCredentials(string Network, string Secret, int Epoch, b
         finally
         {
             CryptographicOperations.ZeroMemory(psk);
+        }
+    }
+}
+
+/// <summary>
+/// 房主换网络时发给留下来的成员的新网络名、密钥和版本号。只经成员自己的已认证通道（房主 → 成员），ToString 不含任何值。
+/// </summary>
+public sealed record RoomRekey(string Network, string Secret, int Epoch)
+{
+    public override string ToString() => "RoomRekey";
+
+    internal JsonObject ToJson() => new() { ["ctl"] = "rekey", ["net"] = Network, ["secret"] = Secret, ["epoch"] = Epoch };
+
+    /// <summary>格式不对返回 null。</summary>
+    internal static RoomRekey? FromJson(JsonNode json)
+    {
+        try
+        {
+            var net = json["net"]?.GetValue<string>();
+            var secret = json["secret"]?.GetValue<string>();
+            var epoch = json["epoch"]?.GetValue<int>();
+            if (net is null || secret is null || epoch is not { } e || e < 2) return null;
+            if (!KnockProtocol.NetworkPattern().IsMatch(net) || !KnockProtocol.SecretPattern().IsMatch(secret)) return null;
+            return new RoomRekey(net, secret, e);
+        }
+        catch (Exception x) when (x is InvalidOperationException or FormatException)
+        {
+            return null;
         }
     }
 }
@@ -394,6 +432,8 @@ public sealed class KnockServer : IAsyncDisposable
     public event Action<KnockRequest, MemberEntry>? Issued;
     /// <summary>对方确认收到了凭据。</summary>
     public event Action<KnockRequest>? Admitted;
+    /// <summary>发了钥匙、凭据却没发出去（连接断了）：钥匙已经撤回，界面上去掉这个人。</summary>
+    public event Action<KnockRequest, MemberEntry>? Withdrawn;
 
     /// <summary>批准时往这里发钥匙；房间的游戏通道和聊天按它认人。</summary>
     public MemberTable Members => _members;
@@ -427,6 +467,9 @@ public sealed class KnockServer : IAsyncDisposable
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
         _loop = AcceptLoopAsync();
     }
+
+    /// <summary>测试用：包一层连接的流（模拟写失败）。</summary>
+    internal Func<Stream, Stream>? StreamForTest { get; init; }
 
     public bool IsPaused
     {
@@ -486,7 +529,8 @@ public sealed class KnockServer : IAsyncDisposable
     private async Task ServeAsync(TcpClient client)
     {
         client.NoDelay = true;
-        var stream = client.GetStream();
+        Stream stream = client.GetStream();
+        if (StreamForTest is { } wrap) stream = wrap(stream);
         var ct = _stop.Token;
         NoiseHandshake? handshake = null;
         PendingInvite? invite;
@@ -532,6 +576,12 @@ public sealed class KnockServer : IAsyncDisposable
                     version = KnockProtocol.SanitizeName(about["ver"]?.GetValue<string>());
                 }
                 catch (Exception e) when (e is InvalidOperationException or FormatException) { }
+                // 这个房间里被踢出的人：不回任何东西直接断开，也不用掉邀请、不算失败次数。
+                if (_members.IsBanned(guestPub))
+                {
+                    _log?.Invoke(L.F("core.mp.knock.failed", L.T("core.mp.knock.banned")));
+                    return;
+                }
                 var request = new KnockRequest(name ?? "", (byte[])guestPub.Clone(), version ?? "", _isTrusted(guestPub), invite);
                 JsonObject reply;
                 MemberEntry? member = null;
@@ -547,7 +597,16 @@ public sealed class KnockServer : IAsyncDisposable
                 if (member is not null) Issued?.Invoke(request, member);
                 using var answer = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 answer.CancelAfter(_limits.HandshakeTimeout);
-                await KnockProtocol.WriteFrameAsync(stream, send.EncryptWithAd([], KnockProtocol.Json(reply)), answer.Token);
+                try
+                {
+                    await KnockProtocol.WriteFrameAsync(stream, send.EncryptWithAd([], KnockProtocol.Json(reply)), answer.Token);
+                }
+                catch when (member is not null)
+                {
+                    // 凭据没发出去：对方拿不到这把钥匙，别留着一个永远连不上的成员。
+                    if (_members.Remove(member)) Withdrawn?.Invoke(request, member);
+                    throw;
+                }
                 if (member is null) return;
                 var sealedAck = await KnockProtocol.ReadFrameAsync(stream, answer.Token);
                 var ack = KnockProtocol.ParseJson(receive.DecryptWithAd([], sealedAck));

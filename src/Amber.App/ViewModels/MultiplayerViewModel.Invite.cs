@@ -35,13 +35,19 @@ public sealed record ApprovalCard(KnockRequest Request, string? Warning) : Local
     public bool HasWarning => Warning is not null;
 }
 
-/// <summary>经邀请进来的成员（房主看）。发出凭据时就列上；对方回了确认再标“已确认”。</summary>
-public sealed record MemberItem(string Name, byte[] PublicKey, bool Trusted, bool Confirmed = false) : LocalizedRecord
+/// <summary>经邀请进来的成员（房主看）。发出凭据时就列上；对方回了确认再标“已确认”。换网络时不在线的标“需要重新邀请”。</summary>
+public sealed record MemberItem(string Name, byte[] PublicKey, bool Trusted, bool Confirmed = false, bool NeedsInvite = false) : LocalizedRecord
 {
     public string Fingerprint => MemberIdentity.FingerprintOf(PublicKey);
     public string Label => (Name.Length > 0 ? Name : L.T("multiplayer.peers.player")) + " · " + Fingerprint
-        + " · " + L.T(Confirmed ? "multiplayer.invite.member_confirmed" : "multiplayer.invite.member_unconfirmed");
+        + " · " + L.T(NeedsInvite ? "multiplayer.kick.needs_invite" : Confirmed ? "multiplayer.invite.member_confirmed" : "multiplayer.invite.member_unconfirmed");
     public bool CanTrust => !Trusted;
+}
+
+/// <summary>这个房间里踢出的人（房主看，可以解除）。</summary>
+public sealed record BannedItem(BannedMember Member) : LocalizedRecord
+{
+    public string Label => (Member.Name.Length > 0 ? Member.Name : L.T("multiplayer.peers.player")) + " · " + Member.Fingerprint;
 }
 
 /// <summary>信任列表里的一个人（联机设置里管理）。</summary>
@@ -91,6 +97,16 @@ public sealed partial class MultiplayerViewModel
     public ObservableCollection<ApprovalCard> ApprovalCards { get; } = [];
     public ObservableCollection<MemberItem> Members { get; } = [];
     public ObservableCollection<TrustedItem> TrustedPeople { get; } = [];
+    public ObservableCollection<BannedItem> BannedPeople { get; } = [];
+
+    /// <summary>房主正在踢人、换网络（这期间不能再踢）。</summary>
+    [ObservableProperty] public partial bool IsRekeying { get; set; }
+
+    /// <summary>测试用：当前房间网络的版本号。</summary>
+    internal int RoomEpoch => _room?.Epoch ?? 0;
+
+    /// <summary>测试用：换一个联机身份（自检里同一个进程开好几个成员，要各自不同的身份）。</summary>
+    internal void UseTestIdentity(string directory) => _identity = MemberIdentity.LoadOrCreate(directory);
 
     public IReadOnlyList<InviteExpiryChoice> InviteExpiryChoices { get; } =
     [
@@ -163,6 +179,13 @@ public sealed partial class MultiplayerViewModel
             Members.Insert(0, new MemberItem(request.Name, request.PublicKey, request.Trusted));
             SetStatus(StatusMessage.Success("multiplayer.invite.admitted", request.Name, request.Fingerprint));
         });
+        // 凭据没发出去（连接断了）：钥匙已经撤回，列表里也去掉。
+        lobby.Withdrawn += (request, _) => Dispatcher.UIThread.Post(() =>
+        {
+            if (_lobby != lobby) return;
+            for (var i = Members.Count - 1; i >= 0; i--)
+                if (Members[i].PublicKey.AsSpan().SequenceEqual(request.PublicKey) && !Members[i].Confirmed) Members.RemoveAt(i);
+        });
         lobby.Admitted += request => Dispatcher.UIThread.Post(() =>
         {
             if (_lobby != lobby) return;
@@ -188,7 +211,113 @@ public sealed partial class MultiplayerViewModel
         ApprovalCards.Clear();
         PendingInvites.Clear();
         Members.Clear();
+        BannedPeople.Clear();
         if (lobby is not null) _ = lobby.DisposeAsync().AsTask();
+    }
+
+    private void RefreshBanned()
+    {
+        BannedPeople.Clear();
+        if (_members is null) return;
+        foreach (var b in _members.Banned) BannedPeople.Add(new BannedItem(b));
+    }
+
+    /// <summary>
+    /// 踢人：移出成员表（钥匙清零，他的游戏通道和聊天马上断开）、记进这个房间的禁入名单，然后换网络：
+    /// 新的随机网络名和密钥（版本加一）经每个留下来的成员自己的通道发过去，等确认最多 5 秒，房主再切过去。旧网络不留。
+    /// 当时不在线的成员收不到新网络，钥匙作废，界面上标“需要重新邀请”。
+    /// </summary>
+    [RelayCommand]
+    private async Task KickMemberAsync(MemberItem? item)
+    {
+        if (item is null || IsRekeying || !IsHosting || _members is not { } members || _credentials is not { } credentials || _hub is not { } hub
+            || _room is not { FromInvite: true } room) return;
+        IsRekeying = true;
+        try
+        {
+            members.Ban(item.PublicKey, item.Name);
+            if (members.FindGuest(item.PublicKey) is { } entry) members.Remove(entry);
+            Members.Remove(item);
+            RefreshBanned();
+            var next = credentials.Rotate();
+            _credentials = next;
+            SetStatus(StatusMessage.Info("multiplayer.rekey.switching", item.Name));
+            var (sent, _) = await hub.SendRekeyAsync(next.ToRekey(), TimeSpan.FromSeconds(5));
+            if (!ReferenceEquals(_room, room)) return;
+            var missed = members.All.Where(e => !e.IsHost && !sent.Contains(e)).ToList();
+            foreach (var e in missed) members.Remove(e);
+            for (var i = 0; i < Members.Count; i++)
+                if (missed.Any(e => e.PublicKey.AsSpan().SequenceEqual(Members[i].PublicKey))) Members[i] = Members[i] with { NeedsInvite = true };
+            if (!SwitchNetwork(room.Rekeyed(next.ToRekey()))) return;
+            SetStatus(missed.Count > 0
+                ? StatusMessage.Warning("multiplayer.rekey.done_missed", item.Name, missed.Count)
+                : StatusMessage.Success("multiplayer.rekey.done", item.Name));
+        }
+        finally
+        {
+            IsRekeying = false;
+        }
+    }
+
+    [RelayCommand]
+    private void Unban(BannedItem? item)
+    {
+        if (item is null || _members is not { } members) return;
+        members.Unban(item.Member.PublicKey);
+        RefreshBanned();
+        SetStatus(StatusMessage.Info("multiplayer.kick.unbanned", item.Member.Name));
+    }
+
+    /// <summary>
+    /// 换到新的房间网络：关掉旧的 EasyTier 和封装通道，按同样的设置用新网络名和密钥重开（旧网络不留）。
+    /// 房主的聊天服务和本机聊天连接不动；加入方的聊天连接经旧网络，丢掉重连。
+    /// </summary>
+    private bool SwitchNetwork(RoomCode next)
+    {
+        if (_session is not { } old || _direct is not null) return false;
+        var options = old.Options with { Room = next };
+        StopTransport();
+        old.Dispose();
+        _session = null;
+        _service.ActiveMultiplayer = null;
+        try
+        {
+            var workDir = Path.Combine(AppSettings.DataDir, "easytier", options.Tun ? "run-lan" : "run");
+            _session = options.Tun
+                ? EasyTierElevatedSession.Start(_service.EasyTier, options, workDir)
+                : EasyTierSession.Start(_service.EasyTier, options, workDir);
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException or System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
+        {
+            StopSession();
+            SetStatus(StatusMessage.Failure("multiplayer.room.start_failed", e, ErrorText.Of(e)));
+            return false;
+        }
+        _service.ActiveMultiplayer = _session;
+        if (!TryStartTransport(options))
+        {
+            StopSession();
+            return false;
+        }
+        _room = next;
+        if (IsJoined)
+        {
+            var chat = _chat;
+            _chat = null;
+            ChatReady = false;
+            ChatStatus = L.T("multiplayer.chat.reconnecting");
+            if (chat is not null) _ = chat.DisposeAsync().AsTask();
+            MarkJoinStarted(newRoom: true);
+        }
+        return true;
+    }
+
+    /// <summary>加入方：房主换了网络（有人被踢）。经自己的成员通道收到、版本比当前大才换。</summary>
+    private void OnRekey(ChatClient client, RoomRekey next)
+    {
+        if (_chat != client || !IsJoined || _room is not { FromInvite: true } room || next.Epoch <= room.Epoch) return;
+        SetStatus(StatusMessage.Info("multiplayer.rekey.reconnecting"));
+        SwitchNetwork(room.Rekeyed(next));
     }
 
     /// <summary>敲门的人通过了握手：在界面上放一张卡片，等房主点；超时或者房间关了算拒绝。</summary>

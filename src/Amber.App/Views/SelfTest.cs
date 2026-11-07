@@ -1080,6 +1080,7 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         guest.StopCommand.Execute(null);
         host.StopCommand.Execute(null);
 
+        await KickAndRekeyAsync(host, guest, gamePort, relayPort);
         await TransportRoomAsync(host, guest, gamePort, relayPort);
 
         stopServer.Cancel();
@@ -1089,6 +1090,61 @@ internal sealed partial class SelfTest(MainWindow window, MainViewModel main, st
         Check("联机：结束后 easytier-core 都关掉了", left == 0, $"剩 {left} 个");
         host.TestListeners = null;
         host.TestPeers = null;
+    }
+
+    /// <summary>
+    /// 踢人和换网络：两个人经邀请进来，房主踢掉其中一个。被踢的人马上断开、进了禁入名单；
+    /// 房间换了网络（版本加一），留下的人自动换过去、聊天重连还能说话；被踢的人还在旧版本、收不到消息。最后解除禁止。
+    /// </summary>
+    private async Task KickAndRekeyAsync(MultiplayerViewModel host, MultiplayerViewModel stays, int gamePort, int relayPort)
+    {
+        await Task.Delay(1500);
+        host.SelectedTransport = host.TransportChoices.First(c => c.Mode == Amber.Core.Multiplayer.Transport.TransportMode.General);
+        host.DisguiseAsMinecraft = false;
+        host.ManualPort = gamePort.ToString();
+        await host.CreateRoomCommand.ExecuteAsync(null);
+        Check("踢人：创建房间", host.IsHosting, host.Status);
+        // 第二个成员要用不同的联机身份（同一个进程里），放在测试数据目录里。
+        var kicked = host.CreateTestPeer();
+        kicked.Activate();
+        kicked.TestPeers = [$"tcp://127.0.0.1:{relayPort}"];
+        kicked.UseTestIdentity(Path.Combine(AppSettingsDataDir(), "selftest-identity-kicked"));
+        var invite = await CreateInviteAsync(host, uses: 2, auto: true);
+        stays.JoinCode = invite;
+        await stays.JoinCommand.ExecuteAsync(null);
+        kicked.JoinCode = invite;
+        await kicked.JoinCommand.ExecuteAsync(null);
+        Check("踢人：两个人都进了房间", stays.IsJoined && kicked.IsJoined, stays.Status + " / " + kicked.Status);
+        Check("踢人：两个人的指纹不同", stays.Identity.Fingerprint != kicked.Identity.Fingerprint);
+        var bothChat = await WaitAsync(() => host.ChatReady && stays.ChatReady && kicked.ChatReady, 60);
+        Check("踢人：三个人都连上聊天", bothChat, $"{stays.ChatStatus} / {kicked.ChatStatus}");
+        Check("踢人：房主的成员列表里有两个人", await WaitAsync(() => host.Members.Count == 2, 10), string.Join(" | ", host.Members.Select(m => m.Label)));
+
+        var target = host.Members.First(m => m.Fingerprint == kicked.Identity.Fingerprint);
+        await host.KickMemberCommand.ExecuteAsync(target);
+        Check("踢人：进了禁入名单、成员列表里没了", host.BannedPeople.Count == 1 && host.Members.All(m => m.Fingerprint != kicked.Identity.Fingerprint),
+            string.Join(" | ", host.BannedPeople.Select(b => b.Label)));
+        Check("踢人：房主换到新网络（版本 2）", host.RoomEpoch == 2, host.Status);
+        Check("踢人：被踢的人聊天马上断开", await WaitAsync(() => !kicked.ChatReady, 10), kicked.ChatStatus);
+        Check("踢人：留下的人收到新网络并换过去", await WaitAsync(() => stays.RoomEpoch == 2, 15), stays.Status);
+        Check("踢人：被踢的人收不到新网络", kicked.RoomEpoch == 1);
+        await ShotAsync("联机踢人后");
+        Check("踢人：留下的人聊天重连", await WaitAsync(() => stays.ChatReady, 90), stays.ChatStatus);
+        stays.ChatInput = "换钥之后还在";
+        await stays.SendChatCommand.ExecuteAsync(null);
+        var after = await WaitAsync(() => host.ChatLines.Any(l => l.Text == "换钥之后还在" && !l.Mine && l.Message.Fingerprint == stays.Identity.Fingerprint), 20);
+        Check("踢人：换网络后留下的人还能聊天", after, string.Join(" | ", host.ChatLines.Select(l => l.Name + ":" + l.Text)));
+        host.ChatInput = "被踢的人看不到";
+        await host.SendChatCommand.ExecuteAsync(null);
+        Check("踢人：留下的人收到房主的新消息", await WaitAsync(() => stays.ChatLines.Any(l => l.Text == "被踢的人看不到"), 15));
+        await Task.Delay(1000);
+        Check("踢人：被踢的人收不到之后的消息", kicked.ChatLines.All(l => l.Text != "被踢的人看不到"));
+
+        host.UnbanCommand.Execute(host.BannedPeople[0]);
+        Check("踢人：解除禁止", host.BannedPeople.Count == 0);
+        kicked.StopCommand.Execute(null);
+        stays.StopCommand.Execute(null);
+        host.StopCommand.Execute(null);
     }
 
     /// <summary>

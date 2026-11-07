@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using Amber.Core.Multiplayer;
@@ -253,6 +253,70 @@ public sealed class KnockTests : IAsyncDisposable
         _now += TimeSpan.FromSeconds(61);
         Assert.False(server.IsPaused);
         Assert.True((await KnockAsync(invite.Invite)).Approved);
+    }
+
+    /// <summary>批准了、钥匙也发了，回复却写不出去（对方已经断开）：钥匙撤回，成员表里不留一个永远连不上的人。</summary>
+    [Fact]
+    public async Task FailedReplyWithdrawsTheIssuedKey()
+    {
+        var invite = Invite(auto: true);
+        // 房主那边第二次写（加密的凭据回复）失败：第一次是握手消息 2。
+        await using var server = new KnockServer(_book, _host, () => _credentials, _ => false, (_, _) => Task.FromResult(true), IPAddress.Loopback, 0, limits: Fast)
+        {
+            StreamForTest = s => new FailingWrites(s, okWrites: 1),
+        };
+        var issued = 0;
+        var withdrawn = 0;
+        server.Issued += (_, _) => Interlocked.Increment(ref issued);
+        server.Withdrawn += (_, _) => Interlocked.Increment(ref withdrawn);
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, server.Port);
+        await Assert.ThrowsAnyAsync<Exception>(() => KnockClient.KnockAsync(client.GetStream(), invite.Invite, _guest, "Gone", "0.6.0", decisionTimeout: TimeSpan.FromSeconds(5)));
+        Assert.True(await WaitAsync(() => server.Active == 0));
+        Assert.Equal(1, issued);
+        Assert.Equal(1, withdrawn);
+        Assert.Null(server.Members.FindGuest(_guest.PublicKey));
+        Assert.Empty(server.Members.All);
+    }
+
+    /// <summary>前几次写照常，之后的写抛 IOException。</summary>
+    private sealed class FailingWrites(Stream inner, int okWrites) : Stream
+    {
+        private int _writes;
+        public override bool CanRead => true;
+        public override bool CanWrite => true;
+        public override bool CanSeek => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken ct) => inner.FlushAsync(ct);
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) => inner.ReadAsync(buffer, ct);
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) =>
+            Interlocked.Increment(ref _writes) > okWrites ? throw new IOException("write failed (test)") : inner.WriteAsync(buffer, ct);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
+    /// <summary>本房间踢出的人拿着有效的新邀请再来敲门：不问房主、不回任何东西直接断开，也不用掉邀请。</summary>
+    [Fact]
+    public async Task BannedKeyCannotKnockAgain()
+    {
+        Assert.True((await KnockAsync(Invite().Invite)).Approved);
+        var server = Server();
+        var member = server.Members.FindGuest(_guest.PublicKey)!;
+        server.Members.Ban(_guest.PublicKey, "Steve");
+        server.Members.Remove(member);
+        var fresh = Invite(auto: true);
+        await Assert.ThrowsAnyAsync<IOException>(() => KnockAsync(fresh.Invite));
+        Assert.Equal(1, fresh.UsesLeft);
+        Assert.Single(_asked);
+        Assert.Null(server.Members.FindGuest(_guest.PublicKey));
+        Assert.False(server.IsPaused);
+        // 解除之后可以再进。
+        server.Members.Unban(_guest.PublicKey);
+        Assert.True((await KnockAsync(fresh.Invite)).Approved);
     }
 
     /// <summary>两个人用同一张两次的邀请进来：各自一把不同的钥匙。</summary>

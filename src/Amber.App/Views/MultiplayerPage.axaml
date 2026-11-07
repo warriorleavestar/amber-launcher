@@ -297,10 +297,26 @@
               <ItemsControl ItemsSource="{Binding Members}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate DataType="vm:MemberItem">
-                    <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                    <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,2">
                       <TextBlock Text="{Binding Label}" FontFamily="Consolas,monospace" VerticalAlignment="Center" TextWrapping="Wrap" />
                       <Button Grid.Column="1" Content="{l:T multiplayer.invite.trust}" IsVisible="{Binding CanTrust}" Command="{Binding $parent[ItemsControl].((vm:MultiplayerViewModel)DataContext).TrustMemberCommand}" CommandParameter="{Binding}" Margin="6,0,0,0" />
                       <TextBlock Grid.Column="1" Text="{l:T multiplayer.invite.trusted_badge}" IsVisible="{Binding Trusted}" Classes="hint" VerticalAlignment="Center" Margin="6,0,0,0" />
+                      <Button Grid.Column="2" Content="{l:T multiplayer.kick.button}" Command="{Binding $parent[ItemsControl].((vm:MultiplayerViewModel)DataContext).KickMemberCommand}" CommandParameter="{Binding}" Margin="6,0,0,0" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <TextBlock Classes="hint" FontSize="12" TextWrapping="Wrap" Text="{l:T multiplayer.kick.hint}" />
+            </StackPanel>
+            <!-- 这个房间里踢出的人：不许再敲门进来，可以解除 -->
+            <StackPanel Spacing="4" IsVisible="{Binding !!BannedPeople.Count}">
+              <TextBlock Text="{l:T multiplayer.kick.banned_title}" FontWeight="SemiBold" />
+              <ItemsControl ItemsSource="{Binding BannedPeople}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="vm:BannedItem">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                      <TextBlock Text="{Binding Label}" FontFamily="Consolas,monospace" VerticalAlignment="Center" TextWrapping="Wrap" />
+                      <Button Grid.Column="1" Content="{l:T multiplayer.kick.unban}" Command="{Binding $parent[ItemsControl].((vm:MultiplayerViewModel)DataContext).UnbanCommand}" CommandParameter="{Binding}" Margin="6,0,0,0" />
                     </Grid>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>

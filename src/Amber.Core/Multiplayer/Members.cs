@@ -48,6 +48,22 @@ public sealed class MemberKey
 /// <summary>房主记着的一个成员：编号、长期公钥、名字（来自敲门）和他的 psk。</summary>
 public sealed class MemberEntry
 {
+    private readonly CancellationTokenSource _revocation = new();
+
+    /// <summary>这把钥匙作废了（踢出、同一个人重新批准换了新钥匙、房间结束）。</summary>
+    public bool Revoked => _revocation.IsCancellationRequested;
+
+    /// <summary>作废时取消：游戏通道和聊天里这个成员现有的连接都挂在上面，一作废马上断开。</summary>
+    public CancellationToken Revocation => _revocation.Token;
+
+    /// <summary>钥匙清零并通知所有连接断开。在成员表的锁外面调用（回调会关连接）。</summary>
+    internal void Revoke()
+    {
+        Key.Zero();
+        try { _revocation.Cancel(); }
+        catch (AggregateException) { }
+    }
+
     internal MemberEntry(MemberKey key, byte[] publicKey, string name, bool isHost)
     {
         Key = key;
@@ -69,16 +85,27 @@ public sealed class MemberEntry
     public override string ToString() => "MemberEntry";
 }
 
+/// <summary>这个房间里被踢出、不许再敲门进来的人。</summary>
+public sealed record BannedMember(byte[] PublicKey, string Name)
+{
+    public string Fingerprint => MemberIdentity.FingerprintOf(PublicKey);
+}
+
 /// <summary>
 /// 房主的成员表：编号 → 公钥、名字、psk。游戏通道和聊天都按编号在这里查 psk，查不到就断开。
 /// 同一把公钥再次被批准（重新敲门）时换一把新钥匙，旧的作废。
+/// 还记着这个房间的禁入名单（踢出的人）：房间结束就清空，不保存。
 /// </summary>
 public sealed class MemberTable
 {
     private readonly Lock _gate = new();
     private readonly Dictionary<string, MemberEntry> _byId = new(StringComparer.Ordinal);
+    private readonly List<BannedMember> _banned = [];
 
     public event Action? Changed;
+
+    /// <summary>有成员被移出（踢出，或换网络时没收到新凭据）：游戏通道和聊天要马上断开他现有的连接。</summary>
+    public event Action<MemberEntry>? Removed;
 
     /// <summary>给一个被批准的人发钥匙（房主自己也有一把，用于本机的聊天客户端）。</summary>
     public MemberEntry Issue(ReadOnlySpan<byte> publicKey, string name, bool isHost = false)
@@ -86,9 +113,12 @@ public sealed class MemberTable
         if (publicKey.Length != 32) throw new ArgumentException(null, nameof(publicKey));
         MemberEntry entry;
         var pub = publicKey.ToArray();
+        List<MemberEntry> replaced;
         lock (_gate)
         {
-            foreach (var old in _byId.Values.Where(e => e.PublicKey.AsSpan().SequenceEqual(pub)).ToList())
+            // 房主自己的那把不动（自检里房主和成员可能是同一个身份）。
+            replaced = [.. _byId.Values.Where(e => e.IsHost == isHost && e.PublicKey.AsSpan().SequenceEqual(pub))];
+            foreach (var old in replaced)
             {
                 _byId.Remove(old.Id);
                 old.Key.Zero();
@@ -99,8 +129,71 @@ public sealed class MemberTable
             entry = new MemberEntry(key, pub, name, isHost);
             _byId[entry.Id] = entry;
         }
+        foreach (var old in replaced)
+        {
+            old.Revoke();
+            Removed?.Invoke(old);
+        }
         Changed?.Invoke();
         return entry;
+    }
+
+    /// <summary>房主自己的那把（没有时 null）。</summary>
+    public MemberEntry? Host
+    {
+        get { lock (_gate) return _byId.Values.FirstOrDefault(e => e.IsHost); }
+    }
+
+    /// <summary>按长期公钥找（不含房主自己的那把）。</summary>
+    public MemberEntry? FindGuest(ReadOnlySpan<byte> publicKey)
+    {
+        var pub = publicKey.ToArray();
+        lock (_gate) return _byId.Values.FirstOrDefault(e => !e.IsHost && e.PublicKey.AsSpan().SequenceEqual(pub));
+    }
+
+    /// <summary>移出一个成员：钥匙清零作废，触发 Removed（断开他现有的连接）。</summary>
+    public bool Remove(MemberEntry entry)
+    {
+        lock (_gate)
+        {
+            if (!_byId.TryGetValue(entry.Id, out var current) || current != entry) return false;
+            _byId.Remove(entry.Id);
+            entry.Key.Zero();
+        }
+        entry.Revoke();
+        Removed?.Invoke(entry);
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>加进这个房间的禁入名单：以后这把公钥敲门一律不理。</summary>
+    public void Ban(ReadOnlySpan<byte> publicKey, string name)
+    {
+        var pub = publicKey.ToArray();
+        lock (_gate)
+        {
+            if (_banned.Any(b => b.PublicKey.AsSpan().SequenceEqual(pub))) return;
+            _banned.Add(new BannedMember(pub, name));
+        }
+        Changed?.Invoke();
+    }
+
+    public void Unban(ReadOnlySpan<byte> publicKey)
+    {
+        var pub = publicKey.ToArray();
+        lock (_gate) _banned.RemoveAll(b => b.PublicKey.AsSpan().SequenceEqual(pub));
+        Changed?.Invoke();
+    }
+
+    public bool IsBanned(ReadOnlySpan<byte> publicKey)
+    {
+        var pub = publicKey.ToArray();
+        lock (_gate) return _banned.Any(b => b.PublicKey.AsSpan().SequenceEqual(pub));
+    }
+
+    public IReadOnlyList<BannedMember> Banned
+    {
+        get { lock (_gate) return [.. _banned]; }
     }
 
     /// <summary>按连接时明文报上来的编号找成员。</summary>
@@ -122,13 +215,21 @@ public sealed class MemberTable
         Changed?.Invoke();
     }
 
-    /// <summary>房间结束：所有钥匙清零作废。</summary>
+    /// <summary>房间结束：所有钥匙清零作废，禁入名单清空。</summary>
     public void Clear()
     {
+        List<MemberEntry> all;
         lock (_gate)
         {
-            foreach (var e in _byId.Values) e.Key.Zero();
+            all = [.. _byId.Values];
+            foreach (var e in all) e.Key.Zero();
             _byId.Clear();
+            _banned.Clear();
+        }
+        foreach (var e in all)
+        {
+            e.Revoke();
+            Removed?.Invoke(e);
         }
         Changed?.Invoke();
     }

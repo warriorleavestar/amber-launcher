@@ -30,6 +30,8 @@ public sealed class HostLobby : IAsyncDisposable
     public event Action<KnockRequest, MemberEntry>? Issued;
     /// <summary>对方确认收到了凭据。</summary>
     public event Action<KnockRequest>? Admitted;
+    /// <summary>凭据没发出去，钥匙撤回了。</summary>
+    public event Action<KnockRequest, MemberEntry>? Withdrawn;
     /// <summary>失败的敲门太多，暂停 60 秒。</summary>
     public event Action? Paused;
 
@@ -86,6 +88,7 @@ public sealed class HostLobby : IAsyncDisposable
                 {
                     _knock = _startKnock(Book);
                     _knock.Issued += (r, m) => Issued?.Invoke(r, m);
+                    _knock.Withdrawn += (r, m) => Withdrawn?.Invoke(r, m);
                     _knock.Admitted += r => Admitted?.Invoke(r);
                     _knock.Paused += () => Paused?.Invoke();
                     _knock.SessionEnded += () => _ = UpdateQuietlyAsync();
