@@ -168,7 +168,7 @@ jobs:
           if-no-files-found: error
 
   ios:
-    needs: validate
+    # Keep the platform compile independent so a desktop-only/flaky test cannot hide iOS compiler failures.
     # .NET 10.0.403 installs the iOS 27.1 workload; this image has matching Xcode 27.1 as its default.
     runs-on: xcode-27
     timeout-minutes: 45
